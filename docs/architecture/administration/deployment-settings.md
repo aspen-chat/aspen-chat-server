@@ -33,12 +33,12 @@ The profile is a display name and an icon.
 
 ## Endpoints
 
-| Endpoint                       | What it does                                                                                                                                        | Permission                 |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `GET /deployment`              | The profile, to anyone, signed in or not. The icon is its record with `downloadUrl` included, since a signed-out client cannot read `/icons/{icon}` | None                       |
-| `PATCH /deployment`            | Changes the profile                                                                                                                                 | Manage deployment settings |
-| `GET`, `PATCH /admin/settings` | Reads and changes the policies                                                                                                                      | Manage deployment settings |
-| `PATCH /admin/federation`      | Changes the gates                                                                                                                                   | Manage federation          |
+| Endpoint                       | What it does                                                                                                                                                                | Permission                 |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `GET /deployment`              | The profile, to anyone, signed in or not, from the server's copy. The icon is its record with `downloadUrl` included, since a signed-out client cannot read `/icons/{icon}` | None                       |
+| `PATCH /deployment`            | Changes the profile                                                                                                                                                         | Manage deployment settings |
+| `GET`, `PATCH /admin/settings` | Reads and changes the policies                                                                                                                                              | Manage deployment settings |
+| `PATCH /admin/federation`      | Changes the gates                                                                                                                                                           | Manage federation          |
 
 `update_as` checks each part of a change against its permission.
 
@@ -88,8 +88,10 @@ made one before anyone has an account.
 
 ## How a change reaches every server
 
-Every API server keeps a copy of the settings (`SettingsCache`), read as it starts. Requests read
-the copy instead of the row.
+Every API server keeps a copy of the settings and of their icon's record (`SettingsCache`, a
+`WithIcon`), read as it starts. Requests read the copy instead of the row, so the profile costs no
+query: `GET /deployment` needs no device credential (`[rate_limits] device_exempt`), and every page
+of the web client carries it (see [The web client](../web-client/index.md)).
 
 A change:
 
@@ -99,6 +101,11 @@ A change:
 4. renames the system account if the name changed;
 5. resizes the NATS streams if a size changed, which fails the change when NATS refuses;
 6. before committing, writes the revision to the NATS key-value bucket `aspen_settings`.
+
+The icon's record changes outside the row once: when the `shrinkIcons` job stores the deployment's
+icon fitted (`icon::shrink_step`), its type becomes `image/webp`. That job raises the row's
+`revision` and rings the bucket in the same transaction (`icon_stored_anew`), so every copy reads
+the icon again.
 
 Each server watches the bucket (`spawn_watcher`):
 
@@ -110,11 +117,11 @@ Each server watches the bucket (`spawn_watcher`):
 
 ## Who can observe the settings
 
-| What                                                                      | Who                          | Route                                  |
-| ------------------------------------------------------------------------- | ---------------------------- | -------------------------------------- |
-| The profile                                                               | Anyone                       | `GET /deployment`                      |
-| Whether registering takes an invite, and whether two factors are required | Anyone                       | `GET /auth/methods`                    |
-| The policies and gates                                                    | Holders of their permissions | `/admin/settings`, `/admin/federation` |
+| What                                                                      | Who                          | Route                                           |
+| ------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------- |
+| The profile                                                               | Anyone                       | `GET /deployment`, every web client page's head |
+| Whether registering takes an invite, and whether two factors are required | Anyone                       | `GET /auth/methods`                             |
+| The policies and gates                                                    | Holders of their permissions | `/admin/settings`, `/admin/federation`          |
 
 No event carries them. The signed-out screens and the dashboard read them when they open.
 

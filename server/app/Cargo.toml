@@ -94,3 +94,7 @@ chrono-tz = "0.10.4"
 tempfile = "3.27.0"
 moka = { version = "0.12", features = ["sync"] }
 openidconnect = { version = "4.0.1", default-features = false }
+
+[dev-dependencies]
+# Pictures to store as icons in `app::icon`'s tests, made with the decoders `aspen_previews` reads.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

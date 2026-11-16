@@ -40,7 +40,7 @@ use crate::rate_limit::{ClientIp, Connection};
 use crate::t;
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
-use aspen_app::deployment_settings::DeploymentSettings;
+use aspen_app::deployment_settings::{DeploymentSettings, WithIcon};
 use aspen_app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, StreamHold, Subscription};
 use aspen_app::rate_limit::Decision;
 use aspen_app::stream_admission::Identifying;
@@ -753,7 +753,7 @@ async fn pump_events(
     user_row: &UserPg,
     caller: &Caller,
     expires: Option<tokio::time::Instant>,
-    mut settings: watch::Receiver<Arc<DeploymentSettings>>,
+    mut settings: watch::Receiver<Arc<WithIcon>>,
 ) {
     let user = user_row.id;
     let bot = user_row.bot;
@@ -835,7 +835,7 @@ async fn pump_events(
                     reject(&mut socket, EventStreamErrorCode::from(end)).await;
                     return;
                 }
-                let required = settings.borrow().email_verification_required;
+                let required = settings.borrow().settings.email_verification_required;
                 if required && email_unverified == Some(true) {
                     reject(&mut socket, EventStreamErrorCode::EmailVerificationRequired).await;
                     return;
@@ -861,7 +861,7 @@ async fn pump_events(
                 if changed.is_err() {
                     return;
                 }
-                let settings = settings.borrow_and_update().clone();
+                let settings = settings.borrow_and_update().settings.clone();
                 if caller.enrollment_required(&settings) {
                     reject(&mut socket, EventStreamErrorCode::TwoFactorEnrollmentRequired).await;
                     return;

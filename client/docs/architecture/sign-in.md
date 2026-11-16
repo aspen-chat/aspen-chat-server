@@ -31,8 +31,9 @@ own.
   started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the worker.
   The requests waiting on it then fail with `DevicePuzzleRefusedError`, as if the deployment could
   not be reached, so the earning always settles.
-- The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or
-  `GET /auth/methods`.
+- The first request a new install makes that needs one waits for it, `GET /auth/methods` among them,
+  while the person reads the welcome. `GET /deployment` needs none, so the welcome never waits for a
+  puzzle.
 - It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is
   replaced when a server answers with a fresh one (`Aspen-Device-Credential`).
 - Signed-in requests carry the session instead.
@@ -56,9 +57,16 @@ It shows:
 - the server's address.
 
 - The icon and name are read from `GET /deployment` each time the screen opens
-  (`AspenClient.deploymentProfile`).
-- The welcome waits for the read rather than showing the general one and then the name.
-- A failed read shows the general one.
+  (`useDeploymentProfile`, through `AspenClient.deploymentProfile`, whose callers at once share one
+  request).
+- Until the read answers, the welcome shows the profile last read from that server, or else the one
+  the page was served with: a deployment's server writes its profile into the head of every page of
+  the web client, in the element `spec/web_client_page.json` names (`embeddedProfile`), and preloads
+  its icon there, so on the web the icon is fetched while the script is still loading. A profile
+  naming another deployment's address is passed over.
+- With neither, as in the desktop and mobile apps on first opening, the welcome waits for the read
+  rather than showing the general one and then the name.
+- A failed read keeps what is shown, or shows the general one.
 
 ### Which server
 

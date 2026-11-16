@@ -1,6 +1,7 @@
 //! Previews of attachments as `app::attachment::preview` makes them: a picture's decoded,
 //! brought into sRGB, fitted within [`BOX`], and encoded as WebP ([`picture`]), and a video's
-//! poster, one frame taken by the operator's `ffmpeg` ([`video`]). What is read from storage,
+//! poster, one frame taken by the operator's `ffmpeg` ([`video`]). Icons are stored fitted
+//! within a box of their own the same way (`app::icon::as_stored`). What is read from storage,
 //! queued, and kept is the server's; this is the work done on the bytes.
 
 use serde::Deserialize;

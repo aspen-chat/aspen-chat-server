@@ -53,14 +53,18 @@ be.
 - **Under a suspension:** while a suspension of the limits (`limits suspend`) covers a request's
   network, or every limit, the request may go without one (`RateLimiter::waives_device`), so a
   benchmark's many users from one address solve no puzzle.
-- **What the built-in list exempts** (`rate_limits.toml`) is whatever isn't an Aspen client calling:
+- **What the built-in list exempts** (`rate_limits.toml`) is whatever isn't an Aspen client calling,
+  and the one read the sign-in screen shows first:
   - the health checks;
   - the passkey page and the two calls its own script makes;
   - token refresh, which phones' push handlers make;
   - the federation document, and the endpoints other deployments' servers call;
   - the unsubscribe page;
-  - the web client's pages;
-  - plugins' assets and capability URLs.
+  - the web client's invite page (its other pages are not limited at all);
+  - plugins' assets and capability URLs;
+  - `GET /deployment`, the deployment's profile, answered from each server's copy of the settings
+    and counted by address alone (3000 a minute, burst 1000), so the welcome's icon never waits for
+    a puzzle.
 - **Renewal:** a credential presented with less than half its lifetime left is answered with a fresh
   one for the same device, in `Aspen-Device-Credential`. A device in use never solves the puzzle
   again.
@@ -79,8 +83,8 @@ be.
      registration, token refresh, resets, `GET /auth/methods`) a valid session does not count
      (`counts_as_user`, `RateLimiter::access`). The request counts as its address and device, and
      its failures as its address's, whoever's token it carries. The session spares it only
-     presenting a device credential, which a signed-in app reading `GET /auth/methods` or
-     `GET /deployment` does not hold.
+     presenting a device credential, which a signed-in app reading `GET /auth/methods` does not
+     hold.
    - A made-up or expired session token, or bot token of the signed kind, is refused by its
      signature with no lookup (see [Sessions](sessions.md#tokens)).
    - Only a bot token from before tokens were signed can be told from a made-up one by a lookup

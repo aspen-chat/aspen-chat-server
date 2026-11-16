@@ -451,6 +451,7 @@ dependencies = [
  "fred",
  "futures-util",
  "hmac 0.12.1",
+ "image",
  "imagesize",
  "lettre",
  "lru 0.17.0",

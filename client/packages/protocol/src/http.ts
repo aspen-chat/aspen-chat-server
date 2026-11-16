@@ -169,6 +169,8 @@ export class AspenClient {
   #refreshing: Promise<boolean> | null = null;
   readonly #deviceStore: DeviceCredentialStore;
   readonly #solvePuzzle: PuzzleSolver;
+  /** The read of the deployment's profile in flight, which concurrent callers share. */
+  #profileRead: Promise<DeploymentProfile> | null = null;
   /** Earning a device credential, shared so concurrent refusals solve one puzzle. */
   #earning: Promise<Earning> | null = null;
 
@@ -262,9 +264,18 @@ export class AspenClient {
     return unwrap(await this.api.GET(`${API_PREFIX}/auth/methods`));
   }
 
-  /** How the deployment presents itself: its display name and icon. Needs no session. */
-  async deploymentProfile(): Promise<DeploymentProfile> {
-    return unwrap(await this.api.GET(`${API_PREFIX}/deployment`));
+  /**
+   * How the deployment presents itself: its display name and icon. Needs no session. Calls made
+   * while one is in flight share its answer.
+   */
+  deploymentProfile(): Promise<DeploymentProfile> {
+    this.#profileRead ??= this.api
+      .GET(`${API_PREFIX}/deployment`)
+      .then(unwrap)
+      .finally(() => {
+        this.#profileRead = null;
+      });
+    return this.#profileRead;
   }
 
   /**

@@ -12,9 +12,11 @@ import { mediaUrl } from "@/features/layout/safeUrl";
  * its own fails to load, a welcome
  * naming it, or a general welcome when it has no name, and the server's address, with a way to
  * change it where the app can (`changeServer`; not on the web, whose server is the one serving
- * the page). The profile is read each time the screen opens, so a change shows at once; until
- * it arrives the icon and welcome wait, rather than showing Aspen's and the general one and then
- * the deployment's own, and a failed read shows Aspen's icon and the general welcome.
+ * the page). The profile is read each time the screen opens, so a change shows at once, and
+ * until it arrives the screen shows the one the page was served with or last read
+ * (`useDeploymentProfile`). With neither, the icon and welcome wait, rather than showing Aspen's
+ * and the general one and then the deployment's own, and a failed read shows Aspen's icon and
+ * the general welcome.
  */
 export function DeploymentWelcome({
   serverUrl,
