@@ -14,6 +14,7 @@ import com.aspen_chat.client.call.CallTestSupport.awaitTrue
 import com.aspen_chat.client.call.CallTestSupport.awaitValue
 import com.aspen_chat.client.call.CallTestSupport.browserInbound
 import com.aspen_chat.client.call.CallTestSupport.browserOnHold
+import com.aspen_chat.client.call.CallTestSupport.browserVideoFrames
 import com.aspen_chat.client.call.CallTestSupport.callNotification
 import com.aspen_chat.client.call.CallTestSupport.callService
 import com.aspen_chat.client.call.CallTestSupport.http
@@ -536,7 +537,7 @@ class CallEngineTest {
         }
     }
 
-    // --- Helpers the video needs; the rest are `CallTestSupport`'s ---------------------------
+    // --- Helpers the camera needs; the rest are `CallTestSupport`'s --------------------------
 
     /** Opens `camera` on `id` for `origin`'s engine, on the main thread, and answers the track and the camera opened. */
     private suspend fun cameraStarted(camera: CallCamera, id: String?, origin: String): Pair<TrackId, CallCameraDevice> =
@@ -547,19 +548,6 @@ class CallEngineTest {
                 }
             }
         }
-
-    /** How many video frames the browser's connection has decoded, summed over its inbound video. */
-    private fun browserVideoFrames(helper: String): Int {
-        val streams = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("streams")
-        var frames = 0
-        for (i in 0 until streams.length()) {
-            val stream = streams.getJSONObject(i)
-            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "video") {
-                frames += stream.optInt("framesDecoded")
-            }
-        }
-        return frames
-    }
 
     /** A sample of `user`'s camera from the browser, waiting up to `seconds` for a frame. */
     private suspend fun untilSample(what: String, seconds: Long, helper: String, user: String): CameraSample {

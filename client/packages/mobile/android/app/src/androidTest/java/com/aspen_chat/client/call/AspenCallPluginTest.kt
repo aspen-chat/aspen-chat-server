@@ -7,9 +7,10 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aspen_chat.client.MainActivity
+import com.aspen_chat.client.call.CallTestSupport.argument
+import com.aspen_chat.client.call.CallTestSupport.browserVideoFrames
+import com.aspen_chat.client.call.CallTestSupport.http
 import com.aspen_chat.client.push.PushStore
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
@@ -49,12 +50,6 @@ class AspenCallPluginTest {
     private var scenario: ActivityScenario<MainActivity>? = null
     private var runs = 0
     private var helper: String? = null
-
-    private fun argument(name: String): String {
-        val value = InstrumentationRegistry.getArguments().getString(name)
-        assumeTrue("$name is not given", !value.isNullOrEmpty())
-        return value!!
-    }
 
     @Before
     fun setUp() {
@@ -393,31 +388,6 @@ class AspenCallPluginTest {
             }
             Thread.sleep(100)
         }
-    }
-
-    /** The body of `url`'s answer, which must be `200`. */
-    private fun http(method: String, url: String): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        connection.requestMethod = method
-        connection.connectTimeout = 60_000
-        connection.readTimeout = 60_000
-        val status = connection.responseCode
-        val body = (if (status < 400) connection.inputStream else connection.errorStream)?.bufferedReader()?.readText() ?: ""
-        assertEquals("$method $url: $body", 200, status)
-        return body
-    }
-
-    /** How many video frames the browser's connection has decoded, from the helper's report of it. */
-    private fun browserVideoFrames(helper: String): Int {
-        val streams = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("streams")
-        var frames = 0
-        for (i in 0 until streams.length()) {
-            val stream = streams.getJSONObject(i)
-            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "video") {
-                frames += stream.optInt("framesDecoded")
-            }
-        }
-        return frames
     }
 
     private fun latestRoutes(): JSONObject? {

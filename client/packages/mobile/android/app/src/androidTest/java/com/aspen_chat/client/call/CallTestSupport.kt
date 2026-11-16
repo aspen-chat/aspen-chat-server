@@ -44,7 +44,7 @@ import org.junit.Assume.assumeTrue
 /**
  * What the call tests share: the check's arguments, waiting on the engine and Telecom, the
  * system's own word read through the instrumentation's shell, the helper that drives the browser,
- * and the statistics each side is judged by.
+ * the statistics each side is judged by, and the browser's count of the video it decoded.
  */
 object CallTestSupport {
     /** What an `inbound-rtp` audio entry of a statistics report measured. */
@@ -213,6 +213,19 @@ object CallTestSupport {
     suspend fun sourceAudio(connection: PeerConnection): SourceAudio {
         val source = entries(connection).firstOrNull { it.optString("type") == "media-source" && it.optString("kind") == "audio" }
         return SourceAudio(source?.optDouble("totalAudioEnergy", 0.0) ?: 0.0, source?.optDouble("audioLevel", 0.0) ?: 0.0)
+    }
+
+    /** How many video frames the browser's connection has decoded, summed over its inbound video. */
+    fun browserVideoFrames(helper: String): Int {
+        val streams = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("streams")
+        var frames = 0
+        for (i in 0 until streams.length()) {
+            val stream = streams.getJSONObject(i)
+            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "video") {
+                frames += stream.optInt("framesDecoded")
+            }
+        }
+        return frames
     }
 
     /** Whom the browser's call shows on hold, from the helper's report of it. */
