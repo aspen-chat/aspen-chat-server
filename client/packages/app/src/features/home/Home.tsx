@@ -10,6 +10,7 @@ import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { OtherServerDialog } from "@/features/deployments/OtherServerDialog";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { JoinForm } from "@/features/invites/JoinForm";
+import { StandaloneDeleteAccountButton } from "@/features/security/DeleteAccount";
 import type { OtherServerPrefill } from "@/features/invites/joinRouting";
 import { communityLink, dmsLink, useDomain } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
@@ -19,7 +20,7 @@ import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
  * `/`: opens the first community, or explains that there is none to open. Its join form hands
  * another deployment's registration invite to the add-a-server form, in a dialog, where the
  * home takes part in federation. Someone signed in to the wrong account, or with nothing to join,
- * can sign out from here without finding the settings.
+ * can sign out, or delete the account, from here without finding the settings.
  */
 export function Home() {
   const m = useMessages();
@@ -60,15 +61,18 @@ export function Home() {
         />
       </div>
       <OtherServerDialog prefill={server} isOpen={serverOpen} onOpenChange={setServerOpen} />
-      <Button
-        onPress={() => {
-          void signOut();
-        }}
-        className={secondaryButtonClass + " mt-6 flex items-center gap-1.5 text-danger"}
-      >
-        <SignOutIcon size={16} aria-hidden="true" />
-        {m.signOut}
-      </Button>
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <Button
+          onPress={() => {
+            void signOut();
+          }}
+          className={secondaryButtonClass + " flex items-center gap-1.5 text-danger"}
+        >
+          <SignOutIcon size={16} aria-hidden="true" />
+          {m.signOut}
+        </Button>
+        <StandaloneDeleteAccountButton className={secondaryButtonClass + " text-danger"} ownsNone />
+      </div>
     </main>
   );
 }

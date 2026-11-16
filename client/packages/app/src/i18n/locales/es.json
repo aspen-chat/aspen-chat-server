@@ -159,6 +159,7 @@
     "deleteAccount": "Eliminar cuenta…",
     "deleteAccountConfirmHeading": "¿Eliminar tu cuenta?",
     "deleteAccountExplanation": "Esto no se puede deshacer. Se cerrará tu sesión en todos lados, y tu correo electrónico, tu contraseña, tus llaves de acceso y tus segundos factores se eliminan junto con la cuenta. Las comunidades que te pertenecen pasan a sus miembros de mayor rango. Los mensajes que publicaste se quedan donde están.",
+    "deleteAccountExplanationOwningNone": "Esto no se puede deshacer. Se cerrará tu sesión en todos lados, y tu correo electrónico, tu contraseña, tus llaves de acceso y tus segundos factores se eliminan junto con la cuenta. Los mensajes que publicaste se quedan donde están.",
     "deleteAccountAction": "Eliminar mi cuenta"
   },
   "email": {

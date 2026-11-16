@@ -159,6 +159,7 @@
     "deleteAccount": "Delete account…",
     "deleteAccountConfirmHeading": "Delete your account?",
     "deleteAccountExplanation": "This can't be undone. You'll be signed out everywhere, and your email address, password, passkeys, and second factors are deleted with the account. Communities you own pass to their highest-ranked members. Messages you posted stay where they are.",
+    "deleteAccountExplanationOwningNone": "This can't be undone. You'll be signed out everywhere, and your email address, password, passkeys, and second factors are deleted with the account. Messages you posted stay where they are.",
     "deleteAccountAction": "Delete my account"
   },
   "email": {

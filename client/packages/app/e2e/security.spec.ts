@@ -104,3 +104,46 @@ test("a user deletes their account after saying so, and is signed out", async ({
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   expect(deleted).toHaveLength(1);
 });
+
+test("a user in no community deletes their account from the home", async ({ page }) => {
+  const deleted: string[] = [];
+  await signInToWorld(page, async (p) => {
+    await stubSecurity(p, []);
+    await p.route(/\/api\/v1\/users\/(%40|@)me\/communities(\?.*)?$/, (route) =>
+      route.fulfill({
+        json: {
+          data: [],
+          included: {
+            channels: [],
+            roles: [],
+            channelOverrides: [],
+            categoryOverrides: [],
+            categories: [],
+            users: [],
+            userCommunities: [],
+            voiceSessions: [],
+            voiceParticipants: [],
+            readStates: [],
+            customEmoji: [],
+          },
+        },
+      }),
+    );
+    await p.route(/\/api\/v1\/users\/(%40|@)me$/, (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      deleted.push(route.request().url());
+      return route.fulfill({ status: 204 });
+    });
+  });
+  await expect(page.getByRole("heading", { name: "No communities yet" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete account…" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Delete your account?" });
+  await expect(confirm).toContainText("Messages you posted stay where they are.");
+  // Someone in no community owns none, so the confirmation says nothing of passing them on.
+  await expect(confirm).not.toContainText("Communities you own");
+  await confirm.getByRole("button", { name: "Delete my account" }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  expect(deleted).toHaveLength(1);
+});
