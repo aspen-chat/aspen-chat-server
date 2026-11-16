@@ -236,7 +236,7 @@ def launched(derived: str, variables: dict[str, str]) -> str:
     return (f"xcrun simctl terminate booted {BUNDLE} 2>/dev/null; xcrun simctl install booted {app} && "
             f"xcrun simctl privacy booted grant microphone {BUNDLE} && "
             f"{exports} xcrun simctl launch --console-pty booted {BUNDLE} 2>&1 "
-            "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|error|failed|skipped'")
+            "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|call-routes-test|error|failed|skipped'")
 
 
 class Ios:
@@ -275,7 +275,7 @@ class Ios:
                 environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in variables.items())
                 code = ssh(self.mac,
                            f"{environment} {self.xcodebuild} test-without-building -only-testing:AppTests/CallEngineTests 2>&1 "
-                           "| grep -E 'Test Case|Test Suite|call-engine-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
+                           "| grep -E 'Test Case|Test Suite|call-engine-test|call-routes-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
                            timeout=900, log=log)
                 passed = code == 0 and "** TEST EXECUTE SUCCEEDED **" in log.read_text()
             else:

@@ -1,12 +1,16 @@
+import AVFoundation
+import CallKit
 import XCTest
 @testable import App
 
 /// The call engine with this device's whole platform under it, against a real deployment: it
-/// joins a voice channel's call, is heard by and hears a second participant in a browser, takes
-/// its socket back after the socket is cut, and leaves. `scripts/check_mobile_call.py` at the
-/// repository's root runs the deployment, the browser, and this test, and gives it what it reads
-/// from the environment (passed on by `xcodebuild test` with a `TEST_RUNNER_` prefix); without
-/// them it skips.
+/// joins a voice channel's call through the system (CallKit) as far as the simulator's CallKit
+/// takes an outgoing call, then, driven directly, joins, is heard by and hears a second
+/// participant in a browser, mutes and unmutes, takes its socket back after the socket is cut,
+/// and leaves.
+/// `scripts/check_mobile_call.py` at the repository's root runs the deployment, the browser, and
+/// this test, and gives it what it reads from the environment (passed on by `xcodebuild test`
+/// with a `TEST_RUNNER_` prefix); without them it skips.
 ///
 /// | Variable                   | What                                                        |
 /// | -------------------------- | ----------------------------------------------------------- |
@@ -134,14 +138,54 @@ final class CallEngineTests: XCTestCase {
         let seen = Seen()
         let listening = call.snapshots.listen { seen.add($0) }
         defer { listening.cancel() }
-        try call.audio.configureForCall()
-        try call.audio.activate()
-        defer { call.audio.deactivate() }
         let microphone = call.audio.openMicrophone()
         call.engine.setMicrophone(track: microphone)
-        call.engine.join(channel: channel)
 
-        // Joined: the microphone is sent and the renewed session token is kept.
+        // Joined through the system, as far as the simulator takes it: the start action is
+        // performed (the audio session configured, the engine told to join) and the call shows
+        // in the system's list as outgoing. Then the simulator's CallKit ends it: it opens its
+        // in-call UI (`facetime://?showInCallUI=1`) for every outgoing call, the simulator has
+        // no such app, and the daemon ends a call whose UI it could not open, with an end action
+        // the provider performs, which leaves the engine. A device, which has the in-call app,
+        // keeps the call; that is the device checklist's.
+        let observer = CXCallObserver()
+        let calls = CallsSeen()
+        observer.setDelegate(calls, queue: nil)
+        XCTAssertTrue(observer.calls.isEmpty, "no call stands before the join: \(observer.calls)")
+        await MainActor.run { call.join(channel: channel, name: "Call engine test") }
+        // Both read off listeners' records, since the daemon's end follows within the polling
+        // interval, and a call that has ended leaves the observer's list.
+        try await untilTrue("the start action joins the engine", seconds: 10) { seen.statuses.contains { $0 != .idle } }
+        let started = try XCTUnwrap(seen.statuses.first { $0 != .idle })
+        try await untilTrue("the system lists the call as outgoing", seconds: 10) { calls.changes.contains(where: \.outgoing) }
+        let systemCall = try XCTUnwrap(calls.changes.first(where: \.outgoing)).uuid
+        XCTAssertNil(CallSystem.shared.latest.refusal)
+        let systemEnded = await waiting(seconds: 15) { calls.changes.contains { $0.uuid == systemCall && $0.ended } }
+        if systemEnded {
+            // The simulator's daemon ended the call: the provider's end action left the engine.
+            _ = try await until("the system's end action leaves the engine", seconds: 10, call) { $0.status == .idle }
+            XCTAssertNil(CallSystem.shared.latest.call, "the status lets the call go")
+        } else {
+            // A CallKit that keeps the call (a device's, or a simulator that has learnt to):
+            // left here, since what follows drives the engine directly.
+            XCTAssertEqual(CallSystem.shared.latest.call, systemCall)
+            await MainActor.run { call.leave() }
+            _ = try await until("the call is left", seconds: 10, call) { $0.status == .idle }
+            try await untilTrue("the system's call ends", seconds: 10) { calls.changes.contains { $0.uuid == systemCall && $0.ended } }
+        }
+        let viaSystem = "the system performed the start action (engine \(started)), listed the call \(systemCall) as outgoing, and \(systemEnded ? "ended it itself, as the simulator's CallKit does, the end action leaving the engine" : "kept it until leave")"
+
+        // The audio proof drives the engine directly, the test standing in for CallKit's
+        // `didActivate`, since the simulator's CallKit holds no call to activate the session for.
+        try call.audio.configureForCall()
+        call.audio.activated(AVAudioSession.sharedInstance())
+        defer { call.audio.deactivated(AVAudioSession.sharedInstance()) }
+        // The system's join opened a socket and a peer connection of its own, as far as it got.
+        let socketsBefore = sockets.connections
+        let connectionsBefore = peerConnections.created.count
+        call.engine.setMicrophone(track: microphone)
+        call.engine.join(channel: channel)
+        defer { call.engine.leave() }
         let connected = try await until("the call connects", seconds: 40, call) { $0.status == .connected }
         XCTAssertEqual(connected.channel, channel)
         XCTAssertEqual(connected.user, user)
@@ -154,8 +198,8 @@ final class CallEngineTests: XCTestCase {
             $0.sources.contains { $0.source == .microphone && $0.live }
         }
         XCTAssertEqual(sending.sources.map(\.track), [microphone])
-        XCTAssertEqual(sockets.connections, 1)
-        XCTAssertEqual(peerConnections.created.count, 1)
+        XCTAssertEqual(sockets.connections, socketsBefore + 1)
+        XCTAssertEqual(peerConnections.created.count, connectionsBefore + 1)
         let connection = try XCTUnwrap(peerConnections.latest)
         XCTAssertEqual(connection.connectionState(), .connected)
 
@@ -186,6 +230,14 @@ final class CallEngineTests: XCTestCase {
         XCTAssertGreaterThan(browserPeak, 0.01, "and hears sound in it")
         let source = try await sourceAudio(connection)
 
+        // The app's mute, which reaches the engine directly while the system holds no call of
+        // this engine's (and through a `CXSetMutedCallAction` while it does, which the simulator
+        // cannot show).
+        await MainActor.run { call.setMuted(true) }
+        _ = try await until("the mute mutes", seconds: 10, call) { $0.muted }
+        await MainActor.run { call.setMuted(false) }
+        _ = try await until("the unmute unmutes", seconds: 15, call) { !$0.muted }
+
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
         // flowing meanwhile on the same peer connection.
         let session = connected.session
@@ -195,24 +247,26 @@ final class CallEngineTests: XCTestCase {
             state.status == .connected && seen.statuses.contains(.rejoining)
         }
         XCTAssertEqual(resumed.session, session, "the same session")
-        XCTAssertEqual(sockets.connections, 2, "one socket more")
-        XCTAssertEqual(peerConnections.created.count, 1, "the same peer connection")
+        XCTAssertEqual(sockets.connections, socketsBefore + 2, "one socket more")
+        XCTAssertEqual(peerConnections.created.count, connectionsBefore + 1, "the same peer connection")
         XCTAssertTrue(resumed.slots.contains { $0.user == bob }, "the slots stand")
         let afterResume = try await inboundAudio(connection)
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let later = try await inboundAudio(connection)
         XCTAssertGreaterThan(later.packets, afterResume.packets, "media flows on: \(afterResume) then \(later)")
 
-        // Leaving ends everything: the state is idle and the connection closed.
-        call.engine.leave()
+        // Leaving ends everything: the state is idle and the connection closed. `leave` goes
+        // through the system when it holds the call; here it holds none, so the engine's own.
+        await MainActor.run { call.leave() }
         let left = try await until("the call is left", seconds: 10, call) { $0.status == .idle }
         XCTAssertNil(left.session)
         XCTAssertTrue(left.slots.isEmpty)
         XCTAssertEqual(connection.connectionState(), .closed)
+        XCTAssertNil(CallSystem.shared.latest.call)
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        print("call-engine-test: joined, heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); resumed on socket 2 with session \(session ?? "?"); left")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; resumed on socket 2 with session \(session ?? "?"); left")
     }
 
     // MARK: Helpers
@@ -247,6 +301,31 @@ final class CallEngineTests: XCTestCase {
         }
     }
 
+    /// Every change the system's call observer reported, on the main queue.
+    final class CallsSeen: NSObject, CXCallObserverDelegate, @unchecked Sendable {
+        struct Change {
+            let uuid: UUID
+            let outgoing: Bool
+            let connected: Bool
+            let ended: Bool
+        }
+
+        private let lock = NSLock()
+        private var recorded: [Change] = []
+
+        func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+            lock.held {
+                recorded.append(Change(uuid: call.uuid, outgoing: call.isOutgoing, connected: call.hasConnected, ended: call.hasEnded))
+            }
+        }
+
+        var changes: [Change] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recorded
+        }
+    }
+
     /// Ends the test after a failure that leaves nothing more to check.
     struct Stopped: Error {}
 
@@ -265,6 +344,26 @@ final class CallEngineTests: XCTestCase {
             state = call.engine.state()
         }
         return state
+    }
+
+    /// Waits until `holds`, or fails after `seconds`.
+    private func untilTrue(_ what: String, seconds: Double, holds: @escaping () -> Bool) async throws {
+        guard await waiting(seconds: seconds, for: holds) else {
+            XCTFail("\(what) did not happen within \(seconds) s")
+            throw Stopped()
+        }
+    }
+
+    /// Whether `holds` came true within `seconds`.
+    private func waiting(seconds: Double, for holds: @escaping () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !holds() {
+            if Date() > deadline {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return true
     }
 
     private func post(_ url: URL) async throws -> [String: Any] {

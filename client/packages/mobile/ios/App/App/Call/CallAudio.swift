@@ -5,11 +5,12 @@ import WebRTC
 /// The call's sound on this device: the shared audio session set up for a call, and the
 /// microphone, opened through WebRTC's audio device module as a track the engine sends.
 ///
-/// WebRTC is told to leave the session's activation to the app (`useManualAudio`), as it must be
-/// once CallKit owns the call: then the app configures the session and CallKit activates it,
-/// and `activated(_:)` is called from the provider's `didActivate`. Until CallKit is in,
-/// `activate()` does both. The route (receiver, loudspeaker, a headset) is chosen within the
-/// category set here, which is a later piece's; so is the camera.
+/// The system owns the session's activation (`CallSystem`, CallKit): the app configures the
+/// session in the start action and never activates it; CallKit activates it and calls the
+/// provider's `didActivate`, which is `activated(_:)` here, where WebRTC's audio starts, and
+/// `didDeactivate` is `deactivated(_:)`. WebRTC is told so with `useManualAudio`, and its audio
+/// units run only between the two (`isAudioEnabled`). The route within the session's category is
+/// `CallRoutes`'; the camera is a later piece's.
 final class CallAudio {
     private let factory: RTCPeerConnectionFactory
     private let tracks: CallTracks
@@ -24,11 +25,13 @@ final class CallAudio {
     }
 
     /// Sets the shared session up for a call: playing and recording, in the mode that applies
-    /// the system's voice processing, with Bluetooth devices allowed.
+    /// the system's voice processing and allows Bluetooth headsets (HFP), with Bluetooth
+    /// listening devices (A2DP) allowed too. Called before the call is reported to the system,
+    /// which then activates the session as configured.
     func configureForCall() throws {
         let configuration = RTCAudioSessionConfiguration.webRTC()
         configuration.category = AVAudioSession.Category.playAndRecord.rawValue
-        configuration.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+        configuration.categoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP]
         configuration.mode = AVAudioSession.Mode.voiceChat.rawValue
         let session = RTCAudioSession.sharedInstance()
         session.lockForConfiguration()
@@ -36,36 +39,20 @@ final class CallAudio {
         try session.setConfiguration(configuration)
     }
 
-    /// Activates the session itself and starts WebRTC's audio on it. With CallKit, the provider
-    /// activates the session and `activated(_:)` is what its `didActivate` calls.
-    func activate() throws {
-        let session = RTCAudioSession.sharedInstance()
-        session.lockForConfiguration()
-        do {
-            try session.setActive(true)
-        } catch {
-            session.unlockForConfiguration()
-            throw error
-        }
-        session.unlockForConfiguration()
-        activated(AVAudioSession.sharedInstance())
-    }
-
-    /// The session was activated (by the app, or by CallKit): WebRTC's audio units start.
+    /// The system activated the session (`didActivate`, at the call's start and again after an
+    /// interruption it resolved): WebRTC's audio units start on it.
     func activated(_ session: AVAudioSession) {
         let shared = RTCAudioSession.sharedInstance()
         shared.audioSessionDidActivate(session)
         shared.isAudioEnabled = true
     }
 
-    /// Stops WebRTC's audio and gives the session back.
-    func deactivate() {
+    /// The system deactivated the session (`didDeactivate`, at the call's end or for an
+    /// interruption): WebRTC's audio units stop. Nothing here deactivates the session itself.
+    func deactivated(_ session: AVAudioSession) {
         let shared = RTCAudioSession.sharedInstance()
         shared.isAudioEnabled = false
-        shared.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
-        shared.lockForConfiguration()
-        try? shared.setActive(false)
-        shared.unlockForConfiguration()
+        shared.audioSessionDidDeactivate(session)
     }
 
     /// The microphone as a track for the engine (`Engine.setMicrophone`), opened on the first

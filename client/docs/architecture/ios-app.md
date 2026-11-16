@@ -118,9 +118,10 @@ Only a device shows the extension launched for a push, and its replacement of th
 The mobile apps' calls run natively, in the call engine (`voice_client/` at the repository's root, a
 Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's WebRTC, HTTP, and
 WebSockets through interfaces each platform implements. The iOS implementation is
-`ios/App/App/Call`, compiled into the App target with the engine's generated Swift module. Nothing
-in the web view uses it yet: the Capacitor plugin that will command it and show its state, the
-call's sounds, CallKit, the camera, and the choice of route are later pieces.
+`ios/App/App/Call`, compiled into the App target with the engine's generated Swift module: the
+engine's platform, the system's call integration (CallKit), and the audio routes. Nothing in the web
+view uses it yet: the Capacitor plugin that will command it and show its state, the call's sounds,
+rings (PushKit), and the camera are later pieces.
 
 ### What the App target links, and where it comes from
 
@@ -153,7 +154,114 @@ Each file under `Call/` implements one of the engine's interfaces over the platf
 | `CallCredentials.swift`    | `Credentials`                                                                | The account at the deployment among those `PushStateStore` keeps (the keychain item the web view writes on sign-in): its session token for each request, renewed through `TokenRefresh` (shared with the notification service extension) and written back when the API server refuses it                                                                                                                                                                                              |
 | `CallTracks.swift`         | The track ids the engine passes around                                       | WebRTC tracks by their own `trackId`: the microphone, and each receiver's track                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallPeerConnection.swift` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `RTCPeerConnection`, unified plan, `max-bundle`, RTCP muxed. Transceivers are numbered in the order first seen and told apart by their sender's id, since `transceivers` wraps the native ones anew on every read; a sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its audio track's source's; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values |
-| `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth) and, until CallKit owns activation, activates it itself; `activated(_:)` is the seam CallKit's `didActivate` will call. The microphone is a track from WebRTC's audio device module                                                                                                                                                           |
+| `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth HFP and A2DP) and never activates it; `activated(_:)` and `deactivated(_:)` are what CallKit's `didActivate` and `didDeactivate` call, and WebRTC's audio units run between them (`isAudioEnabled`). The microphone is a track from WebRTC's audio device module                                                                               |
+| `CallSystem.swift`         | The call as the system knows it                                              | One `CXProvider` for the process and the one call it holds at a time, whichever deployment's engine runs it; see The system's call below                                                                                                                                                                                                                                                                                                                                              |
+| `CallRoutes.swift`         | What the call plays through                                                  | `AVAudioSession`'s current route and available inputs as typed entries, the choice held for the call, and the proximity sensor; see Routes below                                                                                                                                                                                                                                                                                                                                      |
+
+`CallEngine.join`, `leave`, and `setMuted` go through `CallSystem`, so that the system's own
+controls and the engine agree; the engine's other commands are called directly.
+
+### The system's call
+
+A call is represented to CallKit as an outgoing call: iOS has no model of a room people sit in for
+hours, and an outgoing call started from the app is the nearest; whether it suits the lock screen,
+cars, and a call held for hours is on the device checklist below. The provider is configured once
+(`supportsVideo`, calls kept out of Recents, one call group of one call, generic handles; the
+ringtone is the rings piece's). The handle is the channel's id, and the name the system shows is
+whatever `join` was given as `name`. In order, on joining:
+
+1. `CallEngine.join` asks `CXCallController` for a `CXStartCallAction`, and subscribes to the
+   engine's snapshots for the call. A refusal (another app's call holds the one group, no CallKit)
+   joins nothing, since there would then be no one to activate the audio session; `Status.refusal`
+   carries the system's words.
+2. In `perform(CXStartCallAction)` the audio session is configured (`CallAudio.configureForCall`),
+   the engine is told to join, the call is reported as connecting, its name is reported, and the
+   action is fulfilled.
+3. CallKit activates the session and calls `didActivate`: `CallAudio.activated` tells WebRTC
+   (`audioSessionDidActivate`, `isAudioEnabled = true`), and the standing route choice is applied,
+   since an override set before activation is not kept.
+4. When a snapshot shows the engine connected, the call is reported connected.
+
+On leaving: `CallEngine.leave` asks for a `CXEndCallAction`; `perform` leaves the engine, lets the
+call go, resets the routes, and fulfils; CallKit deactivates the session and `didDeactivate` stops
+WebRTC's audio (`CallAudio.deactivated`). The system's own End does the same through the same
+action. When the engine's state says the call is over without that (`idle` after it was in the call,
+or `failed`), the call is reported ended with the reason: `failed` for a failure, otherwise
+`remoteEnded` (a moderator's kick, access lost, the API server ending an idle call, a session the
+API server ended). Joining another channel while the system holds this engine's call is a move the
+engine makes itself, with the call's handle updated; a call of another deployment's engine is left
+and reported ended first.
+
+The system's mute action is the engine's `setMuted`; the app's own mute goes through a
+`CXSetMutedCallAction` so the system's controls show the same. Hold is what the engine can do of it:
+`CXSetHeldCallAction` mutes and deafens (the microphone's track leaves its sender, the server pauses
+every audio consumer), and the hold's end puts back the mute and deafen the state showed at the
+hold, which includes a moderator's mute. The engine has no held state of its own, so the interface
+shows the user muted and deafened meanwhile; the peer connection stays up and the microphone track
+stays open.
+
+Interruptions follow CallKit's rules: the app never activates the session. Before iOS 27 it watches
+`interruptionNotification`; from iOS 27, `didBecomeInactiveNotification` with the system as source
+and `resumptionRecommendationNotification`, which replace it. On an interruption's start WebRTC's
+audio is stopped (`isAudioEnabled = false`) and `Status.interrupted` set; a phone call answered on
+top of ours also holds it through `CXSetHeldCallAction` and deactivates the session through
+`didDeactivate`, and when it ends CallKit activates the session again and `didActivate` resumes the
+call. An interruption that ends with the session still active in the system's eyes (no
+`didDeactivate` came: a short one, Siri's) has WebRTC's audio started again on it. WebRTC's own
+`RTCAudioSession` also reactivates the session itself on an interruption's end while its activation
+count is above zero, which is the library's doing and not the app's.
+
+`Info.plist` declares the `audio` and `voip` background modes, so a call goes on with the app in the
+background and, later, VoIP pushes reach it. `providerDidReset` leaves the engine and stops WebRTC's
+audio, since CallKit has forgotten the call.
+
+### Routes
+
+`CallRoutes` lists what the call can play through, each entry a kind from the port's type (receiver,
+loudspeaker, Bluetooth for HFP, A2DP, and LE, wired headset for headphones, a headset's microphone,
+and line out, car, other) with the system's name beside it for display alone, which is in use, and
+whether the device has a receiver (an iPhone's idiom; an iPad has none). The list is the receiver
+(on a phone) and the loudspeaker, every available input but the built-in microphone, and, when none
+of those plays, the output that does (Bluetooth headphones without a microphone, AirPlay). The
+receiver and loudspeaker are chosen by overriding the output port (preferring the built-in
+microphone first, which brings the call back from a headset), a headset or car by preferring its
+input. The choice holds for the call: an override lasts only until the next route change, so it is
+applied again on every `routeChangeNotification` and when CallKit activates the session; a new
+device arriving (`newDeviceAvailable`) takes the call, as the Phone app's does, and ends the choice;
+a device going away leaves it. The proximity sensor is on while the route in use is the receiver and
+off otherwise, and the choice is let go when the call ends. Listeners hear every change on the main
+queue.
+
+### What only a device can show
+
+The simulator's CallKit cannot hold an outgoing call: its daemon opens `facetime://?showInCallUI=1`
+for every outgoing call, the simulator has no such app, and it ends a call whose UI it could not
+open about half a second after the start action is fulfilled, with an end action the provider
+performs (`callservicesd`'s log: `Failed to open URL facetime://?showInCallUI=1`, then
+`disconnect reason: 55`). So the simulator shows the start action performed and the end action
+handled, and nothing after; and it plays through the Mac, with no receiver, headset, or cellular
+radio. These stand to be checked on an iPhone:
+
+- [ ] An outgoing call stands: started from the app in the foreground, it shows no system in-call UI
+      over the app, is reported connected, and ends when the user leaves.
+- [ ] CallKit activates the session for the call and `didActivate` starts WebRTC's built-in audio
+      device module (the simulator runs on `ToneAudioDevice`): both sides hear each other, with the
+      app in the foreground, in the background, and locked.
+- [ ] The system's mute and hold actions (`CXSetMutedCallAction`, `CXSetHeldCallAction`) reach the
+      engine, and the hold's end puts the mute and deafen back; the app's own mute shows in the
+      system's controls.
+- [ ] The receiver is listed, chosen, and heard at the ear; the proximity sensor turns the screen
+      off there and back on when the call moves to the loudspeaker.
+- [ ] A Bluetooth headset is listed by kind with its name, chosen, and the call moves to it;
+      choosing the loudspeaker brings it back; connecting a headset during a call takes the call and
+      ends the choice; disconnecting it leaves the call on the choice made before.
+- [ ] A wired headset does the same, and a car over Bluetooth is listed as `car`.
+- [ ] A phone call answered on top of ours holds it (muted and deafened), and when it ends ours
+      resumes through `didActivate`, with the same route; a phone call declined leaves ours running.
+- [ ] Siri, an alarm, and a timer interrupt and give the session back.
+- [ ] The system's call UI on the lock screen ends, mutes, and holds the call, and shows the name
+      given to `join`.
+- [ ] A call held for an hour with the screen locked stays connected.
 
 ### The proof
 
@@ -161,11 +269,16 @@ Each file under `Call/` implements one of the engine's interfaces over the platf
 process on the simulator, WebRTC on a microphone and speaker in software (`ToneAudioDevice`, an
 `RTCAudioDevice` recording a warble of 440 and 660 Hz and dropping what it plays out), since the
 simulator's own audio unit aborts the process when a test initializes it: it joins a voice channel's
-call, has a second participant brought in from a browser, reads both sides' statistics for the
-other's sound (the browser's as the loudest sample off its received tracks, `loudness` in
-`calls/page.ts`, since Chromium's own level statistics read zero behind the muted element it plays
-each track in), cuts its socket and watches the engine take its place back with `resume`, and
-leaves. `scripts/check_mobile_call.py --platform ios` at the repository's root runs it end to end
+call through the system and watches the start action join the engine, the call listed as outgoing
+(`CXCallObserver`), and the simulator's daemon end it through the provider, which leaves the engine;
+then, driving the engine directly with the test standing in for `didActivate`, it joins, has a
+second participant brought in from a browser, reads both sides' statistics for the other's sound
+(the browser's as the loudest sample off its received tracks, `loudness` in `calls/page.ts`, since
+Chromium's own level statistics read zero behind the muted element it plays each track in), mutes
+and unmutes, cuts its socket and watches the engine take its place back with `resume`, and leaves.
+`AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
+for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
+choice. `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to end
 from Linux, with the same deployment and browser the Android check uses (`android-builds.md`, The
 call engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`), SSH
 reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
