@@ -109,8 +109,13 @@ pub struct Connection {
 pub type Polled = Vec<RtcEvent>;
 
 impl Connection {
-    /// A connection with `candidates` as its local candidates, ICE lite as an SFU's are. A
-    /// capture connection takes only H.264 for video, which is what the helper encodes.
+    /// A connection with `candidates` as its local candidates, ICE lite as an SFU's are. A call
+    /// connection offers VP8 before H.264, since a browser answering follows the order and
+    /// Chromium's H.264 encoder is poor on screen content; a capture connection, which only the
+    /// game capture helper and the phones' engines answer, offers H.264 first, what the helper
+    /// encodes and what a phone's hardware encoder makes of a 1080p share, and VP8 for a device
+    /// without a hardware H.264 encoder (the Android emulator among them), whose WebRTC has no
+    /// software one.
     pub fn new(participant: ParticipantId, kind: ConnectionKind, candidates: &[Candidate]) -> Self {
         let mut config = Rtc::builder()
             .clear_codecs()
@@ -138,7 +143,7 @@ impl Connection {
                 ..Default::default()
             },
         );
-        if kind == ConnectionKind::Call {
+        let vp8 = |codecs: &mut str0m::format::CodecConfig| {
             codecs.add_config(
                 VP8.into(),
                 Some(VP8_RTX.into()),
@@ -147,8 +152,17 @@ impl Connection {
                 None,
                 FormatParams::default(),
             );
+        };
+        match kind {
+            ConnectionKind::Call => {
+                vp8(codecs);
+                codecs.add_h264(H264.into(), Some(H264_RTX.into()), true, 0x42e01f);
+            }
+            ConnectionKind::Capture => {
+                codecs.add_h264(H264.into(), Some(H264_RTX.into()), true, 0x42e01f);
+                vp8(codecs);
+            }
         }
-        codecs.add_h264(H264.into(), Some(H264_RTX.into()), true, 0x42e01f);
         let mut rtc = config.build(Instant::now());
         for candidate in candidates {
             rtc.add_local_candidate(candidate.clone());

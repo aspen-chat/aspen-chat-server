@@ -350,8 +350,10 @@ its sound, play in step wherever the media carries what synchronizing them needs
 ## Media
 
 - **H.264 is offered after VP8.** A browser answering an offer follows its order, and Chromium's
-  H.264 encoder is the software OpenH264, which drops frames on screen content. H.264 is there for
-  the desktop shell's game capture, whose connection offers it alone.
+  H.264 encoder is the software OpenH264, which drops frames on screen content. No browser answers a
+  capture connection, so there H.264 leads: the desktop shell's game capture helper encodes nothing
+  else, and a phone sharing its screen has a hardware H.264 encoder where it has any, with VP8
+  behind it for a phone (and the Android emulator) that has none.
   ([Signalling](signalling.md#codecs))
 - **A share's sound is stereo, without DTX, at 128 kbit/s; a microphone keeps DTX.** A browser
   decodes and sends Opus as mono without `stereo` and `sprop-stereo`, and DTX cuts the quiet

@@ -465,10 +465,25 @@ async fn a_capture_connection_sends_a_share_its_sender_previews() {
     .await
     .expect("a capture connection is offered");
     let mid = ann.capture_mid_of(&sending(MediaSource::Screen)).unwrap();
-    // The capture connection offers H.264 alone, which the helper encodes.
-    assert!(ann.log.iter().any(|e| matches!(e,
-        Event::Offer { connection: voice_protocol::signal::ConnectionKind::Capture, sdp, .. }
-            if sdp.contains("H264/90000") && !sdp.contains("VP8/90000"))));
+    // The capture connection offers H.264 first, which the helper encodes and a phone's
+    // hardware encodes, and VP8 after it for a phone without a hardware H.264 encoder.
+    let capture_offer = ann
+        .log
+        .iter()
+        .find_map(|e| match e {
+            Event::Offer {
+                connection: voice_protocol::signal::ConnectionKind::Capture,
+                sdp,
+                ..
+            } => Some(sdp.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let (h264, vp8) = (
+        capture_offer.find("H264/90000").expect("H.264 is offered"),
+        capture_offer.find("VP8/90000").expect("VP8 is offered"),
+    );
+    assert!(h264 < vp8, "H.264 leads the capture offer's codecs");
     ann.until(&media, WAIT, |e| {
         matches!(
             e,

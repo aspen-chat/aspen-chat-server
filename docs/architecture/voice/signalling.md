@@ -87,10 +87,10 @@ The server is the only side that offers. Whatever the client wants changed is a 
 
 ## Connections
 
-| Connection | Held by                                                          | Carries                                                                             |
-| ---------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `call`     | Every participant, from joining to leaving                       | Everything they send from the browser, and everything they receive                  |
-| `capture`  | The desktop shell's game capture helper, while it sends for them | The sources asked for with `external: true`: a game's picture (H.264) and its sound |
+| Connection | Held by                                                                                      | Carries                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `call`     | Every participant, from joining to leaving                                                   | Everything they send from the browser, and everything they receive                                             |
+| `capture`  | The desktop shell's game capture helper, and a phone's call engine, while they send for them | The sources asked for with `external: true`: a game's picture and its sound, or a phone's screen and its sound |
 
 - One call connection per participant carries both ways: one ICE and DTLS, one set of candidates,
   one thing to restart on a network change.
@@ -205,7 +205,9 @@ Every connection offers:
 
 - Opus for audio (10 ms minimum packet time, in-band FEC, DTX),
 - on a call connection, VP8 then H.264 constrained baseline for video, each with RTX,
-- on a capture connection, H.264 alone, which is what the helper encodes.
+- on a capture connection, H.264 constrained baseline then VP8, each with RTX: H.264 is what the
+  helper encodes and what a phone's hardware encoder makes of its screen, and VP8 is for a phone
+  without a hardware H.264 encoder, whose WebRTC has no software one.
 
 The server edits format parameters into its offers per section, where str0m sets them per connection
 (`voice_media/src/sdp.rs`):
