@@ -16,6 +16,8 @@ import {
   type PickedFile,
   type RemoteScreen,
   type ScreenCapture,
+  ScreenShareError,
+  type ShareFailure,
   type TransferMode,
   type TransferRoute,
   type TransferState,
@@ -118,6 +120,17 @@ export interface OpenedCamera {
 }
 
 /**
+ * How a share the plugin was asked for ended before or after going live, as its `share` event
+ * tells: `failure` is `null` when the user stopped it themself (from the system's own control,
+ * or the capture ending as the system ends it), else why it could not go on, which becomes the
+ * page's `shareError`.
+ */
+export interface ShareEnded {
+  readonly origin: string;
+  readonly failure: ShareFailure | null;
+}
+
+/**
  * The mobile apps' native side of a call (`AspenCallPlugin`, in each): the call engine for each
  * deployment the user is signed in to, which runs the call itself, its snapshots, where the
  * call plays, and the video it draws. Every method names the deployment by its `origin` (the
@@ -127,6 +140,12 @@ export interface OpenedCamera {
  * `startCamera` asks the system for the camera and rejects with the code `denied`, `none`, or
  * `failed` (a `CameraFailure`) when it cannot open one; `setTiles` says where each picture goes
  * (`nativeVideo.tsx`), and `shape` and `pip` events come back from the pictures drawn.
+ * `startScreenShare` asks the system for the screen through its own consent (the picker on iOS,
+ * the media projection dialog on Android) and captures it with its sound where the platform
+ * gives it, as the engine's `screen` and `screenAudio`: on Android it resolves once the user has
+ * consented, rejecting with the code `denied`, `unsupported`, or `failed` (a `ShareFailure`); on
+ * iOS it resolves at once, the system's picker then being the user's, and a share that does not
+ * come of it is told by a `share` event. `stopScreenShare` ends one.
  */
 export interface AspenCallPlugin {
   join(options: { origin: string; channel: string; name: string | null }): Promise<void>;
@@ -176,6 +195,9 @@ export interface AspenCallPlugin {
   switchCamera(options: { origin: string; device: string | null }): Promise<OpenedCamera>;
   stopCamera(options: { origin: string }): Promise<void>;
   clearCameraError(options: { origin: string }): Promise<void>;
+  startScreenShare(options: { origin: string; audio: boolean }): Promise<void>;
+  stopScreenShare(options: { origin: string }): Promise<void>;
+  clearShareError(options: { origin: string }): Promise<void>;
   setWatched(options: { origin: string; video: readonly WatchedVideo[] }): Promise<void>;
   setTiles(options: { tiles: readonly TileReport[] }): Promise<void>;
   addListener(
@@ -194,6 +216,7 @@ export interface AspenCallPlugin {
     event: "pip",
     listener: (pip: { active: boolean }) => void,
   ): Promise<PluginListenerHandle>;
+  addListener(event: "share", listener: (ended: ShareEnded) => void): Promise<PluginListenerHandle>;
 }
 
 export const AspenCall = registerPlugin<AspenCallPlugin>("AspenCall");
@@ -204,14 +227,13 @@ export function nativeCalls(): boolean {
 }
 
 /**
- * Something a native call cannot do: screen sharing from the phone, which comes in a later
- * stage (`docs/architecture/voice/native-calls.md`) and whose controls are hidden by `canShare`,
- * which a native call keeps false; a microphone or speaker chosen by id, which the routes stand
- * in for, so `hasAudioDeviceChoice` is false and the selects that would ask are not shown; a
- * gain on the microphone, which neither phone's audio device module applies, so
- * `hasInputVolume` is false and the slider that would ask is not shown; or a browser's way of
- * doing something the platform does otherwise (a `Blob` to offer, a file received into memory),
- * which the page never asks of a native call.
+ * Something a native call cannot do: a share made by the browser or sent from outside it (the
+ * desktop shell's), where the phone captures its own screen; a microphone or speaker chosen by
+ * id, which the routes stand in for, so `hasAudioDeviceChoice` is false and the selects that
+ * would ask are not shown; a gain on the microphone, which neither phone's audio device module
+ * applies, so `hasInputVolume` is false and the slider that would ask is not shown; or a
+ * browser's way of doing something the platform does otherwise (a `Blob` to offer, a file
+ * received into memory), which the page never asks of a native call.
  */
 export class NativeCallUnavailableError extends Error {
   constructor(what: string) {
@@ -391,17 +413,20 @@ export function filesOf(files: EngineCallState["files"]): FilesState {
 
 /**
  * What the page knows of the call's video that the engine does not: which way the camera it
- * opened faces (the plugin says as it opens it; the engine carries no facing), and why the
- * camera last failed to open on this phone (`denied`, `none`, `failed`, from the plugin's
- * refusal), until it opens, the user dismisses it, or the call ends. The voice server refusing
- * the picture is the engine's to say (`sourceRefused`).
+ * opened faces (the plugin says as it opens it; the engine carries no facing), why the camera
+ * last failed to open on this phone (`denied`, `none`, `failed`, from the plugin's refusal),
+ * until it opens, the user dismisses it, or the call ends, and why the screen last failed to be
+ * shared (`denied`, `unsupported`, `failed`, from the plugin's refusal or its `share` event),
+ * until a share starts, the user dismisses it, or the call ends. The voice server refusing a
+ * picture is the engine's to say (`sourceRefused`).
  */
 export interface LocalVideo {
   readonly facing: VideoFacing | null;
   readonly cameraFailure: CameraFailure | null;
+  readonly shareFailure: ShareFailure | null;
 }
 
-export const NO_LOCAL_VIDEO: LocalVideo = { facing: null, cameraFailure: null };
+export const NO_LOCAL_VIDEO: LocalVideo = { facing: null, cameraFailure: null, shareFailure: null };
 
 /** The surface the phone draws `track` on, as the page's picture. */
 function nativeSource(track: string, facing: VideoFacing | null): VideoSource {
@@ -432,10 +457,11 @@ function sent(snapshot: EngineCallState, source: "screen" | "camera"): string | 
 /**
  * The call's state as the app reads it, from the engine's snapshot and what the page knows of
  * its video (`LocalVideo`). The camera's picture, the others' cameras and screens, and the
- * preview of a share are the surfaces the phone draws; the grant to use the camera is the
- * engine's; `cameraError` is the phone's refusal to open one, or the voice server's to take it
- * (`unsent`); the files are the engine's (`filesOf`). Screen sharing from the phone is a later
- * stage, so its fields are the idle state's.
+ * preview of the user's own share (the track the phone captures, drawn as the camera's is) are
+ * the surfaces the phone draws; the grants to use the camera, to share, and to transfer files
+ * are the engine's; `cameraError` is the phone's refusal to open one, or the voice server's to
+ * take it (`unsent`), and `shareError` the same for the screen; the files are the engine's
+ * (`filesOf`).
  */
 export function stateOf(
   snapshot: EngineCallState,
@@ -444,6 +470,8 @@ export function stateOf(
   const camera = sent(snapshot, "camera");
   const screen = sent(snapshot, "screen");
   const serverRefused = snapshot.sourceRefused?.source === "camera";
+  const shareRefused =
+    snapshot.sourceRefused?.source === "screen" || snapshot.sourceRefused?.source === "screenAudio";
   return {
     ...IDLE_CALL_STATE,
     status: statusOf(snapshot.status),
@@ -458,7 +486,7 @@ export function stateOf(
       .sort(compareIds),
     serverMuted: snapshot.serverMuted,
     canSpeak: snapshot.grants.speak,
-    canShare: false,
+    canShare: snapshot.grants.shareScreen,
     canCamera: snapshot.grants.camera,
     canTransfer: snapshot.grants.transferFiles,
     files: filesOf(snapshot.files),
@@ -468,6 +496,7 @@ export function stateOf(
     localCamera: camera === null ? null : nativeSource(camera, local.facing),
     cameras: remoteVideos(snapshot, "camera"),
     cameraError: camera !== null ? null : serverRefused ? "unsent" : local.cameraFailure,
+    shareError: screen !== null ? null : shareRefused ? "unsent" : local.shareFailure,
     errorKind: errorKindOf(snapshot.errorKind),
     retryAfterSeconds: snapshot.retryAfterSeconds ?? null,
     error: snapshot.error ?? null,
@@ -513,16 +542,34 @@ export function parseState(json: string): EngineCallState {
   return parsed as EngineCallState;
 }
 
+/** The `code` a plugin rejected with, if it gave one. */
+function codeOf(error: unknown): unknown {
+  return error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+}
+
 /**
  * Why the plugin could not open the camera, from the code it rejected with, each a
  * `CameraFailure` by name; a refusal without one is the camera failing to start.
  */
 export function cameraFailureOf(error: unknown): CameraFailure {
-  const code =
-    error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
-  switch (code) {
+  switch (codeOf(error)) {
     case "denied":
     case "none":
+    case "failed":
+      return codeOf(error) as CameraFailure;
+    default:
+      return "failed";
+  }
+}
+
+/**
+ * Why the plugin could not share the screen, from the code it rejected with or its `share`
+ * event named, each a `ShareFailure` by name; a refusal without one is the capture failing.
+ */
+export function shareFailureOfCode(code: unknown): ShareFailure {
+  switch (code) {
+    case "denied":
+    case "unsupported":
     case "failed":
       return code;
     default:
@@ -574,10 +621,11 @@ export function onPageWake(listener: () => void): void {
  * while there are any the engine is asked to watch every screen and camera the others send
  * (`watchedOf`), again whenever that changes, and none when nothing shows them.
  *
- * Screen sharing from the phone rejects with `NativeCallUnavailableError`, and the grant that
- * would show its controls stays false. The call's sounds are the engine's (`playsOwnSounds`),
- * and the microphone and speaker are the phone's and its routes' (`hasAudioDeviceChoice` is
- * false).
+ * The screen is shared by the phone itself (`startScreenShare`, through the system's consent),
+ * so `hasScreenCapture` is true here as in a browser with `getDisplayMedia`; a share made by the
+ * browser or sent from outside it rejects with `NativeCallUnavailableError`. The call's sounds
+ * are the engine's (`playsOwnSounds`), and the microphone and speaker are the phone's and its
+ * routes' (`hasAudioDeviceChoice` is false).
  */
 export class NativeCall implements Call {
   readonly #origin: string;
@@ -617,6 +665,11 @@ export class NativeCall implements Call {
       });
     void AspenCall.addListener("state", (published) => {
       this.#take(published);
+    });
+    void AspenCall.addListener("share", (ended) => {
+      if (ended.origin === this.#origin) {
+        this.#setLocal({ shareFailure: ended.failure });
+      }
     });
     const read = () => {
       AspenCall.state({ origin: this.#origin }).then(
@@ -664,8 +717,9 @@ export class NativeCall implements Call {
     if (snapshot.status === "idle") {
       this.#told.clear();
       this.#watching = "[]";
-      // A failure to open the camera is the call's to show; the next call starts clean.
-      this.#local = { ...this.#local, cameraFailure: null };
+      // A failure to open the camera or share the screen is the call's to show; the next call
+      // starts clean.
+      this.#local = { ...this.#local, cameraFailure: null, shareFailure: null };
     } else {
       this.#applyVolumes();
     }
@@ -876,20 +930,58 @@ export class NativeCall implements Call {
     this.#command(AspenCall.clearStateRefusal({ origin: this.#origin }));
   }
 
-  startScreenShare(_options?: {
-    prepared?: ScreenCapture;
-    audio?: ExternalAudio;
-    contentHint?: "motion" | "detail" | "text";
-  }): Promise<void> {
-    return Promise.reject(new NativeCallUnavailableError("Sharing the screen"));
+  /**
+   * Shares the phone's screen with its sound: the plugin asks the system through its own consent
+   * (the system's picker is the choice of what to share, so no picker of the page's is shown),
+   * captures the screen, and gives the engine the picture and the sound to send on the capture
+   * connection; the share shows as `sharingScreen` and `localScreen` once the engine's snapshot
+   * carries the `screen` source. A refusal the plugin answers with (Android's consent declined,
+   * a phone that cannot capture its screen, a capture that would not start) is kept as
+   * `shareError` and thrown as a `ScreenShareError`; one that comes later (iOS's picker
+   * dismissed, its stream failing to start) arrives as the plugin's `share` event and is kept the
+   * same way. A capture the browser made (`prepared`), or sound from outside it (`audio`), has no
+   * place here, and `contentHint` is the encoder's, which the engine bounds as a screen's.
+   * Nothing is asked outside a call or where sharing is not granted, as in `VoiceCall`.
+   */
+  async startScreenShare(
+    options: {
+      prepared?: ScreenCapture;
+      audio?: ExternalAudio;
+      contentHint?: "motion" | "detail" | "text";
+    } = {},
+  ): Promise<void> {
+    if (options.prepared !== undefined || options.audio !== undefined) {
+      options.prepared?.video.stop();
+      options.prepared?.audio?.stop();
+      throw new NativeCallUnavailableError("Sharing a capture made outside the phone");
+    }
+    if (this.#state.status !== "connected" || !this.#state.canShare || this.#state.sharingScreen) {
+      return;
+    }
+    this.#setLocal({ shareFailure: null });
+    try {
+      await AspenCall.startScreenShare({ origin: this.#origin, audio: true });
+    } catch (error) {
+      const failure = shareFailureOfCode(codeOf(error));
+      this.#setLocal({ shareFailure: failure });
+      throw new ScreenShareError(failure, error);
+    }
   }
 
   startExternalScreenShare(_share: ExternalShare): Promise<void> {
     return Promise.reject(new NativeCallUnavailableError("Sharing from outside the app"));
   }
 
+  /** Stops the share, if one is on or asked for; the engine's snapshot then shows it gone. */
   stopScreenShare(): void {
-    throw new NativeCallUnavailableError("Sharing the screen");
+    this.#setLocal({ shareFailure: null });
+    this.#command(AspenCall.stopScreenShare({ origin: this.#origin }));
+  }
+
+  /** Dismisses the reason the screen last failed to be shared, the phone's and the voice server's alike. */
+  clearShareError(): void {
+    this.#setLocal({ shareFailure: null });
+    this.#command(AspenCall.clearShareError({ origin: this.#origin }));
   }
 
   /**
@@ -959,6 +1051,9 @@ export class NativeCall implements Call {
    * applies a gain over it, so the sync never asks, and the slider that would is not shown.
    */
   readonly hasInputVolume = false;
+
+  /** The phone captures its own screen (`startScreenShare`), so the share control is offered. */
+  readonly hasScreenCapture = true;
 
   setInputVolume(_gain: number): void {
     throw new NativeCallUnavailableError("A gain on the microphone");

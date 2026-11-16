@@ -1,3 +1,4 @@
+import { ScreenShareError } from "@aspen/protocol";
 import { ScreencastIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
@@ -9,31 +10,18 @@ import { callBarButtonClass } from "@/features/voice/callBarButton";
 import { useMessages } from "@/i18n/context";
 
 /**
- * Whether this browser can capture a screen: mobile browsers cannot, and a page not served
- * over HTTPS has no media devices at all.
- */
-function canShareScreen(): boolean {
-  return (
-    "mediaDevices" in navigator && typeof navigator.mediaDevices.getDisplayMedia === "function"
-  );
-}
-
-/**
  * The screen-share control, shared by the call bar and the voice channel screen so both offer
- * the same choices. In a browser it shares the screen straight away; on the desktop shell,
- * where the game-capture helper is present, it opens a menu to share the screen or a game.
- * While a share is running it becomes a stop control. `variant` picks the presentation: `bar`
- * is the icon-only button in the call bar, `panel` the labelled button in the channel header.
- * A share error is reported through `onError` so the caller can place the message; declining
- * the browser's own picker is silent.
+ * the same choices. In a browser it shares the screen straight away; in the mobile apps the
+ * phone captures its own screen through the system's consent, which is the choice of what to
+ * share, so no picker of the page's is shown; on the desktop shell, where the game-capture
+ * helper is present, it opens a menu to share the screen or a game. It is offered only where
+ * the call can capture a screen (`Call.hasScreenCapture`: a browser with `getDisplayMedia`, or a
+ * native call). While a share is running it becomes a stop control. `variant` picks the
+ * presentation: `bar` is the icon-only button in the call bar, `panel` the labelled button in
+ * the channel header. Why a share failed is the call's `shareError`, which `ShareProblem` shows
+ * under the bar and in the channel's header; declining the system's picker is silent.
  */
-export function ShareControl({
-  variant,
-  onError,
-}: {
-  variant: "bar" | "panel";
-  onError?: (message: string | null) => void;
-}) {
+export function ShareControl({ variant }: { variant: "bar" | "panel" }) {
   const m = useMessages();
   const sync = useSync();
   const call = useVoiceCall();
@@ -65,13 +53,13 @@ export function ShareControl({
   }, []);
 
   const share = async () => {
-    onError?.(null);
     try {
       await sync.voice.startScreenShare();
     } catch (error) {
-      // Declining the browser's picker is an ordinary outcome, not an error to show.
-      if (!(error instanceof DOMException && error.name === "NotAllowedError")) {
-        onError?.(error instanceof Error ? error.message : String(error));
+      // What failed is the call's `shareError`, shown by `ShareProblem`; anything else thrown
+      // is the call's own and not an outcome of the user's.
+      if (!(error instanceof ScreenShareError)) {
+        throw error;
       }
     }
   };
@@ -121,8 +109,8 @@ export function ShareControl({
   }
 
   if (gameBridge === null) {
-    // Mobile browsers cannot capture the screen; there is nothing to offer.
-    if (!canShareScreen()) {
+    // A mobile browser cannot capture the screen; there is nothing to offer.
+    if (!sync.voice.hasScreenCapture) {
       return null;
     }
     const button = (

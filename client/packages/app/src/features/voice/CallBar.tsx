@@ -13,7 +13,7 @@ import { useAccountsHub } from "@/api/accounts";
 import { useCallSource } from "@/api/calls";
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
-import { isDm, type CameraFailure, type Channel } from "@aspen/protocol";
+import { isDm, type CameraFailure, type Channel, type ShareFailure } from "@aspen/protocol";
 import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { channelLink, useDomain } from "@/features/messages/links";
@@ -197,6 +197,9 @@ export function CallBar() {
       {call.status === "connected" && call.cameraError !== null && (
         <CameraProblem failure={call.cameraError} />
       )}
+      {call.status === "connected" && call.shareError !== null && (
+        <ShareProblem failure={call.shareError} />
+      )}
     </div>
   );
 }
@@ -369,6 +372,33 @@ function CameraProblem({ failure }: { failure: CameraFailure }) {
       text={text}
       onDismiss={() => {
         sync.voice.clearCameraError();
+      }}
+    />
+  );
+}
+
+/**
+ * Why the screen did not get shared, and what to do about it, until dismissed or tried again;
+ * nothing for a share the user declined in the system's own picker, which is their choice and
+ * no problem.
+ */
+export function ShareProblem({ failure }: { failure: ShareFailure }) {
+  const m = useMessages();
+  const sync = useSync();
+  const text = {
+    denied: null,
+    unsupported: m.voice.shareUnsupported,
+    failed: m.voice.shareFailed,
+    unsent: m.voice.shareUnsent,
+  }[failure];
+  if (text === null) {
+    return null;
+  }
+  return (
+    <CallProblem
+      text={text}
+      onDismiss={() => {
+        sync.voice.clearShareError();
       }}
     />
   );

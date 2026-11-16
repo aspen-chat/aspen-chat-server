@@ -35,7 +35,7 @@ import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
 import { useContextMenu } from "@/features/layout/contextMenuState";
 import { trackFacing } from "@/features/settings/audioDevices";
-import { CallBar } from "@/features/voice/CallBar";
+import { CallBar, ShareProblem } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
 import { ScreenTile } from "@/features/voice/ScreenTile";
@@ -59,7 +59,6 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const m = useMessages();
   const call = useVoiceCall();
   const inThisCall = call.status === "connected" && call.channelId === channel.id;
-  const [shareError, setShareError] = useState<string | null>(null);
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <ChannelHeader
@@ -71,14 +70,15 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
         {/* A narrow screen shares from the call bar below instead. */}
         {inThisCall && (
           <div className="hidden md:flex">
-            <ShareControl variant="panel" onError={setShareError} />
+            <ShareControl variant="panel" />
           </div>
         )}
       </ChannelHeader>
-      {shareError !== null && (
-        <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
-          {shareError}
-        </p>
+      {/* A share that failed from the header's control; the call bar shows the same under itself. */}
+      {inThisCall && call.shareError !== null && (
+        <div className="hidden px-4 md:block">
+          <ShareProblem failure={call.shareError} />
+        </div>
       )}
       <CallStage
         channel={channel}

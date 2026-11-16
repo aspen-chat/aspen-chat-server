@@ -1,6 +1,6 @@
 import type { Channel, ChannelVoice } from "@aspen/protocol";
 import { PhoneIcon } from "@phosphor-icons/react";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect } from "react";
 import { Button } from "react-aria-components";
 import { useChannelCan, useChannelVoice, useMe, useSync, useVoiceCall } from "@/api/hooks";
 import { HomeSyncContext } from "@/api/syncContext";
@@ -9,6 +9,7 @@ import { loopSound } from "@/features/notifications/sounds";
 import { voiceOutputDevice } from "@/features/settings/audioDevices";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ringing as stillRinging } from "@/features/voice/ringing";
+import { ShareProblem } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { CallStage } from "@/features/voice/VoiceScreen";
 import { useMessages } from "@/i18n/context";
@@ -24,7 +25,6 @@ export function DmCall({ channel }: { channel: Channel }) {
   const m = useMessages();
   const call = useVoiceCall();
   const voice = useChannelVoice(channel.id);
-  const [shareError, setShareError] = useState<string | null>(null);
   const here = call.status !== "idle" && call.channelId === channel.id;
   useDialTone(call.status === "connected" && here, voice);
   if (!here && voice.participants.length === 0) {
@@ -35,10 +35,11 @@ export function DmCall({ channel }: { channel: Channel }) {
       aria-label={m.voice.dmCallLabel}
       className="flex max-h-[55%] min-h-0 shrink-0 flex-col border-b border-line bg-surface-sunken"
     >
-      {shareError !== null && (
-        <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
-          {shareError}
-        </p>
+      {/* A share that failed from the stage's control; the call bar shows the same under itself. */}
+      {call.status === "connected" && here && call.shareError !== null && (
+        <div className="hidden px-4 pt-2 md:block">
+          <ShareProblem failure={call.shareError} />
+        </div>
       )}
       <CallStage
         channel={channel}
@@ -48,7 +49,7 @@ export function DmCall({ channel }: { channel: Channel }) {
           call.status === "connected" && here ? (
             // A narrow screen shares from the call bar instead.
             <div className="hidden md:flex">
-              <ShareControl variant="panel" onError={setShareError} />
+              <ShareControl variant="panel" />
             </div>
           ) : undefined
         }

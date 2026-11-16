@@ -386,6 +386,8 @@ export {
   CallSetupError,
   CameraError,
   MicrophoneError,
+  ScreenShareError,
+  shareFailureOf,
   VoiceRequestRefused,
   VoiceServerError,
   DEAD_SERVER_RETRY_MS,
@@ -402,6 +404,7 @@ export {
   type Call,
   type CameraFailure,
   type RemoteScreen,
+  type ShareFailure,
   trackSource,
   type VideoFacing,
   type VideoSource,
@@ -421,6 +424,7 @@ export type {
   ScreenCapture,
   VoiceMedia,
 } from "./voiceMedia";
+export { screenCaptureAvailable } from "./voiceMedia";
 export {
   DEFAULT_OFFER_SECONDS,
   MAX_OFFER_SECONDS,

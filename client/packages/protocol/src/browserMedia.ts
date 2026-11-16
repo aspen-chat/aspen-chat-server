@@ -7,7 +7,12 @@
 import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
 import { soundsEnded } from "./soundActivity";
 import { CameraError } from "./voice";
-import type { CallConnection, ScreenCapture, VoiceMedia } from "./voiceMedia";
+import {
+  screenCaptureAvailable,
+  type CallConnection,
+  type ScreenCapture,
+  type VoiceMedia,
+} from "./voiceMedia";
 
 /**
  * The longest a stopped microphone is kept open, capturing for nothing, while the app's sounds
@@ -231,6 +236,7 @@ export function browserVoiceMedia(): VoiceMedia {
       }
       throw new CameraError(onlyMissing ? "none" : "failed", lastError);
     },
+    hasScreenCapture: screenCaptureAvailable(),
     async getScreen(): Promise<ScreenCapture> {
       // Audio is asked for so a shared tab or window can bring its sound; browsers that
       // cannot capture it simply return none.

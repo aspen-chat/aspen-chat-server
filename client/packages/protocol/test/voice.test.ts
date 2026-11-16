@@ -431,6 +431,7 @@ function fakeMedia(unreachableConnections = 0, microphone: "ok" | "denied" = "ok
   const played: string[] = [];
   const stopped: string[] = [];
   const media: VoiceMedia = {
+    hasScreenCapture: true,
     createConnection: () => {
       if (setup.failure !== null) {
         return Promise.reject(setup.failure);

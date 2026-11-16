@@ -180,6 +180,14 @@ export interface VoiceCallState {
    */
   cameraError: CameraFailure | null;
   /**
+   * Why the screen last failed to be shared, until a share starts, the user dismisses it
+   * (`clearShareError`), or the call ends: `denied` (the user declined the system's picker or
+   * consent, which the UI shows nothing of), `unsupported` (this device cannot capture its
+   * screen), `failed` (the capture would not start, or ended on its own), or `unsent` (the voice
+   * server refused the share).
+   */
+  shareError: ShareFailure | null;
+  /**
    * What failed when `status` is `failed`: the microphone (permission refused, no device, or an
    * insecure page origin, which browsers refuse media on), every voice server, the voice
    * server refusing one of the call's requests (`refused`), most often for coming too fast, or
@@ -277,6 +285,7 @@ export const IDLE_CALL_STATE: VoiceCallState = {
   screens: [],
   localCamera: null,
   cameraError: null,
+  shareError: null,
   cameras: [],
   errorKind: null,
   retryAfterSeconds: null,
@@ -300,6 +309,42 @@ function sameChoice(a: DeviceChoice, b: DeviceChoice): boolean {
  * server did not take the picture (`unsent`).
  */
 export type CameraFailure = "none" | "denied" | "failed" | "unsent";
+
+/** Why a screen could not be shared, as `VoiceCallState.shareError` names it. */
+export type ShareFailure = "denied" | "unsupported" | "failed" | "unsent";
+
+/** The screen could not be shared, for the reason `failure` names; `cause` is the underlying error. */
+export class ScreenShareError extends Error {
+  constructor(
+    readonly failure: ShareFailure,
+    cause?: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : failure, { cause });
+    this.name = "ScreenShareError";
+  }
+}
+
+/**
+ * `error`, thrown by `getDisplayMedia` or a native share, as a share failure: the user declining
+ * the picker is `denied`, a browser or device that cannot capture a screen `unsupported`, and
+ * anything else `failed`.
+ */
+export function shareFailureOf(error: unknown): ShareFailure {
+  if (error instanceof ScreenShareError) {
+    return error.failure;
+  }
+  if (error instanceof DOMException) {
+    switch (error.name) {
+      case "NotAllowedError":
+        return "denied";
+      case "NotSupportedError":
+        return "unsupported";
+      default:
+        return "failed";
+    }
+  }
+  return "failed";
+}
 
 /** The camera could not be turned on, for the reason `failure` names; `cause` is the underlying error. */
 export class CameraError extends Error {
@@ -462,7 +507,16 @@ export interface Call {
   setServerMuted(serverMuted: boolean): void;
   /** Forgets a refusal to unmute or undeafen once the user has seen it. */
   clearStateRefusal(): void;
-  /** Shares the screen, as `VoiceCall.startScreenShare` describes its options. */
+  /**
+   * Whether this call can capture the screen to share: a browser with `getDisplayMedia` (so not
+   * a mobile browser), or a mobile app's native call, whose phone captures its screen itself.
+   * The share control is offered only where it is true.
+   */
+  readonly hasScreenCapture: boolean;
+  /**
+   * Shares the screen, as `VoiceCall.startScreenShare` describes its options. A failure to start
+   * is kept as `shareError` and thrown as a `ScreenShareError`.
+   */
   startScreenShare(options?: {
     prepared?: ScreenCapture;
     audio?: ExternalAudio;
@@ -472,6 +526,8 @@ export interface Call {
   startExternalScreenShare(share: ExternalShare): Promise<void>;
   /** Stops sharing the screen, if sharing. Safe to call at any time. */
   stopScreenShare(): void;
+  /** Dismisses the reason the screen last failed to be shared. */
+  clearShareError(): void;
   /** Turns the camera on; a failure to open it is kept as `cameraError` and thrown. */
   startCamera(): Promise<void>;
   /** Dismisses the reason the camera last failed. */
@@ -604,6 +660,7 @@ export class VoiceCall implements Call {
   constructor(options: VoiceCallOptions) {
     this.#client = options.client;
     this.#media = options.media;
+    this.hasScreenCapture = options.media.hasScreenCapture;
     this.#Socket = options.WebSocket ?? globalThis.WebSocket;
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
@@ -861,7 +918,16 @@ export class VoiceCall implements Call {
       return;
     }
     const generation = this.#generation;
-    const capture = prepared ?? (await this.#media.getScreen());
+    let capture: ScreenCapture;
+    try {
+      capture = prepared ?? (await this.#media.getScreen());
+    } catch (error) {
+      const failure = new ScreenShareError(shareFailureOf(error), error);
+      if (generation === this.#generation) {
+        this.#set({ shareError: failure.failure });
+      }
+      throw failure;
+    }
     // The picker took time; the call may have moved on or another share started meanwhile.
     if (generation !== this.#generation || this.#sharing()) {
       capture.video.stop();
@@ -876,7 +942,7 @@ export class VoiceCall implements Call {
       capture.video.contentHint = contentHint;
     }
     this.#screen = capture;
-    this.#set({ sharingScreen: true, localScreen: trackSource(capture.video) });
+    this.#set({ sharingScreen: true, localScreen: trackSource(capture.video), shareError: null });
     capture.video.addEventListener("ended", () => {
       if (this.#screen === capture) {
         this.stopScreenShare();
@@ -912,7 +978,7 @@ export class VoiceCall implements Call {
     }
     this.#externalShare = share;
     const started = this.#startCapture(share);
-    this.#set({ sharingScreen: true });
+    this.#set({ sharingScreen: true, shareError: null });
     this.#pending.add("screen");
     this.#send({ type: "send", source: "screen", external: true });
     if (share.audio) {
@@ -1011,6 +1077,11 @@ export class VoiceCall implements Call {
   /** Dismisses the reason the camera last failed. */
   clearCameraError(): void {
     this.#set({ cameraError: null });
+  }
+
+  /** Dismisses the reason the screen last failed to be shared. */
+  clearShareError(): void {
+    this.#set({ shareError: null });
   }
 
   /** Whether the camera is on, read afresh where an `await` may have changed it. */
@@ -1131,6 +1202,8 @@ export class VoiceCall implements Call {
 
   /** The browser's call opens the microphone and plays through the speaker `setAudioDevices` names. */
   readonly hasAudioDeviceChoice: boolean = true;
+
+  readonly hasScreenCapture: boolean;
 
   /**
    * How loud the user's microphone is sent, from their preference: a gain, 1 as captured.
@@ -1405,9 +1478,10 @@ export class VoiceCall implements Call {
     if (
       this.#state.screens.length > 0 ||
       this.#state.cameras.length > 0 ||
-      this.#state.cameraError !== null
+      this.#state.cameraError !== null ||
+      this.#state.shareError !== null
     ) {
-      this.#set({ screens: [], cameras: [], cameraError: null });
+      this.#set({ screens: [], cameras: [], cameraError: null, shareError: null });
     }
     for (const mid of this.#heard.keys()) {
       this.#media.stop(mid);
@@ -2137,6 +2211,7 @@ export class VoiceCall implements Call {
     }
     if (pending.includes("screen") || pending.includes("screenAudio")) {
       this.stopScreenShare();
+      this.#set({ shareError: "unsent" });
     }
     if (pending.includes("microphone")) {
       this.#sent.delete("microphone");

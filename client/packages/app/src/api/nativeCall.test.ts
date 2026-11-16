@@ -251,14 +251,14 @@ describe("nativeCall", () => {
       expect(state.canSpeak).toBe(true);
     });
 
-    it("shows the camera's and the files' grants, and keeps sharing off", () => {
+    it("shows the camera's, the share's, and the files' grants", () => {
       const state = stateOf(
         engineState({
           grants: { speak: true, shareScreen: true, camera: true, transferFiles: true },
         }),
       );
       expect(state.canCamera).toBe(true);
-      expect(state.canShare).toBe(false);
+      expect(state.canShare).toBe(true);
       expect(state.canTransfer).toBe(true);
       expect(state.files).toEqual(NO_FILES);
       expect(stateOf(engineState()).canTransfer).toBe(false);
@@ -268,7 +268,47 @@ describe("nativeCall", () => {
       expect(state.screens).toEqual([]);
       expect(state.cameras).toEqual([]);
       expect(state.cameraError).toBeNull();
+      expect(state.shareError).toBeNull();
       expect(stateOf(engineState()).canCamera).toBe(false);
+      expect(stateOf(engineState()).canShare).toBe(false);
+    });
+
+    it("shows the screen sent as the user's own share, a surface, and why none is", () => {
+      const sharing = stateOf(
+        engineState(
+          connected({
+            sources: [
+              { source: "screen", track: "share-video", live: true, external: true },
+              { source: "screenAudio", track: "share-audio", live: true, external: true },
+            ],
+          }),
+        ),
+        { facing: null, cameraFailure: null, shareFailure: "failed" },
+      );
+      expect(sharing.sharingScreen).toBe(true);
+      expect(sharing.localScreen).toEqual({ kind: "native", surface: "share-video", facing: null });
+      expect(sharing.shareError).toBeNull();
+      expect(sharing.screens).toEqual([]);
+      const refused = stateOf(
+        engineState(
+          connected({
+            sourceRefused: {
+              source: "screenAudio",
+              refusal: { detail: "no", retryAfterSeconds: null },
+            },
+          }),
+        ),
+        { facing: null, cameraFailure: null, shareFailure: "denied" },
+      );
+      expect(refused.sharingScreen).toBe(false);
+      expect(refused.shareError).toBe("unsent");
+      expect(
+        stateOf(engineState(connected()), {
+          facing: null,
+          cameraFailure: null,
+          shareFailure: "denied",
+        }).shareError,
+      ).toBe("denied");
     });
 
     it("shows the videos received as the others' cameras and screens, each a surface", () => {
@@ -308,10 +348,12 @@ describe("nativeCall", () => {
 
     it("shows the camera sent as the local picture, facing as the page was told", () => {
       const sent = engineState(
-        connected({ sources: [{ source: "camera", track: "t-cam", live: true }] }),
+        connected({ sources: [{ source: "camera", track: "t-cam", live: true, external: false }] }),
       );
       expect(stateOf(sent).localCamera).toEqual({ kind: "native", surface: "t-cam", facing: null });
-      expect(stateOf(sent, { facing: "back", cameraFailure: null }).localCamera).toEqual({
+      expect(
+        stateOf(sent, { facing: "back", cameraFailure: null, shareFailure: null }).localCamera,
+      ).toEqual({
         kind: "native",
         surface: "t-cam",
         facing: "back",
@@ -326,11 +368,15 @@ describe("nativeCall", () => {
         }),
       );
       expect(stateOf(refused).cameraError).toBe("unsent");
-      expect(stateOf(refused, { facing: null, cameraFailure: "denied" }).cameraError).toBe(
-        "unsent",
-      );
       expect(
-        stateOf(engineState(connected()), { facing: null, cameraFailure: "denied" }).cameraError,
+        stateOf(refused, { facing: null, cameraFailure: "denied", shareFailure: null }).cameraError,
+      ).toBe("unsent");
+      expect(
+        stateOf(engineState(connected()), {
+          facing: null,
+          cameraFailure: "denied",
+          shareFailure: null,
+        }).cameraError,
       ).toBe("denied");
       const other = engineState(
         connected({
@@ -992,7 +1038,9 @@ describe("nativeCall", () => {
       publish(
         snapshot({
           revision: 3,
-          ...connected({ sources: [{ source: "camera", track: "t-cam", live: false }] }),
+          ...connected({
+            sources: [{ source: "camera", track: "t-cam", live: false, external: false }],
+          }),
         }),
       );
       expect(made.state.localCamera).toEqual({ kind: "native", surface: "t-cam", facing: "front" });
@@ -1074,7 +1122,9 @@ describe("nativeCall", () => {
       publish(
         snapshot({
           revision: 3,
-          ...connected({ sources: [{ source: "camera", track: "t-cam", live: true }] }),
+          ...connected({
+            sources: [{ source: "camera", track: "t-cam", live: true, external: false }],
+          }),
         }),
       );
       expect(made.state.localCamera).toEqual({ kind: "native", surface: "t-cam", facing: "back" });
@@ -1099,17 +1149,112 @@ describe("nativeCall", () => {
     });
   });
 
-  describe("what a native call lacks", () => {
-    it("rejects sharing, naming it", async () => {
+  describe("sharing the screen", () => {
+    it("captures the screen itself, so the share control is offered", () => {
+      expect(call().call.hasScreenCapture).toBe(true);
+    });
+
+    it("asks the plugin for the screen with its sound, and shows the share from the snapshot", async () => {
       const { call: made } = call();
       await settle();
-      await expect(made.startScreenShare()).rejects.toBeInstanceOf(NativeCallUnavailableError);
+      publish(
+        snapshot(
+          connected({
+            grants: { speak: true, shareScreen: true, camera: false, transferFiles: false },
+          }),
+        ),
+      );
+      calls.length = 0;
+      await made.startScreenShare();
+      expect(calls).toEqual([
+        { method: "startScreenShare", options: { origin: ORIGIN, audio: true } },
+      ]);
+      publish(
+        snapshot(
+          connected({
+            revision: 2,
+            grants: { speak: true, shareScreen: true, camera: false, transferFiles: false },
+            sources: [
+              { source: "screen", track: "share-video", live: true, external: true },
+              { source: "screenAudio", track: "share-audio", live: true, external: true },
+            ],
+          }),
+        ),
+      );
+      expect(made.state.sharingScreen).toBe(true);
+      expect(made.state.localScreen).toEqual({
+        kind: "native",
+        surface: "share-video",
+        facing: null,
+      });
+      // Sharing already, nothing more is asked.
+      calls.length = 0;
+      await made.startScreenShare();
+      expect(calls).toEqual([]);
+      made.stopScreenShare();
+      expect(calls).toEqual([{ method: "stopScreenShare", options: { origin: ORIGIN } }]);
+    });
+
+    it("does not ask for the screen outside a call or where sharing is not granted", async () => {
+      const { call: made } = call();
+      await settle();
+      calls.length = 0;
+      await made.startScreenShare();
+      publish(snapshot(connected()));
+      await made.startScreenShare();
+      expect(calls.filter((c) => c.method === "startScreenShare")).toEqual([]);
+    });
+
+    it("keeps the plugin's refusal as shareError, thrown as a ScreenShareError, and dismisses it", async () => {
+      const { call: made } = call();
+      await settle();
+      publish(
+        snapshot(
+          connected({
+            grants: { speak: true, shareScreen: true, camera: false, transferFiles: false },
+          }),
+        ),
+      );
+      refusals.set("startScreenShare", Object.assign(new Error("declined"), { code: "denied" }));
+      await expect(made.startScreenShare()).rejects.toMatchObject({
+        name: "ScreenShareError",
+        failure: "denied",
+      });
+      expect(made.state.shareError).toBe("denied");
+      refusals.set("startScreenShare", new Error("no code"));
+      await expect(made.startScreenShare()).rejects.toMatchObject({ failure: "failed" });
+      expect(made.state.shareError).toBe("failed");
+      refusals.delete("startScreenShare");
+      calls.length = 0;
+      made.clearShareError();
+      expect(made.state.shareError).toBeNull();
+      expect(calls).toEqual([{ method: "clearShareError", options: { origin: ORIGIN } }]);
+      // A share that ends after the plugin answered (iOS's picker dismissed) comes as an event.
+      listeners.get("share")?.({ origin: ORIGIN, failure: "unsupported" } as never);
+      expect(made.state.shareError).toBe("unsupported");
+      listeners.get("share")?.({ origin: "https://other.example", failure: "failed" } as never);
+      expect(made.state.shareError).toBe("unsupported");
+      listeners.get("share")?.({ origin: ORIGIN, failure: null } as never);
+      expect(made.state.shareError).toBeNull();
+      // The call's end starts the next one clean.
+      listeners.get("share")?.({ origin: ORIGIN, failure: "failed" } as never);
+      publish(snapshot({ revision: 9, status: "idle" }));
+      expect(made.state.shareError).toBeNull();
+    });
+  });
+
+  describe("what a native call lacks", () => {
+    it("rejects a capture made elsewhere, naming it", async () => {
+      const { call: made } = call();
+      await settle();
+      const video = { stop: vi.fn() };
+      await expect(
+        made.startScreenShare({ prepared: { video, audio: null } as never }),
+      ).rejects.toBeInstanceOf(NativeCallUnavailableError);
+      expect(video.stop).toHaveBeenCalled();
       await expect(
         made.startExternalScreenShare({ audio: false, stop: () => undefined } as never),
       ).rejects.toBeInstanceOf(NativeCallUnavailableError);
-      expect(() => {
-        made.stopScreenShare();
-      }).toThrow(NativeCallUnavailableError);
     });
 
     it("takes the system's default microphone and speaker and refuses one chosen by id", async () => {

@@ -76,8 +76,22 @@ export interface CallConnection {
   close(): void;
 }
 
+/**
+ * Whether this browser can capture a screen: mobile browsers cannot, and a page not served over
+ * HTTPS has no media devices at all. Answered `false` outside a browser.
+ */
+export function screenCaptureAvailable(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    "mediaDevices" in navigator &&
+    typeof navigator.mediaDevices.getDisplayMedia === "function"
+  );
+}
+
 /** What the call needs from the browser: its peer connection, media capture, and playback. */
 export interface VoiceMedia {
+  /** Whether `getScreen` can capture a screen here (`screenCaptureAvailable` in a browser). */
+  readonly hasScreenCapture: boolean;
   createConnection(): Promise<CallConnection>;
   /**
    * Opens the microphone the choice names, or the system's default, sent at `gain` (as
