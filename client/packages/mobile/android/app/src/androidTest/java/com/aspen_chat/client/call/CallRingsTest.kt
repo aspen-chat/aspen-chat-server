@@ -7,6 +7,12 @@ import android.content.Context
 import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.aspen_chat.client.R
+import com.aspen_chat.client.call.CallTestSupport.incomingCallScreen
+import com.aspen_chat.client.call.CallTestSupport.incomingCallScreenShown
+import com.aspen_chat.client.call.CallTestSupport.playerState
+import com.aspen_chat.client.call.CallTestSupport.ringtonePlayers
+import com.aspen_chat.client.call.CallTestSupport.textOf
 import com.aspen_chat.client.push.PushHandler
 import com.aspen_chat.client.push.PushStore
 import java.io.BufferedReader
@@ -35,11 +41,12 @@ import org.junit.runner.RunWith
 /**
  * A DM's call ringing the phone, from the push to the ring's end, on the emulator: a `call` pointer
  * encrypted as a deployment encrypts it is handed to the push handler, which within five seconds
- * has the call in Telecom as incoming with the incoming call's notification posted; the engine's
- * ring watch identifies on a stand-in deployment's event stream, which then says the ring was
- * declined elsewhere, and the call and its notification go. A push that cannot be read rings
- * nothing. Answering from the lock screen and the ringtone are device checks (`android-builds.md`,
- * Rings).
+ * has the call in Telecom as incoming with the incoming call's notification posted and the
+ * ringtone playing; the notification's full-screen intent opens the incoming call screen, naming
+ * the caller and the deployment; the engine's ring watch identifies on a stand-in deployment's
+ * event stream, which then says the ring was declined elsewhere, and the call, its notification,
+ * the ringtone, and the screen go. A push that cannot be read rings nothing. Whether the screen
+ * wakes a locked phone, and answering from it, are device checks (`android-builds.md`, Rings).
  */
 @RunWith(AndroidJUnit4::class)
 class CallRingsTest {
@@ -122,6 +129,16 @@ class CallRingsTest {
         )
         val control = waitFor("Telecom's id for the call", 5_000) { telecom.callId }
         assertNotNull("Telecom added the call", control)
+        val player = waitFor("the ringtone to play", 5_000) { ringtonePlayers().firstOrNull { playerState(it).first == "started" } }
+        assertNotNull("the ringtone plays while the call rings", player)
+
+        // The full-screen intent, as the system sends it for a locked or dark phone, shows the
+        // incoming call screen with the caller and the deployment.
+        shown.fullScreenIntent.send()
+        assertTrue("the incoming call screen is shown", waitFor("the screen", 5_000) { if (incomingCallScreenShown()) true else null } == true)
+        val screen = waitFor("the screen of this process", 5_000) { incomingCallScreen() }!!
+        assertEquals("Alice", textOf(screen, R.id.incoming_call_caller))
+        assertEquals(context.getString(R.string.aspen_incoming_call_at, "127.0.0.1:${server.localPort}"), textOf(screen, R.id.incoming_call_status))
 
         // The ring watch identifies on the deployment's event stream with the account's session.
         val stream = identified.poll(10, TimeUnit.SECONDS)
@@ -152,6 +169,8 @@ class CallRingsTest {
             waitFor("the notification to go", 5_000) { if (incomingNotification() == null) null else Unit },
         )
         assertEquals(CallTelecom.Phase.IDLE, telecom.phase)
+        assertTrue("and closes the screen", waitFor("the screen to close", 5_000) { if (incomingCallScreenShown() || incomingCallScreen() != null) null else true } == true)
+        assertTrue("and stops the ringtone", ringtonePlayers().none { playerState(it).first == "started" })
     }
 
     @Test

@@ -15,4 +15,9 @@
     <string name="aspen_incoming_call">Llamada entrante</string>
     <string name="aspen_ring_answer">Responder</string>
     <string name="aspen_ring_decline">Rechazar</string>
+    <string name="aspen_incoming_call_at">Llamada entrante en %1$s</string>
+    <string name="aspen_call_connecting">Conectando…</string>
+    <string name="aspen_call_on_hold">En espera</string>
+    <string name="aspen_call_hang_up">Colgar</string>
+    <string name="aspen_call_open_app">Abrir Aspen</string>
 </resources>

@@ -9,8 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -36,9 +34,12 @@ import com.aspen_chat.client.R
  * A DM's call ringing the phone is shown by `showIncoming`: a `CallStyle` incoming call
  * notification with the system's Answer and Decline, posted directly rather than by a service
  * (its full-screen intent is what Android 12 asks of a call notification that is no foreground
- * service's), on a channel that rings with the system's default ringtone, since Aspen has no
- * ringtone of its own; its actions come back here and reach `CallTelecom`. Answering starts the
- * service as for any call, whose ongoing notification replaces the incoming one.
+ * service's), whose full-screen intent opens `IncomingCallActivity` over the lock screen. Its
+ * channel makes no sound of its own: the ring is heard through `CallRinger`, which `CallTelecom`
+ * plays for the ring's length, since a notification's sound plays once. Its actions come back here
+ * and reach `CallTelecom`, as `IncomingCallActivity`'s do through `answer` and `decline`, so a ring
+ * is answered and declined on one path however it is. Answering starts the service as for any
+ * call, whose ongoing notification replaces the incoming one.
  */
 class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -105,8 +106,8 @@ class CallService : Service() {
     companion object {
         private const val TAG = "AspenCall"
         const val CHANNEL = "aspen_calls"
-        /** The incoming calls' channel, which rings; `CHANNEL` makes no sound. */
-        const val RING_CHANNEL = "aspen_rings"
+        /** The incoming calls' channel; neither it nor `CHANNEL` makes a sound (see `CallRinger`). */
+        const val RING_CHANNEL = "aspen_incoming_calls"
         const val NOTIFICATION_ID = 0x43414c4c
         private const val ACTION_HANG_UP = "com.aspen_chat.client.call.HANG_UP"
         private const val ACTION_ANSWER = "com.aspen_chat.client.call.ANSWER"
@@ -121,22 +122,18 @@ class CallService : Service() {
 
         /**
          * Shows a DM's call from `name` ringing the phone: the incoming call's notification, with
-         * the system's Answer and Decline and a full-screen intent that opens the app over the
-         * lock screen, on the channel that rings. The same notification id as the ongoing call's,
-         * which replaces it on answering.
+         * the system's Answer and Decline, a full-screen intent that opens the incoming call screen
+         * for the ring's deployment over the lock screen, and a tap that opens the app. The same
+         * notification id as the ongoing call's, which replaces it on answering.
          */
-        fun showIncoming(context: Context, name: CharSequence, answer: () -> Unit, decline: () -> Unit) {
+        fun showIncoming(context: Context, origin: String, name: CharSequence, answer: () -> Unit, decline: () -> Unit) {
             synchronized(this) { ring = Ringing(answer, decline) }
             val manager = context.getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(RING_CHANNEL, context.getString(R.string.aspen_rings_channel_name), NotificationManager.IMPORTANCE_HIGH)
-            channel.setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build(),
-            )
-            channel.enableVibration(true)
+            // The ring is `CallRinger`'s, for as long as the call rings; a sound here would play
+            // once more beside it.
+            channel.setSound(null, null)
+            channel.enableVibration(false)
             manager.createNotificationChannel(channel)
             val builder = NotificationCompat.Builder(context, RING_CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_aspen)
@@ -157,9 +154,12 @@ class CallService : Service() {
             val open = context.packageManager.getLaunchIntentForPackage(context.packageName)
             if (open != null) {
                 open.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                val opening = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.setContentIntent(opening).setFullScreenIntent(opening, true)
+                builder.setContentIntent(PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             }
+            builder.setFullScreenIntent(
+                PendingIntent.getActivity(context, 3, IncomingCallActivity.intent(context, origin), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE),
+                true,
+            )
             manager.notify(NOTIFICATION_ID, builder.build())
         }
 
@@ -175,9 +175,28 @@ class CallService : Service() {
         private fun ringAction(context: Context, name: String, request: Int): PendingIntent = PendingIntent.getService(
             context,
             request,
-            Intent(context, CallService::class.java).setAction(name),
+            action(context, name),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+
+        private fun action(context: Context, name: String): Intent = Intent(context, CallService::class.java).setAction(name)
+
+        /**
+         * Answers the ring, declines it, or hangs the call up, as the notifications' actions do:
+         * the same intents, started by whoever is in the foreground (the incoming call screen), so
+         * each runs on the one path `onStartCommand` holds.
+         */
+        fun answer(context: Context) {
+            context.startService(action(context, ACTION_ANSWER))
+        }
+
+        fun decline(context: Context) {
+            context.startService(action(context, ACTION_DECLINE))
+        }
+
+        fun hangUp(context: Context) {
+            context.startService(action(context, ACTION_HANG_UP))
+        }
 
         /** Takes the incoming call's notification down, whatever ended the ring. */
         fun cancelIncoming(context: Context) {
@@ -237,12 +256,7 @@ class CallService : Service() {
             channel.enableVibration(false)
             manager.createNotificationChannel(channel)
 
-            val hangUp = PendingIntent.getService(
-                context,
-                0,
-                Intent(context, CallService::class.java).setAction(ACTION_HANG_UP),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            val hangUp = PendingIntent.getService(context, 0, action(context, ACTION_HANG_UP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val builder = NotificationCompat.Builder(context, CHANNEL)
                 // The status bar draws a small icon by its alpha alone; the colour tints it where shown.
                 .setSmallIcon(R.drawable.ic_stat_aspen)

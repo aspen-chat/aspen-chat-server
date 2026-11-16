@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The round Answer button of the incoming call screen, lit as it is pressed. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/aspen_call_ink">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/aspen_call_answer" />
+        </shape>
+    </item>
+</ripple>

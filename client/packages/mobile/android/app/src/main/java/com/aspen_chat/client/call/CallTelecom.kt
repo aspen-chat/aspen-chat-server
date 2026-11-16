@@ -47,12 +47,14 @@ import kotlinx.coroutines.withContext
  *
  * A DM's call ringing this phone (`ring`, from a `call` push through `CallRings`) is an incoming
  * call in Telecom before the engine joins, with the incoming call's notification and its
- * full-screen intent (`CallService.showIncoming`) and the engine's ring watch on it. Answering
- * (Telecom's `onAnswer`, or the notification's Answer) joins the ring's channel through the
- * engine, which ends the ring at the deployment, and the call goes on as any other; declining
- * (Telecom's disconnect, or the notification's Decline) ends the ring at the deployment
- * (`CallRings.decline`); and the ring ending anywhere else (`ringEnded`) disconnects the call with
- * the cause its end gives. The ringtone is the notification channel's, the system's default.
+ * full-screen intent (`CallService.showIncoming`, opening `IncomingCallActivity` over the lock
+ * screen), the ringtone and vibration (`CallRinger`, since Telecom rings for no call an app manages
+ * itself), and the engine's ring watch on it. Answering (Telecom's `onAnswer`, or `CallService`'s
+ * Answer, from the notification or the screen) joins the ring's channel through the engine, which
+ * ends the ring at the deployment, and the call goes on as any other; declining (Telecom's
+ * disconnect, or `CallService`'s Decline) ends the ring at the deployment (`CallRings.decline`);
+ * and the ring ending anywhere else (`ringEnded`) disconnects the call with the cause its end
+ * gives. Whoever shows the call follows `phase` through `listen`.
  */
 class CallTelecom(
     context: Context,
@@ -66,9 +68,24 @@ class CallTelecom(
 
     private val context = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val ringer = CallRinger(context)
     private var call: SystemCall? = null
     private var closed = false
     private val subscription = snapshots.listen(::stateChanged)
+    private val listeners = ArrayList<PhaseListener>()
+    /** The phase the listeners were last told, so a change that lands on the same phase tells them nothing. */
+    private var announced = Phase.IDLE
+
+    fun interface PhaseListener {
+        fun changed(phase: Phase)
+    }
+
+    /** Stops the listener it was given for. */
+    inner class Subscription internal constructor(private val listener: PhaseListener) {
+        fun cancel() {
+            listeners.remove(listener)
+        }
+    }
 
     /**
      * What Telecom and the notification show the call as: the channel's or the other person's
@@ -80,6 +97,29 @@ class CallTelecom(
     val phase: Phase
         get() = call?.phase ?: Phase.IDLE
 
+    /**
+     * Calls `listener` on the main thread with the phase as it is and with every change of it,
+     * until the subscription is cancelled. Call on the main thread.
+     */
+    fun listen(listener: PhaseListener): Subscription {
+        listeners.add(listener)
+        val now = phase
+        scope.launch { if (listeners.contains(listener)) listener.changed(now) }
+        return Subscription(listener)
+    }
+
+    /** Tells the listeners of the phase when it has changed since they were last told. */
+    private fun announce() {
+        val now = phase
+        if (now == announced) {
+            return
+        }
+        announced = now
+        for (listener in listeners.toList()) {
+            listener.changed(now)
+        }
+    }
+
     /** Telecom's id for the call, once it has added it; what `dumpsys telecom` lists it by. */
     val callId: ParcelUuid?
         get() = call?.control?.getCallId()
@@ -90,6 +130,10 @@ class CallTelecom(
      */
     private inner class SystemCall(var video: Boolean, val incoming: CallRings.IncomingRing? = null) {
         var phase = if (incoming == null) Phase.DIALING else Phase.RINGING
+            set(value) {
+                field = value
+                if (call === this) announce()
+            }
         var control: CallControlScope? = null
         /** The engine's watch on the ring, while the call is incoming and unanswered. */
         var watch: RingWatch? = null
@@ -152,10 +196,13 @@ class CallTelecom(
         displayName = ring.callerName.ifEmpty { context.getString(R.string.app_name) }
         CallService.showIncoming(
             context,
+            ring.origin,
             displayName,
             answer = { onMainLater { answer(call, byTelecom = false) } },
             decline = { onMainLater { declined(call, byTelecom = false) } },
         )
+        ringer.start()
+        announce()
         call.watch = RingWatch.start(
             RingPlatform(CallHttp(), CallSockets()),
             RingOptions(ring.origin, CallCredentials(context, ring.origin), CallEngines.loopbackPlainText(context)),
@@ -262,7 +309,14 @@ class CallTelecom(
         }
     }
 
-    /** The ring ended anywhere else, as the engine's watch says: Telecom's call ends with the cause. */
+    /**
+     * The ring ended anywhere else, as the engine's watch says: Telecom's call ends with the
+     * cause, one of the four a call added through `CallsManager` may be disconnected with
+     * (`LOCAL`, `REMOTE`, `MISSED`, `REJECTED`; `CallControl` refuses every other code): answered
+     * on another device or ended by its caller, the call went on or ended beyond this phone
+     * (`REMOTE`); declined elsewhere, it was rejected; run out, it was missed; and a ring whose
+     * account has no session any more ends by this phone's own doing.
+     */
     private fun ringEnded(call: SystemCall, end: RingEnd) {
         if (call.phase != Phase.RINGING || call.finished) {
             return
@@ -270,11 +324,10 @@ class CallTelecom(
         stopRinging(call)
         call.endedAtRevision = (snapshots.latest ?: engine.state()).revision
         val cause = when (end) {
-            RingEnd.ANSWERED_ELSEWHERE -> DisconnectCause.ANSWERED_ELSEWHERE
+            RingEnd.ANSWERED_ELSEWHERE, RingEnd.CALL_ENDED -> DisconnectCause.REMOTE
             RingEnd.DECLINED -> DisconnectCause.REJECTED
-            RingEnd.CALL_ENDED -> DisconnectCause.CANCELED
             RingEnd.TIMED_OUT -> DisconnectCause.MISSED
-            RingEnd.SIGNED_OUT -> DisconnectCause.ERROR
+            RingEnd.SIGNED_OUT -> DisconnectCause.LOCAL
         }
         if (call.control != null) {
             disconnect(call, DisconnectCause(cause))
@@ -283,8 +336,9 @@ class CallTelecom(
         }
     }
 
-    /** The incoming call's notification and ring watch are done with, whatever ends the ring. */
+    /** The ringtone, the incoming call's notification, and the ring watch are done with, whatever ends the ring. */
     private fun stopRinging(call: SystemCall) {
+        ringer.stop()
         call.watch?.stop()
         call.watch = null
         CallService.cancelIncoming(context)
@@ -294,6 +348,7 @@ class CallTelecom(
         val video = state.grants.camera || state.grants.shareScreen
         val call = SystemCall(video)
         this.call = call
+        announce()
         audio.configureForCall()
         CallService.start(context, displayName, video) { engine.leave() }
         val attributes = attributes(state, video)
@@ -469,6 +524,7 @@ class CallTelecom(
         audio.release()
         if (this.call === call) {
             this.call = null
+            announce()
         }
         // A call the engine joined after this one's end was asked, while Telecom was still letting
         // it go, is the system's call now.
@@ -497,16 +553,13 @@ class CallTelecom(
         get() = this == CallStatus.JOINING || this == CallStatus.CONNECTED || this == CallStatus.REJOINING
 
     /**
-     * The user's leaving is `LOCAL`; a call ended from elsewhere (removed by a moderator, access
-     * lost, the server's idle end) is `REMOTE`; a failure is `ERROR`, which Telecom before SDK 38
-     * reports as `LOCAL`.
+     * The user's leaving, and a failure on this side, are `LOCAL`; a call ended from elsewhere
+     * (removed by a moderator, access lost, the server's idle end) is `REMOTE`. A call added
+     * through `CallsManager` is disconnected with one of `LOCAL`, `REMOTE`, `MISSED`, and
+     * `REJECTED` alone; `CallControl` refuses `ERROR` and every other code.
      */
     private fun causeOf(state: CallState) = DisconnectCause(
-        when {
-            state.status == CallStatus.FAILED -> DisconnectCause.ERROR
-            state.endedReason != null -> DisconnectCause.REMOTE
-            else -> DisconnectCause.LOCAL
-        },
+        if (state.endedReason != null && state.status != CallStatus.FAILED) DisconnectCause.REMOTE else DisconnectCause.LOCAL,
     )
 
     companion object {

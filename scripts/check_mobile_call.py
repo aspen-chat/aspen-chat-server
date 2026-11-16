@@ -97,8 +97,8 @@ BUNDLE = "com.aspen-chat.client"
 PACKAGE = "com.aspen_chat.client"
 MAC_PATH = "export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 ANDROID_TESTS = ["com.aspen_chat.client.call.CallEngineTest", "com.aspen_chat.client.call.AspenCallPluginTest"]
-# What only a phone can show, run on `--device` after the two above; it captures the lock screen
-# while a call rings there.
+# What only a phone can show, run on `--device` after the two above; it captures the incoming call
+# screen as a call rings the locked phone, and as the call goes on there once answered.
 ANDROID_DEVICE_TEST = "com.aspen_chat.client.call.CallDeviceTest"
 # The line each Android test prints once it has done its work, by which a run is judged to have
 # done it; a test that passed without one did nothing.
@@ -107,7 +107,8 @@ ANDROID_TEST_LINES = {
     ANDROID_TESTS[1]: "call-plugin-test",
     ANDROID_DEVICE_TEST: "call-device-test",
 }
-DEVICE_CAPTURES = ["/data/local/tmp/aspen-ring-dark.png", "/data/local/tmp/aspen-ring-lock-screen.png"]
+DEVICE_CAPTURES = ["/data/local/tmp/aspen-ring-dark.png", "/data/local/tmp/aspen-ring-lock-screen.png",
+                   "/data/local/tmp/aspen-ring-answered-locked.png"]
 IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests"]
 ANDROID_TRAILING_TEST = "com.aspen_chat.client.call.AspenCallPluginTest#pictureFollowsAMovingHole"
 IOS_TRAILING_TEST = "AppTests/AspenCallPluginTests/testPictureFollowsAMovingHole"
@@ -131,23 +132,33 @@ def tone(path: Path) -> None:
 
 
 class Second:
-    """The second participant: `calls/second.ts` in Chromium, driven over its standard input."""
+    """The second participant: `calls/second.ts` in Chromium, driven over its standard input, in
+    the call of `channel` unless `join` names another."""
 
     def __init__(self, base: str, channel: str, session: dict, tone_path: Path):
-        self.arguments = json.dumps({"base": base, "channel": channel, "session": session, "tone": str(tone_path)})
+        self.base = base
+        self.channel = channel
+        self.session = session
+        self.tone_path = tone_path
         self.process: subprocess.Popen | None = None
+        self.joined: str | None = None
         self.lock = threading.Lock()
 
-    def join(self) -> None:
+    def join(self, channel: str | None = None) -> None:
+        channel = channel or self.channel
         with self.lock:
             if self.process is not None:
-                return
-            say("the second participant joins from Chromium")
+                if self.joined == channel:
+                    return
+                raise Failed(f"the second participant is in the call of {self.joined}, not {channel}")
+            say(f"the second participant joins the call of {channel} from Chromium")
+            arguments = json.dumps({"base": self.base, "channel": channel, "session": self.session, "tone": str(self.tone_path)})
             self.process = subprocess.Popen(
                 ["pnpm", "--silent", "calls:second"], cwd=PROTOCOL,
-                env={**clean_env(), "ASPEN_CALL_SECOND": self.arguments},
+                env={**clean_env(), "ASPEN_CALL_SECOND": arguments},
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1,
             )
+            self.joined = channel
             line = self.process.stdout.readline().strip()
             if line != "connected":
                 raise Failed(f"the second participant did not connect: {line!r}")
@@ -173,16 +184,60 @@ class Second:
                 except (OSError, subprocess.TimeoutExpired):
                     self.process.kill()
             self.process = None
+            self.joined = None
 
 
-def helper(second: Second, bob: str) -> ThreadingHTTPServer:
-    """Answers the test on loopback: `POST /second-participant` brings Bob in and names him,
-    `GET /second-participant/report` is his page's report, `GET /second-participant/loudness` the
+class Dm:
+    """Bob's DM with the device's user, whose call rings the device: `ring` has Bob start it from
+    Chromium and answers with the ring the deployment holds for the user, as the `call` pointer
+    carries it, `standing` with that ring while it stands, and `end` has Bob leave, which ends the
+    call and with it the ring."""
+
+    def __init__(self, stack: Stack, second: Second, channel: str, user: dict, caller: dict, caller_name: str):
+        self.stack = stack
+        self.second = second
+        self.channel = channel
+        self.user = user
+        self.caller = caller
+        self.caller_name = caller_name
+
+    def standing(self) -> dict | None:
+        included = self.stack.api("GET", "/users/@me/dms?include=voice", token=self.user["sessionToken"]).get("included", {})
+        for ring in included.get("voiceRings", []):
+            if ring["channel"] == self.channel and ring["user"] == self.user["userId"]:
+                return {"channel": ring["channel"], "session": ring["session"], "caller": ring["caller"],
+                        "callerName": self.caller_name, "until": ring["until"]}
+        return None
+
+    def ring(self) -> dict:
+        self.end()
+        self.second.join(self.channel)
+        ring: dict | None = None
+
+        def rung() -> bool:
+            nonlocal ring
+            ring = self.standing()
+            return ring is not None
+        wait_for("the DM's call to ring the device's user", rung, 20)
+        return ring
+
+    def end(self) -> None:
+        self.second.leave()
+        wait_for("the DM's call to end", lambda: self.stack.api("GET", f"/channels/{self.channel}/voice", token=self.caller["sessionToken"]).get("session") is None, 30)
+
+
+def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
+    """Answers the test on loopback: `POST /second-participant` brings Bob in and names him (into
+    the call of the `channel` its JSON body names, else the voice channel's), `GET
+    /second-participant/report` is his page's report, `GET /second-participant/loudness` the
     loudest sample his audio slots carried over a second (`{"peak": …}`),
     `POST /second-participant/show-video` has his page show others' video,
     `POST /second-participant/camera/start` and `/camera/stop` turn his fake camera on and off,
     `GET /second-participant/camera-sample?user=<id>` is a frame of that user's camera as his page
-    plays it (`CameraSample`, or `null`), and `POST /second-participant/leave`."""
+    plays it (`CameraSample`, or `null`), and `POST /second-participant/leave`; `POST /ring` has Bob
+    call the device's user in their DM and answers the ring the deployment holds for them
+    (`Dm.ring`), `GET /ring` that ring while it stands (`{"ring": null}` once it does not), and
+    `POST /ring/end` has Bob leave the DM's call."""
 
     class Handler(BaseHTTPRequestHandler):
         def answer(self, status: int, body: str) -> None:
@@ -193,10 +248,14 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
             self.end_headers()
             self.wfile.write(data)
 
+        def body(self) -> dict:
+            length = int(self.headers.get("content-length") or 0)
+            return json.loads(self.rfile.read(length)) if length else {}
+
         def do_POST(self) -> None:  # noqa: N802 - the server's naming
             try:
                 if self.path == "/second-participant":
-                    second.join()
+                    second.join(self.body().get("channel"))
                     self.answer(200, json.dumps({"user": bob}))
                 elif self.path == "/second-participant/leave":
                     second.leave()
@@ -207,6 +266,11 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
                     self.answer(200 if second.ask("camera on") == "ok" else 500, "{}")
                 elif self.path == "/second-participant/camera/stop":
                     self.answer(200 if second.ask("camera off") == "ok" else 500, "{}")
+                elif self.path == "/ring":
+                    self.answer(200, json.dumps(dm.ring()))
+                elif self.path == "/ring/end":
+                    dm.end()
+                    self.answer(200, "{}")
                 else:
                     self.answer(404, "{}")
             except Failed as failure:
@@ -222,6 +286,8 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
                 elif parsed.path == "/second-participant/camera-sample":
                     user = parse_qs(parsed.query).get("user", [""])[0]
                     self.answer(200, second.ask(f"sample {user}"))
+                elif parsed.path == "/ring":
+                    self.answer(200, json.dumps({"ring": dm.standing()}))
                 else:
                     self.answer(404, "{}")
             except Failed as failure:
@@ -686,8 +752,11 @@ def main() -> None:
                                 ann["sessionToken"])["id"]
             wait_for("a voice server to be offered",
                      lambda: stack.status("POST", f"/channels/{channel}/voice/join", {}, ann["sessionToken"]) == 200, 90)
+            # Bob's DM with Ann, whose call rings the device as a DM's call rings a phone.
+            made = stack.api("POST", "/users/@me/dms", {"recipients": [ann["userId"]]}, bob["sessionToken"])
+            dm_channel = made.get("id") or made["data"]["id"]
             second = Second(stack.base, channel, bob, tone_path)
-            server = helper(second, bob["userId"])
+            server = helper(second, bob["userId"], Dm(stack, second, dm_channel, ann, bob, f"bob{run}"))
             variables = {
                 "ASPEN_CALL_API": stack.base,
                 "ASPEN_CALL_CHANNEL": channel,

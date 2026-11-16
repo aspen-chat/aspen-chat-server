@@ -39,6 +39,22 @@
 
         </activity>
 
+        <!-- A DM's call ringing the phone, shown over the lock screen with the screen turned on
+             (call/IncomingCallActivity.kt): the incoming call notification's full-screen intent
+             opens it, in a task of its own that the recents never list. The app's own activity
+             above shows nothing over the lock screen. A build without the call layer has no such
+             class, and posts no notification that would open it. -->
+        <activity
+            android:name=".call.IncomingCallActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@style/AppTheme.IncomingCall"
+            android:turnScreenOn="true" />
+
         <!-- Every FCM message comes here, and the push plugin's own service is removed: this one
              shows the relay's pushes (spec/push.md) and hands the rest to the plugin. -->
         <service

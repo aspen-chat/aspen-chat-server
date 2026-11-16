@@ -1,12 +1,18 @@
 package com.aspen_chat.client.call
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.app.NotificationManager
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import android.os.ParcelUuid
+import android.os.Process
 import android.service.notification.StatusBarNotification
+import android.view.View
+import android.widget.TextView
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import com.aspen_chat.client.push.WebPush
 import com.aspen_chat.client.voice.CallState
 import com.aspen_chat.client.voice.PeerConnection
@@ -116,6 +122,60 @@ object CallTestSupport {
 
     /** The lines of `dumpsys telecom` that name the call `id`, Telecom's own word on it. */
     fun telecomLines(id: ParcelUuid): List<String> = shell("dumpsys telecom").lines().filter { it.contains(id.toString()) }
+
+    /** Whether the activity the system holds resumed is the incoming call screen, as `dumpsys activity` says. */
+    fun incomingCallScreenShown(): Boolean =
+        shell("dumpsys activity activities").lines().any { it.contains("ResumedActivity") && it.contains(IncomingCallActivity::class.java.simpleName) }
+
+    /** The incoming call screen of this process while it is resumed, else `null`. */
+    fun incomingCallScreen(): IncomingCallActivity? {
+        var found: IncomingCallActivity? = null
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            found = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<IncomingCallActivity>().firstOrNull()
+        }
+        return found
+    }
+
+    /** Taps the middle of the view `id` of `activity` through the system's input, as a finger on the screen would. */
+    fun tap(activity: Activity, id: Int) {
+        val view = activity.findViewById<View>(id)
+        val at = IntArray(2)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { view.getLocationOnScreen(at) }
+        shell("input tap ${at[0] + view.width / 2} ${at[1] + view.height / 2}")
+    }
+
+    fun textOf(activity: Activity, id: Int): String {
+        var text = ""
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { text = activity.findViewById<TextView>(id).text.toString() }
+        return text
+    }
+
+    /**
+     * The ringtone players of this process as the audio system lists them (`dumpsys audio`), each
+     * line naming its state and whether the system mutes it (`mutedState`).
+     */
+    fun ringtonePlayers(): List<String> =
+        shell("dumpsys audio").lines().filter {
+            it.contains("u/pid:${Process.myUid()}/${Process.myPid()}") && it.contains("usage=USAGE_NOTIFICATION_RINGTONE")
+        }.map { it.trim() }
+
+    /** The ringtone player's state and mute, from its line: `started` and `none`, say. */
+    fun playerState(line: String): Pair<String, String> =
+        (Regex("state:(\\S+)").find(line)?.groupValues?.get(1) ?: "unknown") to (Regex("mutedState:(\\S+)").find(line)?.groupValues?.get(1) ?: "unknown")
+
+    /**
+     * Has the second participant call the device's user in their DM from the browser, and gives
+     * the ring the deployment then holds for the user, as the `call` pointer carries it.
+     */
+    fun ringFromTheDeployment(helper: String): JSONObject = JSONObject(http("POST", "$helper/ring"))
+
+    /** Whether the deployment still holds the DM's ring for the device's user. */
+    fun ringStanding(helper: String): Boolean = !JSONObject(http("GET", "$helper/ring")).isNull("ring")
+
+    /** Has the second participant leave the DM's call, which ends it, and the ring with it. */
+    fun endCallElsewhere(helper: String) {
+        http("POST", "$helper/ring/end")
+    }
 
     /** The body of `url`'s answer, which must be `200`. */
     fun http(method: String, url: String): String {

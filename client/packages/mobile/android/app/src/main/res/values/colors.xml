@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The incoming call screen's colours (layout/activity_incoming_call.xml): the launcher icon's
+     charcoal under white, and the web client's default palette's accent and danger as the buttons'
+     fills (its light-scheme values, which white reads on) and its dark-scheme accent as text. -->
+<resources>
+    <color name="aspen_call_screen">#23262B</color>
+    <color name="aspen_call_ink">#FFFFFF</color>
+    <color name="aspen_call_ink_muted">#C9CED6</color>
+    <color name="aspen_call_answer">#047857</color>
+    <color name="aspen_call_decline">#B91C1C</color>
+    <color name="aspen_call_accent_ink">#34D399</color>
+</resources>

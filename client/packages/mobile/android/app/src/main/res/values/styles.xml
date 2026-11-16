@@ -14,6 +14,15 @@
     </style>
 
 
+    <!-- The incoming call screen (call/IncomingCallActivity.kt): charcoal edge to edge, so the
+         system's bars draw their icons light over it. -->
+    <style name="AppTheme.IncomingCall" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/aspen_call_screen</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
         <!-- The system's own splash (Android 12 and later) shows the launcher icon on the same charcoal. -->

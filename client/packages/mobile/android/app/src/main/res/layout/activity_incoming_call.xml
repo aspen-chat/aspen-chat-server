@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The incoming call screen (call/IncomingCallActivity.kt): the caller over the deployment, and
+     under them Answer and Decline while the call rings, or the call's state with Hang up and Open
+     Aspen once it is answered on a locked phone. Charcoal, as the launcher icon and the splash. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/aspen_call_screen"
+    android:fitsSystemWindows="true"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:paddingHorizontal="32dp"
+    android:paddingVertical="48dp">
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="2" />
+
+    <TextView
+        android:id="@+id/incoming_call_caller"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="2"
+        android:textColor="@color/aspen_call_ink"
+        android:textSize="34sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/incoming_call_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="2"
+        android:textColor="@color/aspen_call_ink_muted"
+        android:textSize="18sp" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="3" />
+
+    <LinearLayout
+        android:id="@+id/incoming_call_ringing_actions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/incoming_call_decline"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:background="@drawable/bg_call_button_decline"
+                android:contentDescription="@string/aspen_ring_decline"
+                android:padding="20dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_call_decline" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:importantForAccessibility="no"
+                android:text="@string/aspen_ring_decline"
+                android:textColor="@color/aspen_call_ink"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <ImageButton
+                android:id="@+id/incoming_call_answer"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:background="@drawable/bg_call_button_answer"
+                android:contentDescription="@string/aspen_ring_answer"
+                android:padding="20dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_call_answer" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:importantForAccessibility="no"
+                android:text="@string/aspen_ring_answer"
+                android:textColor="@color/aspen_call_ink"
+                android:textSize="16sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/incoming_call_call_actions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/incoming_call_hang_up"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:background="@drawable/bg_call_button_decline"
+            android:contentDescription="@string/aspen_call_hang_up"
+            android:padding="20dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_call_decline" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:importantForAccessibility="no"
+            android:text="@string/aspen_call_hang_up"
+            android:textColor="@color/aspen_call_ink"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/incoming_call_open_app"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:minHeight="48dp"
+            android:text="@string/aspen_call_open_app"
+            android:textAllCaps="false"
+            android:textColor="@color/aspen_call_accent_ink"
+            android:textSize="16sp" />
+    </LinearLayout>
+</LinearLayout>

@@ -12,18 +12,26 @@ import com.aspen_chat.client.call.CallTestSupport.awaitTrue
 import com.aspen_chat.client.call.CallTestSupport.awaitValue
 import com.aspen_chat.client.call.CallTestSupport.browserInbound
 import com.aspen_chat.client.call.CallTestSupport.callNotification
+import com.aspen_chat.client.call.CallTestSupport.endCallElsewhere
 import com.aspen_chat.client.call.CallTestSupport.http
 import com.aspen_chat.client.call.CallTestSupport.inboundAudio
+import com.aspen_chat.client.call.CallTestSupport.incomingCallScreen
+import com.aspen_chat.client.call.CallTestSupport.incomingCallScreenShown
+import com.aspen_chat.client.call.CallTestSupport.playerState
+import com.aspen_chat.client.call.CallTestSupport.ringFromTheDeployment
+import com.aspen_chat.client.call.CallTestSupport.ringStanding
+import com.aspen_chat.client.call.CallTestSupport.ringtonePlayers
 import com.aspen_chat.client.call.CallTestSupport.shell
+import com.aspen_chat.client.call.CallTestSupport.tap
 import com.aspen_chat.client.call.CallTestSupport.telecomLines
+import com.aspen_chat.client.call.CallTestSupport.textOf
 import com.aspen_chat.client.call.CallTestSupport.until
 import com.aspen_chat.client.call.CallTestSupport.untilTelecom
+import com.aspen_chat.client.R
 import com.aspen_chat.client.push.PushHandler
 import com.aspen_chat.client.push.PushStore
 import com.aspen_chat.client.voice.CallStatus
 import com.aspen_chat.client.voice.PeerConnection
-import java.time.Instant
-import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -31,7 +39,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -51,13 +58,18 @@ import org.junit.runner.RunWith
  * its `CallStyle` notification; the call stays connected with the screen off for three minutes and
  * then under Doze forced on, media flowing both ways throughout; and leaving takes it all down.
  *
- * Ringing: a `call` push with the screen off and the phone locked has the incoming call's
- * notification up within five seconds, its full-screen intent set, with Telecom holding the call
- * as ringing, whether it woke the screen is recorded, and the lock screen, lit, is captured
- * showing the call (`/data/local/tmp/aspen-ring-*.png`, which the check pulls); the
- * notification's Answer joins the DM's call through the engine, Telecom's own end of a ringing
- * call (`KEYCODE_ENDCALL`, the phone's end key, which Telecom takes as the user declining) and
- * the notification's Decline each end the ring; and a ring under Doze is shown as fast.
+ * Ringing: the second participant calls the user's DM from the browser, and the ring the deployment
+ * holds is fed to the push handler as its push would be. With the screen off and the phone locked,
+ * the incoming call's notification is up within five seconds with its full-screen intent, Telecom
+ * holds the call as ringing, the screen turns on with the incoming call screen resumed over the lock
+ * screen, and the ringtone plays as the phone's settings allow (muted by the system in Do Not
+ * Disturb, heard otherwise, as `dumpsys audio` says of the player); the screen is captured lit
+ * (`/data/local/tmp/aspen-ring-*.png`, which the check pulls). The screen's Decline ends the ring
+ * at the deployment; its Answer joins the DM's call through the engine, the call going on in the
+ * screen while the phone stays locked until its Hang up; the caller hanging up, Telecom's own end of
+ * a ringing call (`KEYCODE_ENDCALL`, the phone's end key, which Telecom takes as the user
+ * declining), and the notification's Decline each end the ring, the screen going with it; and a ring
+ * under Doze is shown as fast, and wakes the phone.
  *
  * The test process is the app's, instrumented, which keeps it alive through the screen off and
  * Doze; what the system would do to a process it does not hold is a device check with the app
@@ -70,6 +82,10 @@ class CallDeviceTest {
     private lateinit var notifications: NotificationManager
     private var keptPushState: String? = null
     private var helper: String? = null
+    /** Whether the system itself sent the ring's full-screen intent, once a ring has shown. */
+    private var fullScreenSentBySystem: Boolean? = null
+    /** What the notification's record said of Do Not Disturb as the last ring was shown. */
+    private var recordState: String? = null
 
     /** The lines of `dumpsys` that say where the call plays and what wake locks are held. */
     private fun activeCommunicationDevice(): String =
@@ -98,6 +114,39 @@ class CallDeviceTest {
         shell("dumpsys notification --noredact").lines().firstOrNull {
             it.contains("pkg=${context.packageName}") && it.contains("id=${CallService.NOTIFICATION_ID}")
         }?.trim()
+
+    /**
+     * The call notification's record in `dumpsys notification`'s posted list (`Notification List`)
+     * with the lines of its state (`mIntercept`, `mSuppressedVisualEffects`, and the rest), or
+     * `null` while the system lists none there: a notification just posted sits in the enqueued
+     * list first, with no Do Not Disturb decision yet, and the dump names it in its history too.
+     */
+    private fun notificationRecordState(): List<String>? {
+        val lines = shell("dumpsys notification --noredact").lines()
+        val posted = lines.indexOfFirst { it.trim() == "Notification List:" }
+        if (posted < 0) return null
+        // The section ends at the next heading, a line indented like it and ending in a colon.
+        val indent = lines[posted].takeWhile { it == ' ' }
+        val section = lines.drop(posted + 1).takeWhile { !(it.startsWith(indent) && !it.startsWith("$indent ") && it.trimEnd().endsWith(":")) }
+        for ((index, line) in section.withIndex()) {
+            if (line.contains("NotificationRecord(") && line.contains("pkg=${context.packageName}") && line.contains("id=${CallService.NOTIFICATION_ID}")) {
+                return section.drop(index + 1).takeWhile { !it.contains("NotificationRecord(") }.map { it.trim() }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Whether Do Not Disturb intercepts the call's notification and keeps its full-screen intent
+     * from being sent (the phone's own Don't turn on screen), from its record's `mIntercept` and
+     * `mSuppressedVisualEffects`; `null` while the system lists no record.
+     */
+    private fun fullScreenIntentSuppressed(): Boolean? {
+        val record = notificationRecordState() ?: return null
+        val intercepted = record.any { it == "mIntercept=true" }
+        val effects = record.firstNotNullOfOrNull { Regex("mSuppressedVisualEffects= ?(\\d+)").find(it)?.groupValues?.get(1)?.toInt() } ?: 0
+        return intercepted && (effects and NotificationManager.Policy.SUPPRESSED_EFFECT_FULL_SCREEN_INTENT) != 0
+    }
 
     @Before
     fun setUp() {
@@ -241,70 +290,113 @@ class CallDeviceTest {
     @Test
     fun ringsOnTheLockedScreenAndIsAnsweredAndDeclined() = runBlocking {
         val api = argument("ASPEN_CALL_API")
-        val channel = argument("ASPEN_CALL_CHANNEL")
         val user = argument("ASPEN_CALL_USER_ID")
         val refreshToken = argument("ASPEN_CALL_REFRESH_TOKEN")
-        this@CallDeviceTest.helper = argument("ASPEN_CALL_HELPER")
+        val helper = argument("ASPEN_CALL_HELPER")
+        this@CallDeviceTest.helper = helper
         val pushes = CallTestSupport.Pushes()
         val subscription = "call-device-test-ring"
         store.save(CallTestSupport.pushState(api, subscription, user, refreshToken, pushes))
         val engine = CallEngines.forOrigin(context, api)
         assertEquals("nothing rings before", CallTelecom.Phase.IDLE, engine.telecom.phase)
-        val answerIntent = CallService.answerIntent(context)
         val declineIntent = CallService.declineIntent(context)
+        val filter = notifications.currentInterruptionFilter
+        val doNotDisturb = filter != NotificationManager.INTERRUPTION_FILTER_ALL
 
-        fun ring(): Pair<Notification, Long> {
+        /** Bob calls the DM from the browser, and the ring the deployment holds is fed to the push handler as its push would be. */
+        fun ring(): Ring {
+            val held = ringFromTheDeployment(helper)
             val pointer = JSONObject()
                 .put("v", 1)
                 .put("kind", "call")
-                .put("channel", channel)
-                .put("session", UUID.randomUUID().toString())
-                .put("caller", "0190f0a0-0000-7000-8000-000000000002")
-                .put("callerName", "Alice")
-                .put("until", Instant.now().plusSeconds(60).toString())
+                .put("channel", held.getString("channel"))
+                .put("session", held.getString("session"))
+                .put("caller", held.getString("caller"))
+                .put("callerName", held.getString("callerName"))
+                .put("until", held.getString("until"))
             val handled = System.nanoTime()
             PushHandler(context).handle(subscription, pushes.encrypt(pointer))
             val shown = runBlocking { awaitValue("the incoming call's notification", 5) { callNotification(context)?.notification } }
-            return shown to (System.nanoTime() - handled) / 1_000_000
+            return Ring(shown, (System.nanoTime() - handled) / 1_000_000, held.getString("channel"), held.getString("callerName"))
         }
 
-        // Dark and locked: the ring, with whether the full-screen intent woke the screen, which
-        // it does only for an activity that turns the screen on and shows over the keyguard; the
-        // screen is captured as it is (black while it stays dark).
+        /**
+         * The ring is shown: the screen on with the incoming call screen resumed, and the
+         * ringtone playing as the system allows. The system sends the full-screen intent itself
+         * unless the phone's Do Not Disturb intercepts the notification and keeps the screen dark
+         * (`dark` says whether it was); then the test sends it, as the system would on a phone
+         * whose settings let it, and the screen must still turn on over the keyguard.
+         */
+        suspend fun shown(ring: Ring, dark: Boolean): IncomingCallActivity {
+            assertNotNull("the notification can wake the lock screen", ring.notification.fullScreenIntent)
+            assertEquals(Notification.CATEGORY_CALL, ring.notification.category)
+            untilTelecom("Telecom holds the call as ringing", 5, engine) { it == CallTelecom.Phase.RINGING }
+            val suppressed = awaitValue("the notification's record", 5) { fullScreenIntentSuppressed() }
+            recordState = notificationRecordState()?.filter { it.startsWith("mIntercept=") || it.startsWith("mSuppressedVisualEffects=") }?.joinToString(" ")
+            if (suppressed) {
+                if (dark) {
+                    delay(3_000)
+                    assertTrue("Do Not Disturb keeps the screen dark, as the phone asks (${wakefulness()})", wakefulness() != "Awake")
+                }
+                ring.notification.fullScreenIntent.send()
+            }
+            fullScreenSentBySystem = fullScreenSentBySystem ?: !suppressed
+            awaitTrue("the screen turns on", 5) { wakefulness() == "Awake" }
+            awaitTrue("the incoming call screen is shown", 5) { incomingCallScreenShown() }
+            val screen = awaitValue("the incoming call screen is this process's", 5) { incomingCallScreen() }
+            assertEquals(ring.callerName, textOf(screen, R.id.incoming_call_caller))
+            val player = awaitValue("the ringtone plays", 5) {
+                ringtonePlayers().firstOrNull { playerState(it).first == "started" }
+            }
+            val (_, muted) = playerState(player)
+            if (doNotDisturb) {
+                assertTrue("in Do Not Disturb (filter $filter) the system mutes the ringtone: $player", muted != "none")
+            } else {
+                assertEquals("with interruptions allowed the ringtone is heard: $player", "none", muted)
+            }
+            return screen
+        }
+
+        suspend fun gone(what: String) {
+            untilTelecom("$what ends the ring", 10, engine) { it == CallTelecom.Phase.IDLE }
+            awaitTrue("and takes the notification down", 10) { callNotification(context) == null }
+            awaitTrue("and closes the incoming call screen", 10) { !incomingCallScreenShown() && incomingCallScreen() == null }
+            awaitTrue("and stops the ringtone", 5) { ringtonePlayers().none { playerState(it).first == "started" } }
+        }
+
+        // Dark and locked: the ring turns the screen on and shows the incoming call screen over
+        // the lock screen, ringing as the phone's settings allow, captured lit; its Decline ends
+        // the ring at the deployment.
         shell("input keyevent KEYCODE_SLEEP")
         awaitTrue("the screen goes off", 10) { wakefulness() != "Awake" }
-        val (dark, darkMillis) = ring()
-        assertTrue("posted within five seconds (took $darkMillis ms)", darkMillis < 5_000)
-        assertNotNull("the notification can wake the lock screen", dark.fullScreenIntent)
-        assertEquals(Notification.CATEGORY_CALL, dark.category)
-        untilTelecom("Telecom holds the call as ringing", 5, engine) { it == CallTelecom.Phase.RINGING }
-        delay(3_000)
-        val screenWhileDark = wakefulness()
-        shell("screencap -p /data/local/tmp/aspen-ring-dark.png")
+        val dark = ring()
+        assertTrue("posted within five seconds (took ${dark.millis} ms)", dark.millis < 5_000)
+        val darkScreen = shown(dark, dark = true)
         val fullScreenAllowed = notifications.canUseFullScreenIntent()
-        println("call-device-test: rang with the screen dark in $darkMillis ms; canUseFullScreenIntent $fullScreenAllowed; 3 s on, the screen is $screenWhileDark, ${keyguardShowing()} (captured /data/local/tmp/aspen-ring-dark.png)")
-        shell("input keyevent KEYCODE_ENDCALL")
-        untilTelecom("the end key declines the ring on the dark screen", 10, engine) { it == CallTelecom.Phase.IDLE }
-        awaitTrue("and takes the notification down", 10) { callNotification(context) == null }
+        delay(1_500)
+        shell("screencap -p /data/local/tmp/aspen-ring-dark.png")
+        val darkPlayer = ringtonePlayers().joinToString("; ")
+        val sentBy = if (fullScreenSentBySystem == true) "the system sent the full-screen intent" else "Do Not Disturb kept the system from sending the full-screen intent ($recordState), so the test sent it"
+        println("call-device-test: rang with the screen dark in ${dark.millis} ms; canUseFullScreenIntent $fullScreenAllowed; $sentBy; the screen is ${wakefulness()}, ${keyguardShowing()}, the incoming call screen shown; ringtone player: $darkPlayer (captured /data/local/tmp/aspen-ring-dark.png)")
+        tap(darkScreen, R.id.incoming_call_decline)
+        gone("the screen's Decline")
+        awaitTrue("the deployment no longer holds the ring", 10) { !ringStanding(helper) }
+        println("call-device-test: the screen's Decline ended the ring; the deployment holds no ring for the user")
 
-        // Lit and locked: the lock screen shows the call as it rings, captured for the record.
-        shell("input keyevent KEYCODE_WAKEUP")
-        awaitTrue("the screen comes on", 10) { wakefulness() == "Awake" }
-        val (shown, afterMillis) = ring()
-        assertTrue("posted within five seconds (took $afterMillis ms)", afterMillis < 5_000)
-        untilTelecom("Telecom holds the call as ringing on the lock screen", 5, engine) { it == CallTelecom.Phase.RINGING }
+        // Lit and locked: the screen shows over the lock screen; its Answer joins the DM's call,
+        // and the call goes on there, with the phone still locked, until Hang up.
+        val lit = ring()
+        assertTrue("posted within five seconds (took ${lit.millis} ms)", lit.millis < 5_000)
+        val litScreen = shown(lit, dark = false)
         val ringingId = awaitValue("Telecom's id for the call", 5) { engine.telecom.callId }
         val ringingLines = awaitValue("Telecom lists the call ringing", 5) {
             telecomLines(ringingId).filter { it.contains("RINGING") }.takeIf { it.isNotEmpty() }
         }
-        delay(1_500)
+        delay(1_000)
         shell("screencap -p /data/local/tmp/aspen-ring-lock-screen.png")
-        println("call-device-test: rang with the screen lit in $afterMillis ms, ${keyguardShowing()}; Telecom: ${ringingLines.first().trim()}; captured /data/local/tmp/aspen-ring-lock-screen.png")
-
-        // Answer, as a tap on the notification's Answer does: the engine joins the DM's call.
-        val answer = shown.actions.single { it.actionIntent == answerIntent }
-        answer.actionIntent.send()
-        until("the engine joins the ring's channel", 40, engine) { it.status == CallStatus.CONNECTED && it.channel == channel }
+        println("call-device-test: rang with the screen lit in ${lit.millis} ms, ${keyguardShowing()}; Telecom: ${ringingLines.first().trim()}; captured /data/local/tmp/aspen-ring-lock-screen.png")
+        tap(litScreen, R.id.incoming_call_answer)
+        until("the engine joins the DM's call", 40, engine) { it.status == CallStatus.CONNECTED && it.channel == lit.channel }
         untilTelecom("the system call is active after answering", 20, engine) { it == CallTelecom.Phase.ACTIVE }
         val answeredLines = telecomLines(ringingId).filter { it.contains("ACTIVE") }
         assertTrue("Telecom holds the answered call active: $answeredLines", answeredLines.isNotEmpty())
@@ -312,41 +404,61 @@ class CallDeviceTest {
             callNotification(context)?.notification?.takeIf { it.fullScreenIntent == null }
         }
         assertEquals(Notification.CATEGORY_CALL, ongoing.category)
-        println("call-device-test: answered from the notification; the engine joined $channel and Telecom holds it: ${answeredLines.first().trim()}")
-        engine.engine.leave()
-        untilTelecom("the answered call ends", 20, engine) { it == CallTelecom.Phase.IDLE }
-        awaitTrue("the notification is taken down", 10) { callNotification(context) == null }
+        awaitTrue("the ringtone stops on answering", 5) { ringtonePlayers().none { playerState(it).first == "started" } }
+        assertTrue("the screen stays as the call's while the phone is locked", incomingCallScreenShown())
+        awaitTrue("and shows the call under way", 10) { textOf(litScreen, R.id.incoming_call_status) == context.getString(R.string.aspen_call_in_progress) }
+        shell("screencap -p /data/local/tmp/aspen-ring-answered-locked.png")
+        println("call-device-test: answered from the screen; the engine joined ${lit.channel} and Telecom holds it: ${answeredLines.first().trim()}; the screen shows the call on the locked phone (captured /data/local/tmp/aspen-ring-answered-locked.png)")
+        tap(litScreen, R.id.incoming_call_hang_up)
+        until("the screen's Hang up leaves the call", 10, engine) { it.status == CallStatus.IDLE }
+        untilTelecom("and ends the system call", 20, engine) { it == CallTelecom.Phase.IDLE }
+        awaitTrue("and takes the notification down", 10) { callNotification(context) == null }
+        awaitTrue("and closes the screen", 10) { !incomingCallScreenShown() }
+        endCallElsewhere(helper)
+        println("call-device-test: the screen's Hang up left the call")
+
+        // The call ending elsewhere, its caller hanging up: the ring, the notification, and the
+        // screen go, as the engine's watch hears of it.
+        val abandoned = ring()
+        shown(abandoned, dark = false)
+        endCallElsewhere(helper)
+        gone("the caller hanging up")
+        println("call-device-test: the caller hanging up ended the ring and closed the screen")
 
         // Decline, from Telecom itself: the phone's end key ends a ringing call as the user's
         // decline, which reaches the layer as Telecom's disconnect while ringing.
-        val (declinable, _) = ring()
-        untilTelecom("Telecom holds the second call as ringing", 5, engine) { it == CallTelecom.Phase.RINGING }
-        val declinedId = awaitValue("Telecom's id for the second call", 5) { engine.telecom.callId }
+        val byKey = ring()
+        shown(byKey, dark = false)
+        val declinedId = awaitValue("Telecom's id for the call", 5) { engine.telecom.callId }
         shell("input keyevent KEYCODE_ENDCALL")
-        untilTelecom("the end key declines the ring", 10, engine) { it == CallTelecom.Phase.IDLE }
-        awaitTrue("and takes the notification down", 10) { callNotification(context) == null }
+        gone("the end key")
+        awaitTrue("the deployment no longer holds the ring", 10) { !ringStanding(helper) }
         assertFalse("the ring is declined, not answered", engine.engine.state().status == CallStatus.CONNECTED)
         val declinedLines = telecomLines(declinedId)
         assertTrue("Telecom no longer lists the call ringing: $declinedLines", declinedLines.none { it.contains("RINGING") })
-        println("call-device-test: the end key declined the second ring (${declinable.extras.getCharSequence(Notification.EXTRA_TITLE)}); Telecom's call ended and the notification went")
+        println("call-device-test: the end key declined the ring (${byKey.notification.extras.getCharSequence(Notification.EXTRA_TITLE)}); Telecom's call ended and the notification went")
 
         // And the notification's own Decline, as a tap on it.
-        val (declinedByTap, _) = ring()
-        untilTelecom("Telecom holds the third call as ringing", 5, engine) { it == CallTelecom.Phase.RINGING }
-        declinedByTap.actions.single { it.actionIntent == declineIntent }.actionIntent.send()
-        untilTelecom("the notification's Decline ends the ring", 10, engine) { it == CallTelecom.Phase.IDLE }
-        awaitTrue("and takes the notification down", 10) { callNotification(context) == null }
+        val byTap = ring()
+        shown(byTap, dark = false)
+        byTap.notification.actions.single { it.actionIntent == declineIntent }.actionIntent.send()
+        gone("the notification's Decline")
+        awaitTrue("the deployment no longer holds the ring", 10) { !ringStanding(helper) }
 
-        // Under Doze: the ring is shown as fast.
+        // Under Doze: the ring is shown as fast, and wakes the phone.
+        shell("input keyevent KEYCODE_SLEEP")
+        awaitTrue("the screen goes off", 10) { wakefulness() != "Awake" }
         shell("dumpsys deviceidle force-idle")
         awaitValue("Doze is forced", 10) { dozeState().takeIf { it == "IDLE" } }
-        val (dozed, dozedMillis) = ring()
-        assertTrue("posted within five seconds under Doze (took $dozedMillis ms)", dozedMillis < 5_000)
-        untilTelecom("Telecom holds the call as ringing under Doze", 5, engine) { it == CallTelecom.Phase.RINGING }
+        val dozed = ring()
+        assertTrue("posted within five seconds under Doze (took ${dozed.millis} ms)", dozed.millis < 5_000)
+        shown(dozed, dark = true)
         shell("dumpsys deviceidle unforce")
-        dozed.actions.single { it.actionIntent == declineIntent }.actionIntent.send()
-        untilTelecom("the ring under Doze is declined", 10, engine) { it == CallTelecom.Phase.IDLE }
-        assertNull(callNotification(context))
-        println("call-device-test: rang under Doze in $dozedMillis ms, declined from the notification; Doze ${dozeState()} again")
+        dozed.notification.actions.single { it.actionIntent == declineIntent }.actionIntent.send()
+        gone("the notification's Decline under Doze")
+        println("call-device-test: rang under Doze in ${dozed.millis} ms, waking the screen; declined from the notification; Doze ${dozeState()} again")
     }
+
+    /** One ring fed to the push handler: its notification, how long it took to post, and whose call it is. */
+    private class Ring(val notification: Notification, val millis: Long, val channel: String, val callerName: String)
 }

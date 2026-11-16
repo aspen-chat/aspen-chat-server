@@ -26,4 +26,12 @@
     <string name="aspen_incoming_call">Incoming call</string>
     <string name="aspen_ring_answer">Answer</string>
     <string name="aspen_ring_decline">Decline</string>
+    <!-- The incoming call screen (call/IncomingCallActivity.kt): the deployment, by its address,
+         under the caller's name; the call's state and controls once it is answered on a locked
+         phone. -->
+    <string name="aspen_incoming_call_at">Incoming call on %1$s</string>
+    <string name="aspen_call_connecting">Connecting…</string>
+    <string name="aspen_call_on_hold">On hold</string>
+    <string name="aspen_call_hang_up">Hang up</string>
+    <string name="aspen_call_open_app">Open Aspen</string>
 </resources>
