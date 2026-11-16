@@ -320,8 +320,8 @@ it ends anywhere, and answering must join the call. The app, having shown the ca
    - `until`, judged against the deployment's clock from `ready`'s `serverTime`: unanswered. Until
      `ready` the phone's own clock stands in, but a ring it says is over is still given one
      connection's worth of time (ten seconds) to hear the deployment's clock, since the push could
-     only have reached the phone while the ring stood by that clock. Nothing is pushed to say any
-     of this.
+     only have reached the phone while the ring stood by that clock. Nothing is pushed to say any of
+     this.
 2. On **answer**, joins the call as the account (`POST /api/v1/channels/{channel}/voice/join`, then
    the voice server), which ends the ring at the deployment. On **decline**, ends the ring
    (`DELETE /api/v1/channels/{channel}/voice/rings/@me`), so the person's other devices stop too.

@@ -53,9 +53,9 @@ WebSockets through interfaces each platform implements. The Android implementati
 generated Kotlin package (`com.aspen_chat.client.voice`): the engine's platform, the system's call
 (Telecom), the routes, the Capacitor plugin the web view commands it through and reads its state
 from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side), the call's video: the camera,
-the pictures drawn behind the web view, and the picture-in-picture mode (Video below), and the
-call's sounds, played as a voice communication (Sounds below). A DM call ringing the phone is a
-later piece.
+the pictures drawn behind the web view, and the picture-in-picture mode (Video below), the call's
+sounds, played as a voice communication (Sounds below), and a DM's call ringing the phone (Rings
+below).
 
 ### What the app packages, and where it comes from
 
@@ -99,6 +99,8 @@ engine) where Android allows:
 | `CallVideo.kt`          | Where video is drawn                                                         | A container behind the web view with one `SurfaceViewRenderer` per hole the page reports, each drawing its surface's track; see Video below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `CallCamera.kt`         | The camera                                                                   | `Camera2Enumerator`'s capturer into one `VideoSource` and track for the process, listed with each camera's facing, moved between cameras with the track kept; see Video below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `AspenCallPlugin.kt`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks for `RECORD_AUDIO` (Capacitor's permission callback), opens the microphone, names the call for Telecom, and joins; each snapshot's JSON (`CallSnapshots.listenJson`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered by name in `MainActivity`; the cameras, `startCamera`, `switchCamera`, `stopCamera`, `clearCameraError`, `setWatched`, and `setTiles`, with `shape` and `pip` events back; attaches `CallVideo` to the activity's container as it loads                                                                                                                                                                                                                                                                                           |
+| `CallEngines.kt`        | The engines of the process, one per deployment                               | `CallEngines.forOrigin(context, origin)` makes a `CallEngine` for a deployment on first use and keeps it, so an incoming call answered and the plugin the web view commands (which adopts this registry) drive the same engine                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `CallRings.kt`          | A DM's call ringing the phone                                                | The push handler's entry for a `call` pointer, by name, since a build without the layer has no such class; declining at the deployment. The call itself is `CallTelecom.ring`; see Rings below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Where it differs from iOS: the iOS layer keeps WebRTC's transceiver objects, whose lifetime is the
 connection's; Android's are read anew each time, as above. iOS's audio session is configured and
@@ -202,6 +204,62 @@ most two of one cue play at once (`MAX_PLAYING_PER_CUE`, the web client's `MAX_P
 a third not being heard; the engine spaces repeats of a cue itself. `play` takes the cue on the
 engine's thread and posts to the main thread; `CallEngine.close` releases the players.
 
+### Rings
+
+A DM's call ringing the phone (`spec/push.md`, Calls and Rings) comes as a high-priority FCM message
+marked `k: call`, which `AspenMessagingService` hands to `PushHandler` like any push; the decrypted
+pointer's kind `call` is what decides, and the handler calls `CallRings.incoming` by name
+(`Class.forName`), since a build without the call layer (`callLayer` in `app/build.gradle`) has no
+such class and shows nothing for a call. Everything after runs on the main thread, within the five
+seconds a service started by a push has:
+
+1. `CallEngines.forOrigin` gives the ring's deployment's engine, and `CallTelecom.ring` adds the
+   call to Telecom as incoming (`DIRECTION_INCOMING`, the caller's name, `aspen://call/<channel>`),
+   posts the incoming call's notification (`CallService.showIncoming`: a `CallStyle.forIncomingCall`
+   with the system's Answer and Decline, a full-screen intent that opens the app over the lock
+   screen, which `USE_FULL_SCREEN_INTENT` in the manifest allows, on the channel Incoming calls,
+   which rings with the system's default ringtone, since Aspen has no ringtone of its own; posted
+   directly, the full-screen intent being what Android 12 asks of a call notification that is no
+   foreground service's), and starts the engine's ring watch (`RingWatch`,
+   `voice_client/src/ring.rs`) over `CallHttp`, `CallSockets`, and `CallCredentials`. The call's
+   `Phase` is `RINGING`, and the engine's snapshots are left alone until it is answered. One call at
+   a time: a ring while Telecom holds a call is shown nowhere here.
+2. The watch's end reaches `CallTelecom.ringEnded` on the main thread, and Telecom's call is
+   disconnected with the cause: `ANSWERED_ELSEWHERE`, `REJECTED` for a decline on another device,
+   `CANCELED` for the call ending, `MISSED` at the ring's `until` on the deployment's clock, `ERROR`
+   when the account has no session. The notification goes with it. Nothing is pushed to end a ring.
+3. **Answer**, from the notification (`CallService`'s `ACTION_ANSWER`) or from Telecom itself
+   (`onAnswer`, a headset): the watch stops, the audio mode is set, `CallService` is started with
+   the ongoing call's notification in place of the incoming one (the same notification id),
+   Telecom's call is answered (`CallControlScope.answer`; Telecom's own answer has done it already),
+   and the engine joins the ring's channel, which ends the ring at the deployment. From there the
+   call is any call: `connected` marks it active without asking Telecom again, and its end
+   disconnects it.
+4. **Decline**, from the notification (`ACTION_DECLINE`) or from Telecom (`onDisconnect` while
+   ringing): the watch stops, `CallRings.decline` sends `DELETE /channels/{channel}/voice/rings/@me`
+   as the account on a thread of its own (renewing its session once on `401`), so the person's other
+   devices stop ringing too, and Telecom's call is disconnected `REJECTED`.
+
+What only a phone can show, since the emulator receives no FCM message and shows its lock screen to
+no one:
+
+- [ ] A real FCM message from the relay, marked as a call, wakes the app from not running, in Doze,
+      and the incoming call's notification is up within five seconds, ringing with the system's
+      ringtone, full screen over the lock screen.
+- [ ] Answer from the lock screen joins the DM's call with audio both ways; Decline ends the ring on
+      every other device; a ring answered or declined on another device takes the notification down
+      with Telecom's matching cause in the call log.
+- [ ] The ring ends by itself at thirty seconds when no one answers, and when the caller hangs up.
+- [ ] A Bluetooth headset's button answers and declines through Telecom.
+- [ ] Android 8 to 13 (the `ConnectionService` path): the incoming call appears in the phone's own
+      call screen.
+- [ ] Android 14 and later: `NotificationManager.canUseFullScreenIntent()` is true after installing
+      from the store, whose review decides it for an app that is not a phone or alarm app; if it is
+      not, the notification still rings and heads up, and the app must ask for the permission in its
+      settings.
+- [ ] A phone whose clock runs a minute ahead of the deployment's still rings for the whole ring
+      (the watch gives the deployment's clock the say once `ready` arrives).
+
 ### The proof
 
 `androidTest`'s `CallEngineTest` runs the engine with this layer against a real deployment, in the
@@ -231,37 +289,44 @@ service, takes the notification down, empties the routes, and gives the audio mo
 browser must hear is what the device's microphone carried, which the device's own `media-source`
 statistics tell: sound, when a tone is played to it, or silence, as on an emulator whose host audio
 never reaches it. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
-played as the engine connects and again as the browser joins, the leaving as the call is left, the
-cut socket is said lost and, with the resume, back, each a `MediaPlayer` playing as the cue is
-given, and for the first the system's own word on it, `dumpsys audio`'s players read on the spot:
-one of this process with `USAGE_VOICE_COMMUNICATION`, started, which the log line quotes.
-`AspenCallPluginTest` drives the bridge itself: it launches `MainActivity`, which loads the web
-shell with the plugin registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page
-through the bridge's web view, as the app's `NativeCall` does. From the page it reads a fresh
-snapshot (the engine's JSON, idle, revision 0, of its origin) and the empty routes of no call, has
-malformed commands refused by name, joins the channel through the plugin and watches the `joining`
-and `connected` snapshots reach the page, moves the call to the loudspeaker (and the earpiece again,
-where the device has one) and watches the `routes` events say so as Telecom's current endpoint
-changes, clears the choice, mutes and unmutes, and then drives the video: `cameras()` lists the
-emulator's cameras with their facings, `startCamera` opens the front one and the snapshot shows the
-camera among `sources`, a hole reported with `setTiles` for its track has its shape come back as a
-`shape` event and its surface view laid out at the hole's rectangle in device pixels and drawing
-(`onFirstFrameRendered`), `switchCamera` moves to the back one, a second participant from the
-browser turns its camera on and `setWatched` has the snapshot show its track, whose hole hears its
-shape and draws too, the activity enters the picture-in-picture mode on it (`enterPictureInPicture`,
-standing for the user's leaving) and the page hears `pip` while `isInPictureInPictureMode` holds,
-starting the activity again leaves the mode and the page hears that too, the browser decodes the
-camera, malformed `setWatched` and `setTiles` are refused by name, and `stopCamera` takes the source
-out of the snapshot and the capture off; then it leaves: the snapshots arrive in revision order with
-none twice, a fresh `state()` is the latest published, the renewed session token is kept, and the
-routes empty again. `scripts/check_mobile_call.py --platform android` at the repository's root runs
-both end to end, with the same deployment and browser the iOS check uses: a deployment of its own
-serving the call page (`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the
-API server, the voice server, and the script's helper at its own loopback (plain HTTP there, as a
-development build allows; media goes to the voice server's announced address over the network),
-Chromium as the second participant with a tone WAV as its microphone and its fake camera
-(`calls/second.ts`, which the script's helper drives: showing video, the camera on and off, and a
-frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these two tests
+played as the engine connects and again as the browser joins, the leaving as the call is left, no
+loss is said of the resume within the grace, each a `MediaPlayer` playing as the cue is given, and
+for the first the system's own word on it, `dumpsys audio`'s players read on the spot: one of this
+process with `USAGE_VOICE_COMMUNICATION`, started, which the log line quotes. `AspenCallPluginTest`
+drives the bridge itself: it launches `MainActivity`, which loads the web shell with the plugin
+registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page through the bridge's web
+view, as the app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON,
+idle, revision 0, of its origin) and the empty routes of no call, has malformed commands refused by
+name, joins the channel through the plugin and watches the `joining` and `connected` snapshots reach
+the page, moves the call to the loudspeaker (and the earpiece again, where the device has one) and
+watches the `routes` events say so as Telecom's current endpoint changes, clears the choice, mutes
+and unmutes, and then drives the video: `cameras()` lists the emulator's cameras with their facings,
+`startCamera` opens the front one and the snapshot shows the camera among `sources`, a hole reported
+with `setTiles` for its track has its shape come back as a `shape` event and its surface view laid
+out at the hole's rectangle in device pixels and drawing (`onFirstFrameRendered`), `switchCamera`
+moves to the back one, a second participant from the browser turns its camera on and `setWatched`
+has the snapshot show its track, whose hole hears its shape and draws too, the activity enters the
+picture-in-picture mode on it (`enterPictureInPicture`, standing for the user's leaving) and the
+page hears `pip` while `isInPictureInPictureMode` holds, starting the activity again leaves the mode
+and the page hears that too, the browser decodes the camera, malformed `setWatched` and `setTiles`
+are refused by name, and `stopCamera` takes the source out of the snapshot and the capture off; then
+it leaves: the snapshots arrive in revision order with none twice, a fresh `state()` is the latest
+published, the renewed session token is kept, and the routes empty again. `androidTest`'s
+`CallRingsTest` feeds `PushHandler` a `call` pointer encrypted to a key it writes into the push
+state, as the messaging service would, and checks that within five seconds the incoming call's
+notification is posted with its full-screen intent and Telecom holds the call as ringing; then,
+standing in for the deployment's event stream (a WebSocket server of the standard library's
+sockets), it takes the ring watch's `identify`, answers `ready`, and sends the ring's `voiceRing`
+`delete`, after which the call is gone and the notification with it; a push that does not decrypt
+rings nothing. It needs no deployment and runs with the rest of `connectedDebugAndroidTest`.
+`scripts/check_mobile_call.py --platform android` at the repository's root runs `CallEngineTest` and
+`AspenCallPluginTest` end to end, with the same deployment and browser the iOS check uses: a
+deployment of its own serving the call page (`client/packages/protocol/calls/`), `adb reverse` so
+the emulator reaches the API server, the voice server, and the script's helper at its own loopback
+(plain HTTP there, as a development build allows; media goes to the voice server's announced address
+over the network), Chromium as the second participant with a tone WAV as its microphone and its fake
+camera (`calls/second.ts`, which the script's helper drives: showing video, the camera on and off,
+and a frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these two tests
 alone, judging their JUnit reports (two tests run, none failed or erred, and none skipped but the
 trailing test, which skips itself outside `--record-trailing`) and that each printed its own line,
 with `ANDROID_SERIAL` set to the emulator's serial so a phone plugged in beside it is never touched.

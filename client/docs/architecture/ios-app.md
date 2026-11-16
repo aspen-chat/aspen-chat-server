@@ -119,11 +119,11 @@ The mobile apps' calls run natively, in the call engine (`voice_client/` at the 
 Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's WebRTC, HTTP, and
 WebSockets through interfaces each platform implements. The iOS implementation is
 `ios/App/App/Call`, compiled into the App target with the engine's generated Swift module: the
-engine's platform, the system's call integration (CallKit), the audio routes, and the Capacitor
-plugin the web view commands it through and reads its state from (`AspenCallPlugin`;
+engine's platform, the system's call integration (CallKit), the audio routes, the Capacitor plugin
+the web view commands it through and reads its state from (`AspenCallPlugin`;
 `voice/native-calls.md` is the page's side), the call's video: the camera, the pictures drawn
-beneath the web view, and the picture in picture (Video below), and the call's sounds, played on the
-call's session (Sounds below). Rings (PushKit) are a later piece.
+beneath the web view, and the picture in picture (Video below), the call's sounds, played on the
+call's session (Sounds below), and a DM's call ringing the phone (PushKit, see Rings below).
 
 ### What the App target links, and where it comes from
 
@@ -163,6 +163,8 @@ Each file under `Call/` implements one of the engine's interfaces over the platf
 | `CallVideo.swift`          | Where video is drawn                                                         | A view beneath the web view with one `AVSampleBufferDisplayLayer` renderer per hole the page reports, each drawing its surface's track, and the system's picture in picture on one of them; see Video below                                                                                                                                                                                                                                                                                                                    |
 | `CallCamera.swift`         | The camera                                                                   | `RTCCameraVideoCapturer` into one `RTCVideoSource` and track for the process, listed with each camera's position, moved between cameras with the track kept; see Video below                                                                                                                                                                                                                                                                                                                                                   |
 | `AspenCallPlugin.swift`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks the system for the microphone, opens it, and joins through `CallSystem`; each snapshot's JSON (`CallSnapshots.listenJSON`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; the cameras, `startCamera`, `switchCamera`, `stopCamera`, `clearCameraError`, `setWatched`, and `setTiles`, with `shape` and `pip` events back; registered in `MainViewController`             |
+| `CallEngines.swift`        | The engines of the process, one per deployment                               | `CallEngines.shared.forOrigin(origin)` makes a `CallEngine` for a deployment on first use and keeps it, so an incoming call answered and the plugin the web view commands (which adopts this registry) drive the same engine                                                                                                                                                                                                                                                                                                   |
+| `CallRings.swift`          | A DM's call ringing the phone                                                | PushKit's registry and VoIP token, registered with the relay beside the alert token, the VoIP push handler that reports the call to CallKit before returning, and declining at the deployment; see Rings below                                                                                                                                                                                                                                                                                                                 |
 
 `CallEngine.join`, `leave`, and `setMuted` go through `CallSystem`, so that the system's own
 controls and the engine agree; the engine's other commands are called directly. `CallSnapshots`
@@ -256,6 +258,73 @@ audio server starts no output for a test process (`HALC_ProxyIOContext::_StartIO
 HAL's 30-second waits, each `AVAudioPlayer.play` blocking the main queue for them), so what the
 simulator proves is which cue plays which bundled file, only on an active session, and at most two
 at once; the sound itself is the device's to show.
+
+### Rings
+
+A DM's call ringing the phone (`spec/push.md`, Calls and Rings) arrives as a VoIP push through
+PushKit, which wakes the app itself, not the notification service extension, and requires the call
+reported to CallKit before the handler returns; an app that reports nothing is terminated. In order:
+
+1. `CallRings.shared.start()` at launch asks PushKit for VoIP pushes. The VoIP token PushKit gives
+   is kept in `UserDefaults` and registered with the relay this build names (`AspenPushRelay`) as
+   `voipToken` of the device the web view registered (`PushState.device`, which `PushStateStore` now
+   types), by `PATCH /v1/devices/{device}`, once per token and device: when the token arrives, and
+   again whenever the web view keeps a new `PushState` (`AspenPushPlugin.saveState`), whose device
+   may be new. The web view's own registration path is untouched.
+2. A VoIP push is handed to `CallRings.handle`, on the main queue, by the delegate method of the iOS
+   at hand: the one of iOS 26.4 and later carries `PKVoIPPushMetadata.mustReport`, false when the
+   app is in the foreground, already in a call, or the push came too late, and the handler then
+   completes the push and shows nothing (the web view's own event stream shows the ring where it
+   matters); before 26.4 every VoIP push must be reported. `CallRings.read` decrypts the push's
+   `aspen` (`s`, `c`) with the keys of the account `PushStateStore` keeps for the subscription, as
+   the extension decrypts an alert push, and reads the `call` pointer: the channel, the session, the
+   caller's name, and `until`.
+3. `CallSystem.reportIncoming` reports the call synchronously (`reportNewIncomingCall`, the caller's
+   name as `localizedCallerName`, the channel as the handle), and starts the engine's ring watch
+   (`RingWatch`, `voice_client/src/ring.rs`) over `CallHttp`, `CallSockets`, and `CallCredentials`
+   for the ring's deployment. One incoming call rings at a time; a second, or one the system refuses
+   (Do Not Disturb, another app's call), is reported and ended at once. A push that cannot be read
+   (`CallRings.Unreadable`) is reported as a call with no name and ended at once with `failed`
+   (`reportUnreadable`), as Apple requires.
+4. The watch's end reaches `CallSystem.ringEnded` on the main queue and the call is reported ended
+   with the reason: `answeredElsewhere`, `declinedElsewhere` for a decline on another device,
+   `remoteEnded` for the call ending, `unanswered` at the ring's `until` on the deployment's clock,
+   `failed` when the account has no session. Nothing is pushed to end a ring.
+5. **Answer** (`CXAnswerCallAction`): the watch stops, `CallEngines.shared.forOrigin(origin)` gives
+   the deployment's engine, the audio session is configured as for a start, the engine joins the
+   ring's channel (which ends the ring at the deployment), and the action is fulfilled; CallKit then
+   activates the session and `didActivate` starts the audio as for any call. The call is held as
+   `Current` with `outgoing` false, so it is never reported connecting or connected (its answer is
+   that); everything else, mute, hold, end, and the engine's end, is as for an outgoing call. A call
+   of another engine the system held is left first.
+6. **Decline** (`CXEndCallAction` on the ringing call): the watch stops and
+   `CallRings.shared.decline` sends `DELETE /channels/{channel}/voice/rings/@me` as the account
+   (renewing its session once on `401`), so the person's other devices stop ringing too.
+
+`Status.incoming` is the ringing call's id, for the interface, and `Status.ringEnd` why the last
+incoming call stopped ringing without this phone answering or declining it (`nil` while one rings,
+and when this phone ended it). The ringtone is CallKit's default: Aspen has no ringtone file of its
+own yet. No entitlement beyond push (`aps-environment`) is needed for VoIP pushes; the `voip`
+background mode in `Info.plist` is.
+
+What only a device can show, since the simulator receives no pushes and PushKit gives it no token:
+
+- [ ] PushKit gives a VoIP token on launch and the relay's `PATCH` is sent for it, once, and again
+      after signing in to another deployment registers a new device.
+- [ ] A real VoIP push from the relay wakes the app from not running, locked, and the incoming call
+      shows on the lock screen with the caller's name, ringing with the system's ringtone, within a
+      second or two of the ring at the deployment.
+- [ ] Answer from the lock screen joins the DM's call with audio both ways through `didActivate`;
+      Decline ends the ring on every other device; a ring answered or declined on another device
+      ends the lock screen's ring with the matching reason in Recents' absence (calls are kept out
+      of Recents).
+- [ ] The ring ends by itself at thirty seconds when no one answers, and when the caller hangs up.
+- [ ] On iOS 26.4 or later, a push arriving while the app is in the foreground or in a call is
+      delivered with `mustReport` false and shows nothing native.
+- [ ] A push the app cannot read (signed out meanwhile) is reported and ended at once, and the app
+      is not terminated.
+- [ ] A phone whose clock runs a minute ahead of the deployment's still rings for the whole ring
+      (the watch gives the deployment's clock the say once `ready` arrives).
 
 ### Routes
 
@@ -464,6 +533,16 @@ shape too, malformed `setWatched` and `setTiles` are refused by name, and `stopC
 source out of the snapshot and the capture off. Before any engine is made the test replaces
 `CallEngine.peerConnections` with a factory on `ToneAudioDevice` and the camera's capturer with the
 synthetic one, as the simulator's own audio unit and lack of a camera require.
+`AppTests/CallRingsTests` feeds `CallRings.handle` a `call` pointer encrypted to a key it writes
+into the kept push state, as PushKit would hand the payload over, naming a stand-in deployment of
+the test's own (a loopback listener that keeps each request and serves nothing), and watches
+`CXCallObserver` show the incoming call before the handler returns and the stand-in be asked for the
+event stream by the ring watch; then, the simulator's CallKit ending an incoming call on its own
+within a second or two (a decline, as far as the app can tell), it checks that the decline reaches
+the stand-in as the account (`DELETE .../voice/rings/@me`, the kept session token), or, on a CallKit
+that lets the call ring, that the watch ends it at the ring's clock and kept asking for the stream
+meanwhile (`Status.ringEnd` says which); a push that does not decrypt is reported and ended at once;
+one the system says need not be reported shows nothing.
 `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to end from
 Linux, with the same deployment and browser the Android check uses (`android-builds.md`, The call
 engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`), SSH
