@@ -152,6 +152,9 @@ struct Participant {
     /// it stands their microphone stays paused whatever they ask.
     server_muted: bool,
     deafened: bool,
+    /// On hold, as their client asked: everything they send is paused, and nothing is sent to
+    /// them. Their own mute and deafen stand beside it, for when it ends.
+    held: bool,
     speaking: bool,
     /// What they may send and offer, from their join token and then the API server.
     grants: Grants,
@@ -222,6 +225,12 @@ impl Participant {
         self.muted || self.server_muted
     }
 
+    /// Whether `source` of theirs is paused at the media thread: anything while they are on hold,
+    /// and their microphone while they are silenced.
+    fn paused(&self, source: MediaSource) -> bool {
+        self.held || (source == MediaSource::Microphone && self.silenced())
+    }
+
     fn sharing_screen(&self) -> bool {
         self.sending
             .get(&MediaSource::Screen)
@@ -236,7 +245,7 @@ impl Participant {
             .filter(|(_, sending)| sending.live)
             .map(|(source, _)| SourceInfo {
                 source: *source,
-                paused: *source == MediaSource::Microphone && self.silenced(),
+                paused: self.paused(*source),
             })
             .collect();
         sources.sort_by_key(|info| info.source as u8);
@@ -248,6 +257,7 @@ impl Participant {
             user: self.user,
             muted: self.silenced(),
             deafened: self.deafened,
+            held: self.held,
             speaking: self.speaking,
             sources: self.sources(),
         }
@@ -643,6 +653,7 @@ impl Rooms {
             muted: false,
             server_muted,
             deafened: false,
+            held: false,
             speaking: false,
             grants,
             sign_in,
@@ -981,7 +992,8 @@ impl Rooms {
 
     /// Asks for a section to send `source` on, which the media thread offers. A participant
     /// sends at most one of each source, so one client cannot multiply what everyone else in
-    /// the call receives; a microphone starts paused while they are muted.
+    /// the call receives; a source starts paused while it would be paused if sent already
+    /// (`Participant::paused`).
     pub fn send(&self, seat: Seat, source: MediaSource, external: bool) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
         let mut participants = room.participants.lock().expect("room lock");
@@ -1002,7 +1014,7 @@ impl Rooms {
             },
         );
         let media = p.media;
-        let paused = source == MediaSource::Microphone && p.silenced();
+        let paused = p.paused(source);
         self.media(
             &room,
             Command::Send {
@@ -1160,18 +1172,19 @@ impl Rooms {
             .unwrap_or_default()
     }
 
-    /// Whether a `setState` of `muted` and `deafened` from the participant `seat` made only
-    /// silences them further: it mutes or deafens them and lifts neither. Such a frame is never
-    /// rate limited, so nothing, a flood of others' frames included, can keep someone's
+    /// Whether a `setState` of `muted`, `deafened`, and `held` from the participant `seat` made
+    /// only silences them further: it mutes, deafens, or holds them and lifts none. Such a frame
+    /// is never rate limited, so nothing, a flood of others' frames included, can keep someone's
     /// microphone open after they asked to close it. Each one changes something and undoing it
     /// is limited, so they cannot come faster than the limits allow either.
-    pub fn quietens(&self, seat: Seat, muted: bool, deafened: bool) -> bool {
+    pub fn quietens(&self, seat: Seat, muted: bool, deafened: bool, held: bool) -> bool {
         let Ok(room) = self.room(seat.channel) else {
             return false;
         };
         let participants = room.participants.lock().expect("room lock");
         seated(&participants, seat).is_ok_and(|p| {
-            muted >= p.muted && deafened >= p.deafened && (muted, deafened) != (p.muted, p.deafened)
+            let (asked, had) = ((muted, deafened, held), (p.muted, p.deafened, p.held));
+            muted >= p.muted && deafened >= p.deafened && held >= p.held && asked != had
         })
     }
 
@@ -1217,24 +1230,26 @@ impl Rooms {
         }
     }
 
-    /// Applies the mute and deafen the participant asked for. A moderator's mute stands over
-    /// their own: while it does, unmuting themself leaves their microphone paused.
+    /// Applies the mute, deafen, and hold the participant asked for. A moderator's mute stands
+    /// over their own: while it does, unmuting themself leaves their microphone paused.
     pub async fn set_state(
         &self,
         seat: Seat,
         muted: bool,
         deafened: bool,
+        held: bool,
     ) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
         self.apply_state(&room, seat.user, Some(seat.connection), |participant| {
             participant.muted = muted;
             participant.deafened = deafened;
+            participant.held = held;
         })
     }
 
-    /// Makes `change` to `user`'s mute or deafen and carries the result out: their microphone
-    /// paused at the media thread while they are silenced (`Participant::silenced`), their
-    /// audio stopped while deafened, and everyone, the API server included, told. With a
+    /// Makes `change` to `user`'s mute, deafen, or hold and carries the result out: each source
+    /// paused at the media thread as `Participant::paused` says, their audio stopped while
+    /// deafened and everything while held, and everyone, the API server included, told. With a
     /// `connection`, only the participant that connection made is changed.
     fn apply_state(
         &self,
@@ -1243,33 +1258,47 @@ impl Rooms {
         connection: Option<Connection>,
         change: impl FnOnce(&mut Participant),
     ) -> Result<(), RoomError> {
-        let (media, muted, deafened, quieted, sources, report) = {
+        let (media, muted, deafened, held, paused, quieted, sources, report) = {
             let mut participants = room.participants.lock().expect("room lock");
             let participant = participants
                 .get_mut(&user)
                 .filter(|p| connection.is_none_or(|c| p.connection == c))
                 .ok_or(RoomError::NotInCall)?;
             change(participant);
-            let (muted, deafened) = (participant.silenced(), participant.deafened);
-            // Someone silenced mid-word stops speaking now, not at the next interval.
-            let quieted = muted && std::mem::take(&mut participant.speaking);
+            let (muted, deafened, held) = (
+                participant.silenced(),
+                participant.deafened,
+                participant.held,
+            );
+            // Someone silenced mid-word stops speaking now, not at the next interval. A source
+            // not yet asked for starts paused when it is (`send`).
+            let quieted = (muted || held) && std::mem::take(&mut participant.speaking);
+            let paused: Vec<(MediaSource, bool)> = participant
+                .sending
+                .keys()
+                .map(|source| (*source, participant.paused(*source)))
+                .collect();
             (
                 participant.media,
                 muted,
                 deafened,
+                held,
+                paused,
                 quieted,
                 participant.sources(),
                 Self::state_report(room, participant),
             )
         };
-        self.media(
-            room,
-            Command::SetSourcePaused {
-                participant: media,
-                source: MediaSource::Microphone,
-                paused: muted,
-            },
-        );
+        for (source, paused) in paused {
+            self.media(
+                room,
+                Command::SetSourcePaused {
+                    participant: media,
+                    source,
+                    paused,
+                },
+            );
+        }
         self.media(
             room,
             Command::SetDeafened {
@@ -1277,11 +1306,19 @@ impl Rooms {
                 deafened,
             },
         );
+        self.media(
+            room,
+            Command::SetHeld {
+                participant: media,
+                held,
+            },
+        );
         room.broadcast(
             &ServerMessage::ParticipantState {
                 user,
                 muted,
                 deafened,
+                held,
             },
             None,
         );
@@ -1771,7 +1808,7 @@ mod tests {
         alice.sent();
         made(&mut reports);
 
-        rooms.set_state(bob.seat, true, false).await.unwrap();
+        rooms.set_state(bob.seat, true, false, false).await.unwrap();
         let speaking: Vec<(Uuid, bool)> = alice
             .sent()
             .into_iter()
@@ -1801,6 +1838,51 @@ mod tests {
             .await;
         assert!(room.participants.lock().unwrap()[&a].speaking);
         assert!(!room.participants.lock().unwrap()[&b].speaking);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hold_pauses_everything_beside_the_participants_own_mute() {
+        let (rooms, _reports) = rooms().await;
+        let channel = Uuid::now_v7();
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let mut alice = Client::join(&rooms, channel, a).await;
+        let bob = Client::join(&rooms, channel, b).await;
+        rooms.send(bob.seat, MediaSource::Camera, false).unwrap();
+        let room = rooms.room(channel).unwrap();
+        let paused = |source| room.participants.lock().unwrap()[&b].paused(source);
+        let states = |alice: &mut Client| -> Vec<(bool, bool, bool)> {
+            alice
+                .sent()
+                .into_iter()
+                .filter_map(|frame| match frame {
+                    ServerMessage::ParticipantState {
+                        user,
+                        muted,
+                        deafened,
+                        held,
+                    } if user == b => Some((muted, deafened, held)),
+                    _ => None,
+                })
+                .collect()
+        };
+        alice.sent();
+
+        // Holding, muted besides, is never limited, and pauses the camera as well as the
+        // microphone.
+        assert!(rooms.quietens(bob.seat, true, false, true));
+        rooms.set_state(bob.seat, true, false, true).await.unwrap();
+        assert_eq!(states(&mut alice), [(true, false, true)]);
+        assert!(paused(MediaSource::Camera) && paused(MediaSource::Microphone));
+        // A source asked for while held starts paused.
+        rooms.send(bob.seat, MediaSource::Screen, false).unwrap();
+        assert!(paused(MediaSource::Screen));
+
+        // The hold ends and their own mute stays; ending it is a frame like any lifting one.
+        assert!(!rooms.quietens(bob.seat, true, false, false));
+        rooms.set_state(bob.seat, true, false, false).await.unwrap();
+        assert_eq!(states(&mut alice), [(true, false, false)]);
+        assert!(!paused(MediaSource::Camera) && !paused(MediaSource::Screen));
+        assert!(paused(MediaSource::Microphone));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1837,7 +1919,7 @@ mod tests {
         }));
         assert!(desktop.outbox.hung_up().now_or_never().is_some());
         assert!(matches!(
-            rooms.set_state(desktop.seat, false, false).await,
+            rooms.set_state(desktop.seat, false, false, false).await,
             Err(RoomError::NotInCall)
         ));
         rooms.socket_closed(desktop.seat, true).await;
@@ -1892,11 +1974,11 @@ mod tests {
         let (outbox, mut frames) = Outbox::new(OUTBOX_BYTES);
         let seat = rooms.resume(&resume, outbox).expect("resumes");
         assert!(matches!(
-            rooms.set_state(alice.seat, true, false).await,
+            rooms.set_state(alice.seat, true, false, false).await,
             Err(RoomError::NotInCall)
         ));
         rooms
-            .set_state(seat, true, false)
+            .set_state(seat, true, false, false)
             .await
             .expect("the new socket acts for her");
         let first: ServerMessage = serde_json::from_slice(&frames.recv().await.unwrap()).unwrap();

@@ -377,9 +377,9 @@ async fn handle(socket: HttpWebSocket, state: AppState, ip: IpAddr, pending: Pen
         }
         let kind = frame.kind();
         crate::metrics::frame(kind);
-        // Muting and deafening always go through; only lifting them is limited.
-        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened }
-            if state.rooms.quietens(seat, muted, deafened));
+        // Muting, deafening, and holding always go through; only lifting them is limited.
+        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened, held }
+            if state.rooms.quietens(seat, muted, deafened, held));
         let limited = if quietens {
             Ok(())
         } else {
@@ -418,9 +418,11 @@ async fn handle(socket: HttpWebSocket, state: AppState, ip: IpAddr, pending: Pen
                 state.rooms.set_receiving(seat, mid, receiving)
             }
             ClientMessage::RestartIce { connection } => state.rooms.restart_ice(seat, connection),
-            ClientMessage::SetState { muted, deafened } => {
-                state.rooms.set_state(seat, muted, deafened).await
-            }
+            ClientMessage::SetState {
+                muted,
+                deafened,
+                held,
+            } => state.rooms.set_state(seat, muted, deafened, held).await,
             ClientMessage::OfferFile { .. } if !state.rooms.grants(seat).transfer_files => {
                 Err(RoomError::TransferNotPermitted)
             }

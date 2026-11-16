@@ -145,6 +145,9 @@ pub struct ParticipantInfo {
     pub user: Uuid,
     pub muted: bool,
     pub deafened: bool,
+    /// On hold (`setState`'s `held`): nothing of theirs is sent, nor anything to them.
+    #[serde(default)]
+    pub held: bool,
     pub speaking: bool,
     pub sources: Vec<SourceInfo>,
 }
@@ -322,10 +325,14 @@ pub enum ClientMessage {
     /// Muting pauses the microphone at the server; deafening stops the audio slots and the
     /// shares' sound sent to the client, not video. A moderator's mute stands over this one:
     /// unmuting leaves the microphone paused while it does, and the `participantState` that
-    /// answers says so.
+    /// answers says so. Holding, as a phone does while a phone call has its audio, pauses
+    /// everything the participant sends and stops everything sent to them, video included,
+    /// beside their mute and deafen, which stay as they are for when the hold ends.
     SetState {
         muted: bool,
         deafened: bool,
+        #[serde(default)]
+        held: bool,
     },
     /// Offers a file to everyone else in the call, under an id the client chose, for
     /// `valid_for_seconds`. Takes the join token's Transfer files grant.
@@ -440,6 +447,8 @@ pub enum ServerMessage {
         user: Uuid,
         muted: bool,
         deafened: bool,
+        #[serde(default)]
+        held: bool,
     },
     Speaking {
         user: Uuid,

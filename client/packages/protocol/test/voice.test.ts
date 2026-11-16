@@ -904,7 +904,12 @@ describe("VoiceCall", () => {
     await settle();
     expect(stopped).toEqual(["s2"]);
     call.setMuted(true);
-    expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: true, deafened: false });
+    expect(socket?.sent.at(-1)).toEqual({
+      type: "setState",
+      muted: true,
+      deafened: false,
+      held: false,
+    });
     call.leave();
     expect(call.state.status).toBe("idle");
     expect(socket?.closed).toBe(true);
@@ -1302,6 +1307,66 @@ describe("VoiceCall", () => {
     }
   });
 
+  it("holds at once beside the user's mute, and shows who else is on hold", async () => {
+    FakeSocket.behaviour = new Map();
+    FakeSocket.readyParticipants = [
+      { user: "on-hold", muted: false, deafened: false, held: true, speaking: false, sources: [] },
+      { user: "talking", muted: false, deafened: false, speaking: false, sources: [] },
+    ];
+    const { call, microphoneTracks } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    try {
+      await call.join(channel);
+      const socket = FakeSocket.instances[0];
+      const track = microphoneTracks[0];
+      expect(call.state.onHold).toEqual(["on-hold"]);
+      call.setMuted(true);
+      call.setHeld(true);
+      expect(call.state).toMatchObject({ muted: true, held: true });
+      expect(track?.enabled).toBe(false);
+      expect(socket?.sent.at(-1)).toEqual({
+        type: "setState",
+        muted: true,
+        deafened: false,
+        held: true,
+      });
+      // The hold ends once the server says so, and the user's own mute stays.
+      call.setHeld(false);
+      expect(call.state.held).toBe(true);
+      socket?.frame({
+        type: "participantState",
+        user: me,
+        muted: true,
+        deafened: false,
+        held: false,
+      });
+      await settle();
+      expect(call.state).toMatchObject({ muted: true, held: false });
+      expect(track?.enabled).toBe(false);
+      // Others put on hold and taken off it, and one leaving.
+      socket?.frame({
+        type: "participantState",
+        user: "talking",
+        muted: false,
+        deafened: false,
+        held: true,
+      });
+      socket?.frame({
+        type: "participantState",
+        user: "on-hold",
+        muted: false,
+        deafened: false,
+        held: false,
+      });
+      await settle();
+      expect(call.state.onHold).toEqual(["talking"]);
+      socket?.frame({ type: "participantLeft", user: "talking" });
+      await settle();
+      expect(call.state.onHold).toEqual([]);
+    } finally {
+      FakeSocket.readyParticipants = [];
+    }
+  });
+
   it("mutes at once but shows itself unmuted only once the server says so", async () => {
     FakeSocket.behaviour = new Map();
     const { call, microphoneTracks } = makeCall({ candidates: ["near"], latency: { near: 1 } });
@@ -1312,10 +1377,20 @@ describe("VoiceCall", () => {
     call.setMuted(true);
     expect(call.state.muted).toBe(true);
     expect(track?.enabled).toBe(false);
-    expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: true, deafened: false });
+    expect(socket?.sent.at(-1)).toEqual({
+      type: "setState",
+      muted: true,
+      deafened: false,
+      held: false,
+    });
     // Unmuting waits for the server's word, and a refusal leaves the user muted and told why.
     call.setMuted(false);
-    expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: false, deafened: false });
+    expect(socket?.sent.at(-1)).toEqual({
+      type: "setState",
+      muted: false,
+      deafened: false,
+      held: false,
+    });
     expect(call.state.muted).toBe(true);
     expect(track?.enabled).toBe(false);
     socket?.frame({
@@ -1329,7 +1404,12 @@ describe("VoiceCall", () => {
     expect(call.state).toMatchObject({ muted: true, stateRefused: { retryAfterSeconds: 4 } });
     // Deafening meanwhile does not ask again for the refused unmute.
     call.setDeafened(true);
-    expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: true, deafened: true });
+    expect(socket?.sent.at(-1)).toEqual({
+      type: "setState",
+      muted: true,
+      deafened: true,
+      held: false,
+    });
     expect(call.state).toMatchObject({ deafened: true, stateRefused: null });
     call.setMuted(false);
     // The answer to the deafen, sent before the unmute, keeps the user muted.
@@ -1620,7 +1700,7 @@ describe("VoiceCall resuming", () => {
     expect(second?.sent[0]).toEqual({ type: "resume", secret: "secret-1" });
     expect(requests(second)).toEqual(["resume", "watch", "setState"]);
     expect(second?.sent.filter((f) => f.type === "setState")).toEqual([
-      { type: "setState", muted: true, deafened: true },
+      { type: "setState", muted: true, deafened: true, held: false },
     ]);
     // The server restating an offer already answered is answered again, never applied twice.
     expect(connections).toHaveLength(1);

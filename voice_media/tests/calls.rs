@@ -641,6 +641,90 @@ async fn deafened_hears_nothing_until_undeafened() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn on_hold_receives_nothing_until_the_hold_ends() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    for peer in [&mut ann, &mut bob] {
+        peer.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+            .await
+            .unwrap();
+    }
+    let mic = open_microphone(&media, &mut ann).await;
+    ann.send_audio(&mic, Some(-30));
+    send(
+        &media,
+        Command::Send {
+            participant: ann.id,
+            source: MediaSource::Camera,
+            external: false,
+        },
+    );
+    ann.until(&media, WAIT, |e| {
+        matches!(e, Event::Offer { sections, .. }
+            if sections.iter().any(|s| s.content == sending(MediaSource::Camera)))
+    })
+    .await
+    .unwrap();
+    let camera = ann.mid_of(&sending(MediaSource::Camera)).unwrap();
+    ann.settle(&media).await;
+    ann.send_video(&camera);
+    send(
+        &media,
+        Command::Watch {
+            participant: bob.id,
+            video: vec![(ann.user, MediaSource::Camera)],
+        },
+    );
+    bob.until(&media, WAIT, |e| {
+        matches!(e, Event::Offer { sections, .. } if sections.iter().any(|s| matches!(
+            s.content, SectionContent::Video { source: MediaSource::Camera, .. })))
+    })
+    .await
+    .unwrap();
+    bob.settle(&media).await;
+    let video = bob
+        .mid_of(&SectionContent::Video {
+            user: ann.user,
+            source: MediaSource::Camera,
+        })
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let before = bob.drain();
+    assert!(
+        before.iter().any(|p| p.mid == video),
+        "Bob sees Ann's camera"
+    );
+    assert!(before.iter().any(|p| p.mid != video), "and hears her");
+
+    let bob_id = bob.id;
+    let held = |held| {
+        send(
+            &media,
+            Command::SetHeld {
+                participant: bob_id,
+                held,
+            },
+        )
+    };
+    held(true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    bob.drain();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(bob.drain().is_empty(), "on hold, Bob is sent nothing");
+    held(false);
+    // Video starts again on a keyframe, which the synthetic camera sends each second.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let after = bob.drain();
+    assert!(
+        after.iter().any(|p| p.mid == video),
+        "the hold over, Ann's camera again"
+    );
+    assert!(after.iter().any(|p| p.mid != video), "and her voice");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_offer_left_unanswered_fails_its_connection() {
     let media = media(16);
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();

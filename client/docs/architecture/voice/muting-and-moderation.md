@@ -14,6 +14,15 @@
 - The frame never shows the user less silenced than they have since asked to be. **Why:** an answer
   to an earlier request must not reopen a microphone they just muted.
 
+### Hold
+
+- `setHeld` puts the call on hold, as a phone does while a phone call has its audio, and takes it
+  off. It shows at once (`held`) and ends only on the server's word, as a mute does, and keeps the
+  microphone's track disabled while shown. The user's own `muted` and `deafened` stay as they are.
+- The voice server sends nothing of the user's while held, and nothing to them.
+- `onHold` lists the others the server says are on hold, from `ready` and `participantState`, in id
+  order, so a participant on hold can be shown apart from one muted.
+
 ### Refused state changes
 
 A non-fatal `error` with `refused: "setState"`:

@@ -119,6 +119,13 @@ pub enum Command {
         participant: ParticipantId,
         deafened: bool,
     },
+    /// Stops everything sent to the participant, video as well as sound, while they are on hold
+    /// (a phone call took over their device). What they send is paused by source
+    /// (`SetSourcePaused`).
+    SetHeld {
+        participant: ParticipantId,
+        held: bool,
+    },
     RestartIce {
         participant: ParticipantId,
         connection: ConnectionKind,

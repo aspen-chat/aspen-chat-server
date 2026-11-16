@@ -228,6 +228,23 @@ VP8 comes first, so a browser sending video sends VP8. See [design notes](design
 - Both are reported to the API server.
 - Someone muted while speaking stops speaking at once (`speaking` to the call, and the report),
   rather than at the next interval. Nobody else's speaking changes.
+- A `setState` that only mutes, deafens, or holds is never rate limited; one that lifts any of them
+  is.
+
+### Hold
+
+A phone puts the call on hold while a phone call has its audio (CallKit's hold, Telecom's
+`onSetInactive`), with `setState`'s `held`.
+
+- Every source the participant sends is paused at the server, a camera and a share as well as the
+  microphone, and one asked for while held starts paused. Nothing at all is sent to them: no audio
+  slot, no share's sound, no video (`Command::SetHeld` on the media thread). When the hold ends,
+  what they receive starts over, video on a keyframe.
+- Their own mute and deafen stand beside it, unchanged, and apply again when it ends.
+- Everyone in the call is told (`participantState`, and `held` on `ready`'s participants), so
+  clients show a participant as on hold rather than muted. The reports to the API server carry their
+  mute and deafen alone.
+- Someone put on hold while speaking stops speaking at once, as a mute does.
 
 ### A moderator's mute
 
@@ -329,7 +346,7 @@ A panic inside one connection's str0m calls is caught instead, and fails that co
 | `setReceiving {mid, receiving}`                                            | Stops or resumes one received section, with no renegotiation                     |
 | `silence {voices, shares}`                                                 | The people this client plays at nothing, replacing the lists before              |
 | `restartIce {connection}`                                                  | Asks for an ICE restart in the next offer                                        |
-| `setState {muted, deafened}`                                               | The participant's own mute and deafen                                            |
+| `setState {muted, deafened, held?}`                                        | The participant's own mute, deafen, and hold                                     |
 | `offerFile`, `withdrawFile`, `acceptFile`, `transferSignal`, `endTransfer` | See [File transfers](../file-transfers.md)                                       |
 | `leave`                                                                    | Leaves now, without waiting out the resume grace                                 |
 
@@ -343,7 +360,7 @@ A panic inside one connection's str0m calls is caught instead, and fails that co
 | `sending {source}`                                                                                           | A source the client asked to send carries media at the server, and is sent on                                                  |
 | `sources {user, sources}`                                                                                    | What a participant sends now, each source with whether it is paused                                                            |
 | `slots {assignments}`                                                                                        | Whom the client's audio slots carry from now on, those that changed                                                            |
-| `participantJoined`, `participantLeft`, `participantState`, `speaking`                                       | Who is in the call, their mute and deafen, and who speaks                                                                      |
+| `participantJoined`, `participantLeft`, `participantState`, `speaking`                                       | Who is in the call, their mute, deafen, and hold, and who speaks                                                               |
 | `kicked {reason}`                                                                                            | The server closed the client's place: `kicked`, `replaced`, `serverStopping`, `accessLost`, `connectionFailed`, or `signedOut` |
 | `grantsChanged {grants}`                                                                                     | What the client may now do; see [Rechecks and grants](rechecks.md#grants-change)                                               |
 | `fileOffered`, `fileWithdrawn`, `transferStarting`, `transferSignal`, `transferEnded`, `transferLinkChanged` | See [File transfers](../file-transfers.md)                                                                                     |

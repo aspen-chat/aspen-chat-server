@@ -224,6 +224,8 @@ struct Participant {
     /// The participant each audio slot carries.
     slots: Vec<Option<ParticipantId>>,
     deafened: bool,
+    /// On hold: nothing is sent to it (`Command::SetHeld`).
+    on_hold: bool,
     speaking: bool,
     /// The sources whose routes name this participant as a receiver.
     routed: Vec<SourceKey>,
@@ -596,6 +598,16 @@ impl Thread {
                     }
                 }
             }
+            Command::SetHeld { participant, held } => {
+                if let Some(p) = self.participants.get_mut(&participant) {
+                    p.on_hold = held;
+                    // What it receives starts over: video waits for a keyframe, audio rebases.
+                    for out in p.outs.values_mut() {
+                        out.source = None;
+                        out.held.clear();
+                    }
+                }
+            }
             Command::RestartIce {
                 participant,
                 connection,
@@ -681,6 +693,7 @@ impl Thread {
                 // One slot from the start: a connection needs a section to connect at all.
                 slots: vec![None; usize::from(self.config.audio_slots.min(1))],
                 deafened: false,
+                on_hold: false,
                 speaking: false,
                 routed: Vec::new(),
                 silenced_voices: HashSet::new(),
@@ -1662,13 +1675,13 @@ impl Thread {
             let Some(receiver) = self.participants.get_mut(&route.receiver) else {
                 continue;
             };
-            let deafened = receiver.deafened;
+            let (deafened, on_hold) = (receiver.deafened, receiver.on_hold);
             let target = receiver.conn;
             let answered = self.conns[target].as_ref().map_or(0, |c| c.answered);
             let Some(out) = receiver.outs.get_mut(&route.mid) else {
                 continue;
             };
-            if !out.receiving || (deafened && audio) {
+            if !out.receiving || (deafened && audio) || on_hold {
                 continue;
             }
             if out.revision > answered {
@@ -1702,6 +1715,9 @@ impl Thread {
         let Some(p) = self.participants.get_mut(&receiver) else {
             return;
         };
+        if p.on_hold {
+            return;
+        }
         let target = p.conn;
         let Some(conn) = self.conns[target].as_mut() else {
             return;
