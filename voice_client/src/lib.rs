@@ -12,7 +12,8 @@
 //!   current-thread runtime on a thread of its own.
 //! - `call`: the state machine, everything the web client's `VoiceCall` decides: joining through
 //!   the API server's offer and the candidates nearest first, failures reported, refusals and
-//!   timeouts, answering the server's offers, mute and deafen, sources sent and videos watched,
+//!   timeouts, answering the server's offers, mute, deafen, and hold, sources sent and videos
+//!   watched,
 //!   audio slots and per-person volume, resuming a dropped socket and rejoining a lost call,
 //!   and each `kicked` reason.
 //! - `signalling`: typed frames over a `Socket`, and the signalling address of a voice server.

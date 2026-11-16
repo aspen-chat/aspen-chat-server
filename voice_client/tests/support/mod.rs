@@ -878,7 +878,8 @@ impl World {
         let frames = self.admit(&server).await;
         assert!(frames.contains(&ClientMessage::SetState {
             muted: false,
-            deafened: false
+            deafened: false,
+            held: false
         }));
         (offer, server)
     }

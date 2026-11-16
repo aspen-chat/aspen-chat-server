@@ -126,7 +126,7 @@ pub struct SlotAssignment {
 #[serde(rename_all = "camelCase")]
 pub struct SourceInfo {
     pub source: MediaSource,
-    /// Paused at the server: a muted microphone.
+    /// Paused at the server: a muted microphone, or anything of a participant on hold.
     pub paused: bool,
 }
 

@@ -4,6 +4,27 @@ The mobile apps' call engine: a client's side of a call without a browser, which
 platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android layers implement.
 `src/lib.rs` describes the crate; this file is about reaching it from Swift and Kotlin.
 
+## What the platform layers lean on
+
+- **Hold.** `set_held` is the system's hold (CallKit's `CXSetHeldCallAction` and an interruption on
+  iOS, Telecom's `onSetInactive` on Android): the engine sends `setState {muted, deafened, held}`,
+  shows `CallState.held` at once, takes the microphone's track off its sender as it does for a mute,
+  and clears `held` only when the server's `participantState` says so, as the web client's
+  `VoiceCall.setHeld` does. The voice server pauses everything the user sends (a camera or share
+  stays on its sender here, paused there), sends them nothing, keeps their own mute and deafen for
+  the release, and tells everyone; each `Participant.held` is another's hold, from `ready` and
+  `participantState`. Holding is never rate limited, releasing is, and a refused release leaves the
+  call on hold like a refused unmute. The layers keep no mute or deafen of their own around a hold:
+  the server keeps them.
+- **Nothing is kept per mid between offers.** Every offer is read whole (`Live::sections` and the
+  transceiver of each mid are rebuilt from it, and each received track read again through
+  `receiver_track`), since the server may reuse a section for other content: a section moved into
+  another msid stream arrives on new SSRCs, one taken over within its stream keeps them. The
+  platform's peer connection applies the remote description itself and derives its receive streams
+  from each offer's `a=ssrc` lines; the layers key their transceivers by the transceiver (iOS by its
+  sender's id, Android by its number), never by mid, and a platform layer that cached anything by
+  mid across offers would show the wrong person.
+
 ## The bindings
 
 [UniFFI](https://mozilla.github.io/uniffi-rs/) writes a Swift module, `VoiceClient`, and a Kotlin

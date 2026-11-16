@@ -506,7 +506,8 @@ async fn the_microphone_is_sent_once_its_section_is_offered_and_muting_takes_it_
         a.received(),
         vec![ClientMessage::SetState {
             muted: true,
-            deafened: false
+            deafened: false,
+            held: false
         }]
     );
     assert_eq!(pc.ops(), vec![Op::ReplaceTrack("1".to_string(), None)]);
@@ -518,7 +519,8 @@ async fn the_microphone_is_sent_once_its_section_is_offered_and_muting_takes_it_
         a.received(),
         vec![ClientMessage::SetState {
             muted: false,
-            deafened: false
+            deafened: false,
+            held: false
         }]
     );
     assert!(pc.ops().is_empty());
@@ -526,6 +528,7 @@ async fn the_microphone_is_sent_once_its_section_is_offered_and_muting_takes_it_
         user: w.user,
         muted: false,
         deafened: false,
+        held: false,
     });
     settle().await;
     assert!(!w.state().muted);
@@ -550,6 +553,7 @@ async fn the_servers_word_never_shows_the_user_less_silenced_than_they_asked() {
         user: w.user,
         muted: false,
         deafened: false,
+        held: false,
     });
     settle().await;
     let state = w.state();
@@ -566,6 +570,7 @@ async fn the_servers_word_never_shows_the_user_less_silenced_than_they_asked() {
         user: bob,
         muted: true,
         deafened: false,
+        held: false,
     });
     settle().await;
     assert!(w.state().participants[0].muted);
@@ -583,6 +588,7 @@ async fn a_moderators_mute_shows_on_the_users_own_controls() {
         user: w.user,
         muted: true,
         deafened: false,
+        held: false,
     });
     settle().await;
     assert!(w.state().muted);
@@ -624,7 +630,8 @@ async fn a_refused_unmute_leaves_the_user_as_shown() {
         a.received(),
         vec![ClientMessage::SetState {
             muted: true,
-            deafened: true
+            deafened: true,
+            held: false
         }]
     );
     assert_eq!(w.state().state_refused, None);
@@ -657,11 +664,13 @@ async fn deafening_shows_at_once_and_undeafening_waits_for_the_server() {
         vec![
             ClientMessage::SetState {
                 muted: false,
-                deafened: true
+                deafened: true,
+                held: false
             },
             ClientMessage::SetState {
                 muted: false,
-                deafened: false
+                deafened: false,
+                held: false
             }
         ]
     );
@@ -669,6 +678,7 @@ async fn deafening_shows_at_once_and_undeafening_waits_for_the_server() {
         user: w.user,
         muted: false,
         deafened: false,
+        held: false,
     });
     settle().await;
     assert!(!w.state().deafened);
@@ -691,7 +701,8 @@ async fn outside_a_call_the_mute_simply_is_the_state() {
     let frames = w.admit(&a).await;
     assert!(frames.contains(&ClientMessage::SetState {
         muted: true,
-        deafened: false
+        deafened: false,
+        held: false
     }));
     a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
     settle().await;
@@ -1169,6 +1180,7 @@ async fn participants_follow_the_frames() {
             user: bob,
             muted: true,
             deafened: false,
+            held: false,
             speaking: false,
             sources: vec![SourceInfo {
                 source: MediaSource::Microphone,
@@ -1590,6 +1602,7 @@ async fn a_dropped_socket_is_resumed_within_the_grace_with_media_kept() {
             user: bob,
             muted: false,
             deafened: false,
+            held: false,
             speaking: false,
             sources: Vec::new(),
         }],
@@ -1812,6 +1825,7 @@ async fn muting_someone_for_me_tells_the_server_to_silence_them() {
             user: bob,
             muted: false,
             deafened: false,
+            held: false,
             speaking: false,
             sources: Vec::new(),
         }],
@@ -1930,6 +1944,7 @@ async fn the_silence_is_said_again_to_a_new_place_in_the_call_and_kept_through_a
             user: bob,
             muted: false,
             deafened: false,
+            held: false,
             speaking: false,
             sources: Vec::new(),
         }],
@@ -1951,6 +1966,7 @@ async fn the_silence_is_said_again_to_a_new_place_in_the_call_and_kept_through_a
             user: bob,
             muted: false,
             deafened: false,
+            held: false,
             speaking: false,
             sources: Vec::new(),
         }],
@@ -2049,39 +2065,309 @@ async fn a_video_section_reused_for_another_person_shows_that_person() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_state_shows_what_the_user_asked_apart_from_the_servers_word() {
+async fn a_hold_shows_at_once_and_is_lifted_only_on_the_servers_word() {
     let w = World::new(0.5);
     let (_, a) = w.connected(A).await;
-    assert!(!w.state().asked_muted && !w.state().asked_deafened);
-    // A moderator's mute: shown muted, but not asked.
+    let pc = w.pcs.latest();
+    a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
+    settle().await;
+    a.received();
+    pc.ops();
+    w.send(Command::SetMuted(true));
+    settle().await;
+    a.received();
+    pc.ops();
+
+    // Held beside the user's own mute: shown held at once, the frame carrying the mute and
+    // deafen as they stand, and the microphone already off its sender for the mute.
+    w.send(Command::SetHeld(true));
+    settle().await;
+    let state = w.state();
+    assert!(state.held && state.muted && !state.deafened);
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::SetState {
+            muted: true,
+            deafened: false,
+            held: true
+        }]
+    );
+    assert!(pc.ops().is_empty());
+    // The server confirms it, the mute kept beside.
     a.send(&ServerMessage::ParticipantState {
         user: w.user,
         muted: true,
         deafened: false,
+        held: true,
+    });
+    settle().await;
+    assert!(w.state().held && w.state().muted);
+
+    // Releasing waits for the server; the user's own mute stands after it.
+    w.send(Command::SetHeld(false));
+    settle().await;
+    assert!(w.state().held, "the release waits for the server");
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::SetState {
+            muted: true,
+            deafened: false,
+            held: false
+        }]
+    );
+    a.send(&ServerMessage::ParticipantState {
+        user: w.user,
+        muted: true,
+        deafened: false,
+        held: false,
     });
     settle().await;
     let state = w.state();
-    assert!(state.muted && !state.asked_muted);
-    w.send(Command::SetDeafened(true));
-    settle().await;
-    let state = w.state();
-    assert!(state.asked_deafened && !state.asked_muted);
-    // A refused unmute leaves what was asked as what is shown.
-    w.send(Command::SetMuted(true));
-    settle().await;
-    assert!(w.state().asked_muted);
+    assert!(!state.held && state.muted && !state.deafened);
+    assert!(
+        pc.ops().is_empty(),
+        "still muted, the microphone stays off its sender"
+    );
+
+    // Held while unmuted: the microphone leaves its sender for the hold alone, and comes back
+    // when the server lifts it.
     w.send(Command::SetMuted(false));
+    a.send(&ServerMessage::ParticipantState {
+        user: w.user,
+        muted: false,
+        deafened: false,
+        held: false,
+    });
     settle().await;
-    assert!(!w.state().asked_muted);
+    assert_eq!(
+        pc.ops(),
+        vec![Op::ReplaceTrack("1".to_string(), Some(mic()))]
+    );
+    a.received();
+    w.send(Command::SetHeld(true));
+    settle().await;
+    assert_eq!(pc.ops(), vec![Op::ReplaceTrack("1".to_string(), None)]);
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::SetState {
+            muted: false,
+            deafened: false,
+            held: true
+        }]
+    );
+    // A `participantState` answering the earlier release never shows the user off hold once
+    // they have asked for it again.
+    a.send(&ServerMessage::ParticipantState {
+        user: w.user,
+        muted: false,
+        deafened: false,
+        held: false,
+    });
+    settle().await;
+    assert!(w.state().held);
+    assert!(pc.ops().is_empty());
+    w.send(Command::SetHeld(false));
+    a.send(&ServerMessage::ParticipantState {
+        user: w.user,
+        muted: false,
+        deafened: false,
+        held: false,
+    });
+    settle().await;
+    assert!(!w.state().held);
+    assert_eq!(
+        pc.ops(),
+        vec![Op::ReplaceTrack("1".to_string(), Some(mic()))]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn outside_a_call_the_hold_simply_is_the_state_and_a_join_carries_it() {
+    let w = World::new(0.5);
+    w.send(Command::SetHeld(true));
+    settle().await;
+    assert!(w.state().held);
+    w.send(Command::SetHeld(false));
+    settle().await;
+    assert!(!w.state().held, "nothing to wait for outside a call");
+    // Held before joining (a phone call under way): the join says so, and the microphone's
+    // sender carries nothing from the start.
+    w.send(Command::SetHeld(true));
+    settle().await;
+    let offer = Offer::to(w.channel, &[A]);
+    let a = w.sockets.server(A);
+    w.join(&offer).await;
+    let frames = w.admit(&a).await;
+    assert!(frames.contains(&ClientMessage::SetState {
+        muted: false,
+        deafened: false,
+        held: true
+    }));
+    assert!(w.state().held);
+    a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
+    settle().await;
+    assert!(
+        w.pcs
+            .latest()
+            .ops()
+            .contains(&Op::ReplaceTrack("1".to_string(), None))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_release_leaves_the_call_on_hold() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    w.send(Command::SetHeld(true));
+    settle().await;
+    w.send(Command::SetHeld(false));
+    settle().await;
+    a.received();
     a.send(&error(
         "too many setState frames",
         false,
-        None,
+        Some(3),
         Some("setState"),
     ));
     settle().await;
-    assert!(w.state().asked_muted, "the refusal keeps the mute as shown");
+    assert!(w.state().held);
+    assert_eq!(
+        w.state()
+            .state_refused
+            .as_ref()
+            .map(|r| r.retry_after_seconds),
+        Some(Some(3))
+    );
+    // The next request carries the hold as it stands, not the refused release.
+    w.send(Command::SetDeafened(true));
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::SetState {
+            muted: false,
+            deafened: true,
+            held: true
+        }]
+    );
     w.send(Command::Leave);
     settle().await;
-    assert!(!w.state().asked_muted && !w.state().asked_deafened);
+    assert!(!w.state().held, "idle, nothing is held");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_others_on_hold_follow_ready_and_participant_state() {
+    let w = World::new(0.5);
+    let (bob, carol) = (Uuid::now_v7(), Uuid::now_v7());
+    let offer = Offer::to(w.channel, &[A]);
+    let a = w.sockets.server(A);
+    w.join(&offer).await;
+    a.ready(
+        w.session,
+        w.user,
+        vec![
+            voice_protocol::signal::ParticipantInfo {
+                user: bob,
+                muted: false,
+                deafened: false,
+                held: true,
+                speaking: false,
+                sources: Vec::new(),
+            },
+            voice_protocol::signal::ParticipantInfo {
+                user: carol,
+                muted: false,
+                deafened: false,
+                held: false,
+                speaking: false,
+                sources: Vec::new(),
+            },
+        ],
+        "secret",
+    );
+    settle().await;
+    let held = |state: &voice_client::state::CallState| -> Vec<Uuid> {
+        state
+            .participants
+            .iter()
+            .filter(|p| p.held)
+            .map(|p| p.user)
+            .collect()
+    };
+    assert_eq!(held(&w.state()), vec![bob]);
+    assert!(!w.state().held, "another's hold is not the user's");
+    // Carol is put on hold and Bob taken off it; their mute and deafen come with the frame.
+    a.send(&ServerMessage::ParticipantState {
+        user: carol,
+        muted: true,
+        deafened: false,
+        held: true,
+    });
+    a.send(&ServerMessage::ParticipantState {
+        user: bob,
+        muted: false,
+        deafened: false,
+        held: false,
+    });
+    settle().await;
+    assert_eq!(held(&w.state()), vec![carol]);
+    assert!(
+        w.state()
+            .participants
+            .iter()
+            .any(|p| p.user == carol && p.muted)
+    );
+    // A `participantState` without `held` (an older server) reads as not held, and someone
+    // joining anew is not on hold.
+    a.send_text(format!(
+        r#"{{"type":"participantState","user":"{carol}","muted":true,"deafened":false}}"#
+    ));
+    a.send(&ServerMessage::ParticipantJoined {
+        user: bob,
+        muted: false,
+        deafened: false,
+    });
+    settle().await;
+    assert!(held(&w.state()).is_empty());
+    assert!(!w.state().held);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_ready_after_a_resume_carries_who_is_on_hold() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    w.send(Command::SetHeld(true));
+    settle().await;
+    a.received();
+    a.close();
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Rejoining);
+    assert!(w.state().held, "the hold stands through the resume");
+    let bob = Uuid::now_v7();
+    a.ready(
+        w.session,
+        w.user,
+        vec![voice_protocol::signal::ParticipantInfo {
+            user: bob,
+            muted: false,
+            deafened: true,
+            held: true,
+            speaking: false,
+            sources: Vec::new(),
+        }],
+        "secret-2",
+    );
+    settle().await;
+    let state = w.state();
+    assert_eq!(state.status, CallStatus::Connected);
+    assert!(state.participants[0].held && state.participants[0].deafened);
+    assert!(
+        state.held,
+        "the server keeps the participant's hold across a resume"
+    );
+    // Nothing is asked again on the resumed socket: the server kept the state.
+    assert!(
+        !a.received()
+            .iter()
+            .any(|f| matches!(f, ClientMessage::SetState { .. }))
+    );
 }

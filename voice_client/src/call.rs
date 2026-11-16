@@ -106,6 +106,10 @@ pub enum Command {
     Leave,
     SetMuted(bool),
     SetDeafened(bool),
+    /// Puts the call on hold or takes it off (`setState`'s `held`), as the system does while a
+    /// phone call has the audio: the server pauses everything the user sends and sends them
+    /// nothing, and keeps their mute and deafen for when it ends.
+    SetHeld(bool),
     /// Follows a moderator's mute of the user being made or lifted, as the API server's
     /// `voiceMute` events say; the voice server applies it to the call itself.
     SetServerMuted(bool),
@@ -337,7 +341,7 @@ struct Live {
     /// offer still outstanding after a resume, with the same revision, and the peer connection
     /// has already applied it: the same answer is sent again and nothing is negotiated anew.
     answered: Option<(u64, String)>,
-    /// The track on the microphone's sender: `None` while the user shows muted.
+    /// The track on the microphone's sender: `None` while the user shows muted or on hold.
     microphone_attached: Option<TrackId>,
     /// The volume last set on each receiver, so one is set only when it changes.
     volumes_applied: HashMap<TransceiverId, f64>,
@@ -373,6 +377,7 @@ impl Live {
 struct Asked {
     muted: bool,
     deafened: bool,
+    held: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -398,12 +403,12 @@ pub struct Call {
     /// let go.
     step: u64,
     next_id: u64,
-    /// The mute and deafen the user last asked for. In a call, `state.muted` and
-    /// `state.deafened` show the server's word, except that they show the user silenced the
-    /// moment they ask to be: muting and deafening take effect at once (the microphone's track
-    /// is taken off its sender here too, and the server never refuses them), while unmuting
-    /// and undeafening show only once the server says it did them, so a refused one never shows
-    /// the user audible when they are not.
+    /// The mute, deafen, and hold the user last asked for. In a call, `state.muted`,
+    /// `state.deafened`, and `state.held` show the server's word, except that they show the
+    /// user silenced the moment they ask to be: muting, deafening, and holding take effect at
+    /// once (the microphone's track is taken off its sender here too, and the server never
+    /// refuses them), while lifting them shows only once the server says it did, so a refused
+    /// one never shows the user audible when they are not.
     asked: Asked,
     microphone: Option<TrackId>,
     volumes: HashMap<(Uuid, MediaSource), Volume>,
@@ -565,6 +570,7 @@ impl Call {
                 })
                 .await
             }
+            Command::SetHeld(held) => self.ask(Asked { held, ..self.asked }).await,
             Command::SetServerMuted(server_muted) => {
                 if self.state.status != CallStatus::Idle {
                     self.state.server_muted = server_muted;
@@ -659,36 +665,31 @@ impl Call {
         self.state.ended_reason = reason;
     }
 
-    /// The state outside a call: nothing of one, the mute and deafen lifted.
+    /// The state outside a call: nothing of one, the mute, deafen, and hold lifted.
     fn reset_to_idle(&mut self) {
         self.state = CallState {
             revision: self.state.revision,
             microphone: self.state.microphone.clone(),
             ..CallState::default()
         };
-        self.set_asked(Asked::default());
+        self.asked = Asked::default();
     }
 
-    /// The user's own last request, kept here and shown in the state.
-    fn set_asked(&mut self, asked: Asked) {
-        self.asked = asked;
-        self.state.asked_muted = asked.muted;
-        self.state.asked_deafened = asked.deafened;
-    }
-
-    /// Asks for `asked` as the user's mute and deafen. Outside a connected call it simply is the
-    /// state; in one, whatever it silences shows at once and whatever it lifts waits for the
-    /// voice server (`participantState`).
+    /// Asks for `asked` as the user's mute, deafen, and hold. Outside a connected call it simply
+    /// is the state; in one, whatever it silences shows at once and whatever it lifts waits for
+    /// the voice server (`participantState`).
     async fn ask(&mut self, asked: Asked) {
-        self.set_asked(asked);
+        self.asked = asked;
         self.state.state_refused = None;
         if self.state.status != CallStatus::Connected {
             self.state.muted = asked.muted;
             self.state.deafened = asked.deafened;
+            self.state.held = asked.held;
             return;
         }
         self.state.muted |= asked.muted;
         self.state.deafened |= asked.deafened;
+        self.state.held |= asked.held;
         self.hold_microphone().await;
         self.send_state().await;
     }
@@ -699,15 +700,18 @@ impl Call {
             link.send(ClientMessage::SetState {
                 muted: self.asked.muted,
                 deafened: self.asked.deafened,
+                held: self.asked.held,
             })
             .await;
         }
     }
 
     /// The track the microphone's sender carries: the microphone, or nothing while the user
-    /// shows muted, so nothing leaves the device whatever the server does with its pause.
+    /// shows muted or on hold, so nothing leaves the device whatever the server does with its
+    /// pause. A camera or share sent while on hold is left on its sender, as the web client
+    /// leaves its tracks live: the server pauses them, and the hold is a phone call's length.
     fn outgoing_microphone(&self) -> Option<TrackId> {
-        if self.state.muted {
+        if self.state.muted || self.state.held {
             None
         } else {
             self.microphone.clone()
@@ -1653,6 +1657,7 @@ impl Call {
                     user,
                     muted,
                     deafened,
+                    held: false,
                     speaking: false,
                     sources: Vec::new(),
                 });
@@ -1668,6 +1673,7 @@ impl Call {
                 user,
                 muted,
                 deafened,
+                held,
             } => {
                 if self.state.user == Some(user) {
                     // The server's word on this client's own state, a moderator's mute
@@ -1675,10 +1681,12 @@ impl Call {
                     // silenced than they have since asked to be.
                     self.state.muted = muted || self.asked.muted;
                     self.state.deafened = deafened || self.asked.deafened;
+                    self.state.held = held || self.asked.held;
                     self.hold_microphone().await;
                 } else if let Some(participant) = self.participant(user) {
                     participant.muted = muted;
                     participant.deafened = deafened;
+                    participant.held = held;
                 }
             }
             ServerMessage::Speaking { user, speaking } => {
@@ -1733,12 +1741,14 @@ impl Call {
             retry_after_seconds: retry_after,
         };
         match request {
-            // Only unmuting or undeafening is ever refused: the user stays as they are shown.
+            // Only lifting a mute, deafen, or hold is ever refused: the user stays as they are
+            // shown.
             Some("setState") => {
-                self.set_asked(Asked {
+                self.asked = Asked {
                     muted: self.state.muted,
                     deafened: self.state.deafened,
-                });
+                    held: self.state.held,
+                };
                 self.state.state_refused = Some(refusal);
             }
             // The source last asked for, whose section the server will not offer.
@@ -2154,6 +2164,7 @@ fn participant(info: ParticipantInfo) -> Participant {
         user: info.user,
         muted: info.muted,
         deafened: info.deafened,
+        held: info.held,
         speaking: info.speaking,
         sources: info.sources,
     }

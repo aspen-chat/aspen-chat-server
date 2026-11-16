@@ -73,7 +73,7 @@ pub enum MediaSource {
 #[uniffi::remote(Record)]
 pub struct SourceInfo {
     pub source: MediaSource,
-    /// Paused at the server: a muted microphone.
+    /// Paused at the server: a muted microphone, or anything of a participant on hold.
     pub paused: bool,
 }
 
@@ -110,8 +110,7 @@ pub struct CallState {
     pub user: Option<Uuid>,
     pub muted: bool,
     pub deafened: bool,
-    pub asked_muted: bool,
-    pub asked_deafened: bool,
+    pub held: bool,
     pub server_muted: bool,
     pub grants: Grants,
     pub participants: Vec<Participant>,
@@ -141,8 +140,7 @@ impl From<&state::CallState> for CallState {
             user: state.user,
             muted: state.muted,
             deafened: state.deafened,
-            asked_muted: state.asked_muted,
-            asked_deafened: state.asked_deafened,
+            held: state.held,
             server_muted: state.server_muted,
             grants: state.grants,
             participants: state.participants.clone(),
@@ -709,6 +707,12 @@ impl Engine {
 
     pub fn set_deafened(&self, deafened: bool) {
         self.0.set_deafened(deafened);
+    }
+
+    /// Puts the call on hold or takes it off, as the system does while a phone call has the
+    /// audio (CallKit's `CXSetHeldCallAction`, Telecom's `onSetInactive`).
+    pub fn set_held(&self, held: bool) {
+        self.0.set_held(held);
     }
 
     pub fn set_server_muted(&self, server_muted: bool) {

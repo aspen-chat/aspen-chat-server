@@ -84,6 +84,10 @@ impl Engine {
         self.send(Command::SetDeafened(deafened));
     }
 
+    pub fn set_held(&self, held: bool) {
+        self.send(Command::SetHeld(held));
+    }
+
     pub fn set_server_muted(&self, server_muted: bool) {
         self.send(Command::SetServerMuted(server_muted));
     }
