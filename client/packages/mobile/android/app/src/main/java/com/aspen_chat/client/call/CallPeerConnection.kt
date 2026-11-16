@@ -49,8 +49,9 @@ import org.webrtc.SessionDescription as WebRtcSessionDescription
  * `PeerConnectionFactory`, one for the process, with the device's video codecs (its hardware
  * encoders and decoders through one EGL context, software ones behind them) and the Java audio
  * device module, which records the microphone and plays every received track, with the device's
- * own echo canceller and noise suppressor where it has them. A test may give an audio device
- * module of its own instead.
+ * own echo canceller and noise suppressor where it has them; `eglContext` is that context, which
+ * the camera's texture and the video renderers share. A test may give an audio device module of
+ * its own instead.
  */
 class CallPeerConnections(
     context: Context,
@@ -59,6 +60,10 @@ class CallPeerConnections(
 ) : PeerConnectionFactory {
     val factory: WebRtcPeerConnectionFactory
     private val egl: EglBase
+
+    /** The context the codecs share; the camera's texture and the renderers draw on it too. */
+    val eglContext: EglBase.Context
+        get() = egl.eglBaseContext
 
     init {
         initialize(context.applicationContext)

@@ -1,8 +1,10 @@
 package com.aspen_chat.client;
 
+import android.content.res.Configuration;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginHandle;
 import com.aspen_chat.client.age.AspenAgePlugin;
 import com.aspen_chat.client.files.AspenFilesPlugin;
 import com.aspen_chat.client.input.AspenKeyboardContentPlugin;
@@ -46,4 +48,29 @@ public class MainActivity extends BridgeActivity {
     }
 
     private static final String CALL_PLUGIN = "com.aspen_chat.client.call.AspenCallPlugin";
+
+    /** The call plugin, where the build has it, as what it hears of the picture in picture. */
+    private CallPictureInPictureHost pictureInPictureHost() {
+        PluginHandle handle = getBridge() == null ? null : getBridge().getPlugin("AspenCall");
+        Plugin instance = handle == null ? null : handle.getInstance();
+        return instance instanceof CallPictureInPictureHost ? (CallPictureInPictureHost) instance : null;
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        CallPictureInPictureHost host = pictureInPictureHost();
+        if (host != null) {
+            host.onUserLeaveHint();
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        CallPictureInPictureHost host = pictureInPictureHost();
+        if (host != null) {
+            host.onPictureInPictureModeChanged(isInPictureInPictureMode);
+        }
+    }
 }

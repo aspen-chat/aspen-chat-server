@@ -18,16 +18,18 @@ import com.aspen_chat.client.R
 
 /**
  * Keeps the process alive for the length of a call the call engine holds, so the call goes on
- * once the app has left the screen: a foreground service of the two kinds a call is (a phone
- * call, and the microphone), posting the ongoing call's notification (`CallStyle`, with the
- * system's own Hang up) the moment it starts. `CallTelecom` starts it as it adds the call to
- * Telecom and stops it when the call ends, so the notification is up within the five seconds
- * Telecom allows, after which (from Android 14) Telecom itself keeps the process alive for a
- * call it holds, and this service's type says what the process is doing.
+ * once the app has left the screen: a foreground service of the kinds a call is (a phone call,
+ * the microphone, and the camera while the call's camera is on), posting the ongoing call's
+ * notification (`CallStyle`, with the system's own Hang up) the moment it starts. `CallTelecom`
+ * starts it as it adds the call to Telecom and stops it when the call ends, so the notification
+ * is up within the five seconds Telecom allows, after which (from Android 14) Telecom itself keeps
+ * the process alive for a call it holds, and this service's type says what the process is doing;
+ * `setCamera` adds the camera's kind as the camera turns on and takes it off as it turns off, so
+ * the camera may go on while the app is not in front.
  *
- * The microphone kind may be refused where the app is not in front when the service starts
- * (Android 14 lets a service record only from the foreground); the service then runs as a phone
- * call alone, and the call's microphone is Telecom's to grant.
+ * The microphone and camera kinds may be refused where the app is not in front when the service
+ * takes them (Android 14 lets a service start recording only from the foreground); the service
+ * then runs without them, and the call's microphone is Telecom's to grant.
  */
 class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -41,20 +43,22 @@ class CallService : Service() {
         }
         val name = intent?.getCharSequenceExtra(EXTRA_NAME) ?: getString(R.string.app_name)
         val video = intent?.getBooleanExtra(EXTRA_VIDEO, false) ?: false
-        enterForeground(notification(this, name, video))
+        val camera = intent?.getBooleanExtra(EXTRA_CAMERA, false) ?: false
+        enterForeground(notification(this, name, video), camera)
         return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun enterForeground(notification: Notification) {
+    private fun enterForeground(notification: Notification, camera: Boolean) {
         val call = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         val microphone = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        val cameraType = if (camera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
         try {
             try {
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call or microphone)
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call or microphone or cameraType)
             } catch (refused: SecurityException) {
-                Log.w(TAG, "the call's service may not record; it runs as a phone call alone", refused)
+                Log.w(TAG, "the call's service may not record or capture; it runs as a phone call alone", refused)
                 ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call)
             }
         } catch (e: RuntimeException) {
@@ -77,7 +81,10 @@ class CallService : Service() {
         private const val ACTION_HANG_UP = "com.aspen_chat.client.call.HANG_UP"
         private const val EXTRA_NAME = "name"
         private const val EXTRA_VIDEO = "video"
+        private const val EXTRA_CAMERA = "camera"
         private var hangUp: (() -> Unit)? = null
+        /** What the service was last started with, so the camera's kind can be added to the same call. */
+        private var shown: Pair<CharSequence, Boolean>? = null
 
         /**
          * Starts the service for a call shown as `name`, whose notification's Hang up runs
@@ -85,10 +92,27 @@ class CallService : Service() {
          * and later, with no call yet in Telecom to allow it), the call goes on without it.
          */
         fun start(context: Context, name: CharSequence, video: Boolean, hangUp: () -> Unit) {
-            synchronized(this) { this.hangUp = hangUp }
+            synchronized(this) {
+                this.hangUp = hangUp
+                shown = name to video
+            }
+            send(context, name, video, camera = false)
+        }
+
+        /**
+         * Adds the camera's kind to the running service as the call's camera turns on, and takes
+         * it off as it turns off; nothing where no call's service runs.
+         */
+        fun setCamera(context: Context, on: Boolean) {
+            val (name, video) = synchronized(this) { shown } ?: return
+            send(context, name, video, on)
+        }
+
+        private fun send(context: Context, name: CharSequence, video: Boolean, camera: Boolean) {
             val intent = Intent(context, CallService::class.java)
                 .putExtra(EXTRA_NAME, name)
                 .putExtra(EXTRA_VIDEO, video)
+                .putExtra(EXTRA_CAMERA, camera)
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: IllegalStateException) {
@@ -97,7 +121,10 @@ class CallService : Service() {
         }
 
         fun stop(context: Context) {
-            synchronized(this) { hangUp = null }
+            synchronized(this) {
+                hangUp = null
+                shown = null
+            }
             context.stopService(Intent(context, CallService::class.java))
         }
 

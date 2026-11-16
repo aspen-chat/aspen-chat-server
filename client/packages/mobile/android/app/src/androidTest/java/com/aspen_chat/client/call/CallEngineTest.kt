@@ -25,11 +25,20 @@ import com.aspen_chat.client.voice.PeerConnectionObserver
 import com.aspen_chat.client.voice.Socket
 import com.aspen_chat.client.voice.SocketFactory
 import com.aspen_chat.client.voice.StatsOf
+import com.aspen_chat.client.voice.TrackId
+import com.aspen_chat.client.voice.WatchedVideo
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.webrtc.VideoFrame
+import org.webrtc.VideoSink
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -48,9 +57,11 @@ import org.junit.runner.RunWith
  * The call engine with this device's whole platform under it, against a real deployment: it joins
  * a voice channel's call, which Telecom holds as the app's own call (dialing, then active) with the
  * call's service and notification up and its routes listed and switched, is heard by and hears a
- * second participant in a browser, holds the call and releases it, takes its socket back after the
- * socket is cut, and leaves,
- * which ends the system's side too. `scripts/check_mobile_call.py --platform android`
+ * second participant in a browser, holds the call and releases it, watches the browser's camera
+ * (its track retained as `CallVideo` retains one, a sink counting its frames and reading their
+ * shape), sends the emulator's own camera (`CallCamera`), which the browser decodes and sees a
+ * picture in, moves it to the other camera, takes its socket back after the socket is cut with
+ * video flowing on, and leaves, which ends the system's side too. `scripts/check_mobile_call.py --platform android`
  * at the repository's root runs the deployment, the browser, and this test, and gives it what it
  * reads from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.<name>`);
  * without them it is skipped.
@@ -113,6 +124,24 @@ class CallEngineTest {
     /** What the microphone's `media-source` entry measured: `totalAudioEnergy` and `audioLevel`. */
     data class SourceAudio(val energy: Double, val level: Double)
 
+    /** A frame of someone's camera as the browser plays it (the page's `cameraSample`). */
+    data class CameraSample(val width: Int, val height: Int, val brightness: Double, val spread: Double)
+
+    /** A sink counting the frames a video track delivers and keeping the latest one's upright shape. */
+    class CountingSink : VideoSink {
+        @Volatile
+        var frames = 0
+            private set
+        @Volatile
+        var shape: Triple<Int, Int, Int>? = null
+            private set
+
+        override fun onFrame(frame: VideoFrame) {
+            frames += 1
+            shape = Triple(frame.rotatedWidth, frame.rotatedHeight, frame.rotation)
+        }
+    }
+
     /** Snapshots as the listener saw them, on the main thread. */
     class Seen : CallSnapshots.Listener {
         private val snapshots = ArrayList<CallState>()
@@ -147,6 +176,7 @@ class CallEngineTest {
         store = PushStore(context)
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         automation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
+        automation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
         // The call's notification, which the app asks leave for when it signs up for pushes.
         automation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
     }
@@ -313,6 +343,60 @@ class CallEngineTest {
             val hold = "held (the browser listed $user on hold; ${heldPhoneLater.packets - heldPhone.packets} packets reached the phone " +
                 "and ${heldBrowserLater.first - heldBrowser.first} the browser in 2 s) and released (${releasedLater.packets - released.packets} packets in 2 s)"
 
+            // Video both ways. The browser shows video and turns its camera on (Chromium's fake
+            // camera, a moving pattern); the engine is asked to watch it, gets a section for it,
+            // and its track, retained as `CallVideo` retains one, delivers frames to a sink that
+            // counts them and reads their shape, upright: the sender turns them, no orientation
+            // extension being negotiated. (Drawing them needs a window; the bridge's proof has one.)
+            http("POST", "$helper/second-participant/show-video")
+            http("POST", "$helper/second-participant/camera/start")
+            call.engine.setWatched(listOf(WatchedVideo(bob, MediaSource.CAMERA)))
+            val watching = until("the browser's camera is received", 30, call) { state ->
+                state.videos.any { it.user == bob && it.source == MediaSource.CAMERA }
+            }
+            val remoteSurface = watching.videos.first { it.user == bob && it.source == MediaSource.CAMERA }.track
+            val remoteTrack = CallEngine.tracks.retainedVideoTrack(remoteSurface) ?: throw AssertionError("no video track $remoteSurface")
+            val remoteFrames = CountingSink()
+            remoteTrack.addSink(remoteFrames)
+            awaitTrue("the browser's camera's frames arrive", 20) { remoteFrames.frames >= 5 }
+            val remoteShape = remoteFrames.shape ?: throw AssertionError("no frame shape")
+            assertTrue("a picture: $remoteShape", remoteShape.first > 0 && remoteShape.second > 0)
+            assertEquals("received frames arrive upright", 0, remoteShape.third)
+
+            // The emulator's camera, opened as the engine's camera source: the browser decodes the
+            // frames and sees a picture in them rather than black; the preview's frames carry the
+            // camera's rotation, which what is sent is turned by.
+            val camera = CallEngine.camera(context)
+            val cameras = camera.devices
+            assertTrue("the emulator has cameras: $cameras", cameras.isNotEmpty())
+            val opened = cameraStarted(camera, null, api)
+            // The default is the front camera, or the first where the phone (this emulator) has none.
+            assertEquals(cameras.firstOrNull { it.facing == CallCameraDevice.Facing.FRONT } ?: cameras.first(), opened.second)
+            val selfFrames = CountingSink()
+            camera.track!!.addSink(selfFrames)
+            call.engine.startSource(MediaSource.CAMERA, opened.first)
+            until("the camera is live at the server", 20, call) { state ->
+                state.sources.any { it.source == MediaSource.CAMERA && it.live }
+            }
+            awaitTrue("the camera's frames arrive", 15) { selfFrames.frames >= 5 }
+            val selfShape = selfFrames.shape ?: throw AssertionError("no camera frame shape")
+            awaitTrue("the browser decodes the camera", 20) { browserVideoFrames(helper) > 10 }
+            val sample = untilSample("the browser sees a picture in it", 20, helper, user)
+            assertTrue("not black: $sample", sample.brightness > 20)
+            assertTrue("a picture, not a point: $sample", sample.width > 0 && sample.height > 0)
+            val other = cameras.firstOrNull { it.id != opened.second.id }
+            val moved = if (other != null) {
+                val moved = cameraStarted(camera, other.id, api)
+                assertEquals(other, moved.second)
+                assertEquals("the same track", opened.first, moved.first)
+                "moved to ${other.id} (${other.facing})"
+            } else {
+                "no other camera to move to"
+            }
+            val video = "watched the browser's camera (${remoteFrames.frames} frames of ${remoteShape.first}×${remoteShape.second}); " +
+                "sent the camera ${opened.second.id} (preview ${selfShape.first}×${selfShape.second} at ${selfShape.third}°), which the browser decoded " +
+                "(${browserVideoFrames(helper)} frames, a frame of brightness ${sample.brightness.toInt()} and spread ${sample.spread.toInt()} at ${sample.width}×${sample.height}); $moved"
+
             // The socket cut: the engine takes its place back with `resume` on a new socket, media
             // flowing meanwhile on the same peer connection.
             val session = connected.session
@@ -326,9 +410,20 @@ class CallEngineTest {
             assertEquals("the same peer connection", 1, peerConnections.count)
             assertTrue("the slots stand", resumed.slots.any { it.user == bob })
             val afterResume = inboundAudio(connection)
+            val framesAfterResume = remoteFrames.frames
             delay(2_000)
             val later = inboundAudio(connection)
             assertTrue("media flows on: $afterResume then $later", later.packets > afterResume.packets)
+            assertTrue("video flows on", remoteFrames.frames > framesAfterResume)
+            assertTrue("the video watched stands", resumed.videos.any { it.track == remoteSurface })
+
+            // The camera off: its source leaves the state and the capture stops.
+            call.engine.stopSource(MediaSource.CAMERA)
+            withContext(Dispatchers.Main) { camera.stop() }
+            until("the camera is gone from the sources", 10, call) { state -> state.sources.none { it.source == MediaSource.CAMERA } }
+            assertTrue(!camera.isOn)
+            remoteTrack.removeSink(remoteFrames)
+            CallEngine.tracks.releaseVideoTrack(remoteSurface, remoteTrack)
 
             // Leaving ends everything: the state is idle and the connection closed.
             call.engine.leave()
@@ -358,8 +453,8 @@ class CallEngineTest {
                     "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone source " +
                     "${if (microphoneSounding) "sounded" else "was silent"} (energy ${source.energy}, level ${source.level}); " +
                     "the browser received ${browserAfter.first - browserBefore.first} packets and " +
-                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; " +
-                    "resumed on socket 2 with session $session; the signalling socket negotiated ${sockets.latestExtensions}; left",
+                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; $video; " +
+                    "resumed on socket 2 with session $session with video flowing on; camera off; the signalling socket negotiated ${sockets.latestExtensions}; left",
             )
         } finally {
             listening.cancel()
@@ -467,6 +562,47 @@ class CallEngineTest {
     private suspend fun sourceAudio(connection: PeerConnection): SourceAudio {
         val source = entries(connection).firstOrNull { it.optString("type") == "media-source" && it.optString("kind") == "audio" }
         return SourceAudio(source?.optDouble("totalAudioEnergy", 0.0) ?: 0.0, source?.optDouble("audioLevel", 0.0) ?: 0.0)
+    }
+
+    /** Opens `camera` on `id` for `origin`'s engine, on the main thread, and answers the track and the camera opened. */
+    private suspend fun cameraStarted(camera: CallCamera, id: String?, origin: String): Pair<TrackId, CallCameraDevice> =
+        withContext(Dispatchers.Main) {
+            suspendCoroutine { continuation ->
+                camera.start(id, origin) { result ->
+                    result.fold({ continuation.resume(it) }, { continuation.resumeWithException(it) })
+                }
+            }
+        }
+
+    /** How many video frames the browser's connection has decoded, summed over its inbound video. */
+    private fun browserVideoFrames(helper: String): Int {
+        val streams = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("streams")
+        var frames = 0
+        for (i in 0 until streams.length()) {
+            val stream = streams.getJSONObject(i)
+            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "video") {
+                frames += stream.optInt("framesDecoded")
+            }
+        }
+        return frames
+    }
+
+    /** A sample of `user`'s camera from the browser, waiting up to `seconds` for a frame. */
+    private suspend fun untilSample(what: String, seconds: Long, helper: String, user: String): CameraSample {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        while (true) {
+            val answer = http("GET", "$helper/second-participant/camera-sample?user=$user")
+            if (answer != "null") {
+                val sample = JSONObject(answer)
+                if (sample.optInt("width") > 0) {
+                    return CameraSample(sample.getInt("width"), sample.getInt("height"), sample.getDouble("brightness"), sample.getDouble("spread"))
+                }
+            }
+            if (System.nanoTime() > deadline) {
+                fail("$what did not happen within $seconds s")
+            }
+            delay(500)
+        }
     }
 
     /** Whom the browser's call shows on hold, from the helper's report of it. */

@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Capacitor's own layout of the same name, with the app's web view (AspenWebView) in place of
-     its CapacitorWebView; the app's resource is the one the bridge inflates, which lint, reading
-     the app alone, takes for unused. -->
+     its CapacitorWebView, and beneath it the container the call's pictures are drawn in
+     (call/CallVideo.kt), which the web view, made transparent by the call plugin, shows through
+     the holes the page leaves; the app's resource is the one the bridge inflates, which lint,
+     reading the app alone, takes for unused. -->
 <androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -10,6 +12,12 @@
     tools:context="com.getcapacitor.BridgeActivity"
     tools:ignore="UnusedResources"
     >
+
+    <FrameLayout
+        android:id="@+id/video_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black" />
 
     <com.aspen_chat.client.input.AspenWebView
         android:id="@+id/webview"

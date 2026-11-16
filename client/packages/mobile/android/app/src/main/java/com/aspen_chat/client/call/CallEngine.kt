@@ -13,9 +13,9 @@ import com.aspen_chat.client.voice.SocketFactory
  * OkHttp, peer connections over WebRTC, the session from the account kept for push, the audio
  * mode and microphone, and the system's side of each call (`telecom`: the call in Telecom, the
  * service that keeps the process alive, and `routes`, where it plays), which follows the
- * engine's snapshots. The engine's methods are the call's commands and `snapshots`
- * is what it reports; the interface that commands it, and what plays and draws its tracks, are
- * later pieces, so nothing holds one of these yet.
+ * engine's snapshots. The engine's methods are the call's commands and `snapshots` is what it
+ * reports; `AspenCallPlugin` commands it for the web view, and the process's `video` draws its
+ * video tracks and `camera` captures the camera it sends.
  *
  * Starts an engine for the deployment at `origin` (its `public_url`), which the device's account
  * there, kept by the web view on sign-in, is the session of. `loopbackPlainText` lets a
@@ -54,11 +54,21 @@ class CallEngine(
     companion object {
         /** Every track on the device, however many deployments' engines run. */
         val tracks = CallTracks()
+        /** Where the call's pictures are drawn, whichever deployment's engine the call is. */
+        val video = CallVideo(tracks)
         private var shared: CallPeerConnections? = null
+        private var sharedCamera: CallCamera? = null
 
         /** One WebRTC factory for the process. */
         @Synchronized
         fun peerConnections(context: Context): CallPeerConnections =
             shared ?: CallPeerConnections(context.applicationContext, tracks).also { shared = it }
+
+        /** One camera for the process, on the factory's EGL context. */
+        @Synchronized
+        fun camera(context: Context): CallCamera = sharedCamera ?: run {
+            val media = peerConnections(context)
+            CallCamera(context.applicationContext, media.factory, media.eglContext, tracks).also { sharedCamera = it }
+        }
     }
 }

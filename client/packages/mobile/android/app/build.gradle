@@ -64,10 +64,10 @@ if (!callLayer) {
     // The Kotlin compile tasks take their sources from the source sets themselves, where a
     // source set's `exclude` does not reach them, so the layer is left out at the tasks.
     tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**'
+        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**', 'org/webrtc/**'
     }
     tasks.withType(JavaCompile).configureEach {
-        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**'
+        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**', 'org/webrtc/**'
     }
 }
 

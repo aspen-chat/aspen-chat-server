@@ -12,12 +12,16 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- A call's picture may go on in the system's picture-in-picture window as the user leaves
+             (call/AspenCallPlugin.kt); the configuration changes named keep the activity, and so
+             the call's page, through the shrink and the turn. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
             android:exported="true">
 
             <intent-filter>
@@ -67,12 +71,13 @@
             <meta-data android:name="photopicker_activity:0:required" android:value="" />
         </service>
         <!-- Keeps the process alive for the length of a call the call engine holds, with the
-             ongoing call's notification (call/CallService.kt). A build without the call layer
+             ongoing call's notification (call/CallService.kt), of the camera's kind too while the
+             call's camera is on. A build without the call layer
              (client/docs/architecture/android-builds.md) has no such class and never starts it. -->
         <service
             android:name=".call.CallService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall|microphone" />
+            android:foregroundServiceType="phoneCall|microphone|camera" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -115,4 +120,5 @@
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 </manifest>
