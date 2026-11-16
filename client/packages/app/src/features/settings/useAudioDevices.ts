@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AspenCall, nativeCalls, type PhoneCamera } from "@/api/nativeCall";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-import { type AudioDevices, sortDevices } from "@/features/settings/audioDevices";
+import {
+  type AudioDevices,
+  type CameraDevice,
+  sortDevices,
+} from "@/features/settings/audioDevices";
 
 /** A media permission that unlocks a list of devices: microphones and speakers, or cameras. */
 export type DeviceKind = "microphone" | "camera";
@@ -77,6 +82,7 @@ export function useAudioDevices(inCall: boolean): {
 } {
   const m = useMessages();
   const [listed, setListed] = useState<readonly MediaDeviceInfo[]>([]);
+  const phoneCameras = usePhoneCameras();
   const [refused, setRefused] = useState<Partial<Record<DeviceKind, "denied" | "absent">>>({});
   const mounted = useRef(false);
   const microphonePermission = usePermissionState("microphone");
@@ -158,12 +164,64 @@ export function useAudioDevices(inCall: boolean): {
             ? sortDevices(listed, named(m.settings.unnamedSpeaker)).outputs
             : [],
         cameras:
-          access.camera === "granted"
+          phoneCameras ??
+          (access.camera === "granted"
             ? sortDevices(listed, named(m.settings.unnamedCamera)).cameras
-            : [],
+            : []),
       },
-      access,
+      access:
+        phoneCameras === null
+          ? access
+          : { ...access, camera: phoneCameras.length > 0 ? "granted" : "absent" },
       requestAccess,
     };
-  }, [listed, refused, microphonePermission, cameraPermission, m, requestAccess]);
+  }, [listed, refused, microphonePermission, cameraPermission, m, requestAccess, phoneCameras]);
+}
+
+/**
+ * The phone's cameras where the native call engine carries the call (`nativeCalls`), as the
+ * system lists them through the plugin, each with which way it faces as the system says and
+ * named by that where the system gives no name; `null` everywhere else, where the browser
+ * lists them. The system lists them without asking the user, who is asked as the camera
+ * turns on, so they count as granted.
+ */
+function usePhoneCameras(): readonly CameraDevice[] | null {
+  const m = useMessages();
+  const [cameras, setCameras] = useState<readonly PhoneCamera[] | null>(null);
+  const native = nativeCalls();
+  useEffect(() => {
+    if (!native) {
+      return;
+    }
+    let current = true;
+    AspenCall.cameras().then(
+      ({ cameras: listed }) => {
+        if (current) {
+          setCameras(listed);
+        }
+      },
+      (error: unknown) => {
+        console.error(error);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [native]);
+  return useMemo(() => {
+    if (!native) {
+      return null;
+    }
+    return (cameras ?? []).map((camera, index) => ({
+      id: camera.id,
+      label:
+        camera.label ??
+        (camera.facing === "front"
+          ? m.settings.frontCamera
+          : camera.facing === "back"
+            ? m.settings.backCamera
+            : format(m.settings.unnamedCamera, { index: String(index + 1) })),
+      facing: camera.facing,
+    }));
+  }, [native, cameras, m]);
 }

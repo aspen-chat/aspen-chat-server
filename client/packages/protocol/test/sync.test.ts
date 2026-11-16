@@ -27,6 +27,7 @@ import {
   TYPING_EXPIRY_MS,
   TYPING_NOTICES,
   TYPING_REFRESH_MS,
+  VoiceCall,
   type Category,
   type Channel,
   type Community,
@@ -451,6 +452,26 @@ describe("AspenSync", () => {
     expect(person).toHaveBeenLastCalledWith("someone", 0.75);
     await sync.setStreamVolume("someone", 2);
     expect(person).toHaveBeenLastCalledWith("someone", 1, "screenAudio");
+    sync.stop();
+  });
+
+  it("never tells a call that has no input volume the microphone's", async () => {
+    const told: number[] = [];
+    /** A call whose microphone is sent as captured, as the mobile apps' native calls are. */
+    class WithoutGain extends VoiceCall {
+      override readonly hasInputVolume = false;
+
+      override setInputVolume(gain: number): void {
+        told.push(gain);
+      }
+    }
+    const { sync } = makeSync({}, () => 0, { createCall: (options) => new WithoutGain(options) });
+    expect(sync.voice.hasInputVolume).toBe(false);
+    await sync.preferences.set(INPUT_VOLUME, 1.5);
+    const refresh = vi.spyOn(sync.voice, "refreshVolumes");
+    await sync.preferences.set(OUTPUT_VOLUME, 0.5);
+    expect(told).toEqual([]);
+    expect(refresh).toHaveBeenCalledTimes(1);
     sync.stop();
   });
 

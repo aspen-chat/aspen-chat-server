@@ -50,20 +50,25 @@ types lack, is reported (`NativeCallProtocolError`) and shown nothing of.
 
 `stateOf` maps `EngineCallState` to `VoiceCallState`, every variant decided by name:
 
-| `VoiceCallState`                                                                            | From the snapshot                                                                                                                                                                                                                                                                                |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `status`                                                                                    | `status`, the same five names                                                                                                                                                                                                                                                                    |
-| `channelId`, `session`                                                                      | `channel`, `session`                                                                                                                                                                                                                                                                             |
-| `muted`, `deafened`, `held`                                                                 | The same; the engine shows a silencing the moment it is asked and a lifting on the server's word, as `VoiceCall` does                                                                                                                                                                            |
-| `onHold`                                                                                    | The participants whose `held` is set, in id order                                                                                                                                                                                                                                                |
-| `serverMuted`                                                                               | The same                                                                                                                                                                                                                                                                                         |
-| `canSpeak`                                                                                  | `grants.speak`                                                                                                                                                                                                                                                                                   |
-| `errorKind`                                                                                 | The engine's `offer` (the API server refused the join offer) becomes `server`, which is what `VoiceCall` classes a refused offer as (`failure` in `voice.ts`); the Problem's text is `error` either way, so the call bar reads the same on a phone as in a browser. The other four cross by name |
-| `error`, `retryAfterSeconds`                                                                | The same                                                                                                                                                                                                                                                                                         |
-| `stateRefused`                                                                              | `{ retryAfterSeconds }` of the engine's `Refusal`                                                                                                                                                                                                                                                |
-| `endedReason`                                                                               | The same three names                                                                                                                                                                                                                                                                             |
-| `canShare`, `canCamera`, `canTransfer`                                                      | `false`, whatever the grants say: this stage carries voice alone                                                                                                                                                                                                                                 |
-| `files`, `sharingScreen`, `localScreen`, `screens`, `localCamera`, `cameras`, `cameraError` | The idle state's: nothing is offered, sent, or watched                                                                                                                                                                                                                                           |
+| `VoiceCallState`               | From the snapshot                                                                                                                                                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status`                       | `status`, the same five names                                                                                                                                                                                                                                                                    |
+| `channelId`, `session`         | `channel`, `session`                                                                                                                                                                                                                                                                             |
+| `muted`, `deafened`, `held`    | The same; the engine shows a silencing the moment it is asked and a lifting on the server's word, as `VoiceCall` does                                                                                                                                                                            |
+| `onHold`                       | The participants whose `held` is set, in id order                                                                                                                                                                                                                                                |
+| `serverMuted`                  | The same                                                                                                                                                                                                                                                                                         |
+| `canSpeak`                     | `grants.speak`                                                                                                                                                                                                                                                                                   |
+| `errorKind`                    | The engine's `offer` (the API server refused the join offer) becomes `server`, which is what `VoiceCall` classes a refused offer as (`failure` in `voice.ts`); the Problem's text is `error` either way, so the call bar reads the same on a phone as in a browser. The other four cross by name |
+| `error`, `retryAfterSeconds`   | The same                                                                                                                                                                                                                                                                                         |
+| `stateRefused`                 | `{ retryAfterSeconds }` of the engine's `Refusal`                                                                                                                                                                                                                                                |
+| `endedReason`                  | The same three names                                                                                                                                                                                                                                                                             |
+| `canCamera`                    | `grants.camera`                                                                                                                                                                                                                                                                                  |
+| `canShare`, `canTransfer`      | `false`, whatever the grants say: screen sharing from the phone and file transfers are later stages                                                                                                                                                                                              |
+| `cameras`, `screens`           | The `videos` of other users (the user's own, their share watched for its preview, left out), each a `RemoteScreen` whose `id` is the engine's track and whose `video` is a `VideoSource` of the `native` kind naming that track as its surface, in the engine's order                            |
+| `localCamera`                  | The `camera` among `sources`, as a native surface, facing as the plugin said when it opened the camera (`LocalVideo.facing`, the page's own; the engine carries no facing); `null` when none is sent                                                                                             |
+| `sharingScreen`, `localScreen` | Whether a `screen` is among `sources`, and it as a native surface; never set in this stage, since the phone sends no share yet                                                                                                                                                                   |
+| `cameraError`                  | `null` while a camera is sent; else `unsent` when `sourceRefused` names the camera (the voice server refused it); else the plugin's last refusal to open one (`LocalVideo.cameraFailure`: `denied`, `none`, or `failed`), kept until the camera opens, `clearCameraError`, or the call ends      |
+| `files`                        | The idle state's: nothing is offered                                                                                                                                                                                                                                                             |
 
 ## Commands
 
@@ -81,17 +86,39 @@ them, so `NativeCall` tells it, as each participant first appears in a snapshot,
 answers for their voice and their share's sound; `refreshVolumes` tells it again for everyone
 present; `setUserVolume` sends what it is given; the call's end forgets whom it told.
 
-What this stage has no native counterpart for is never a silent no-op:
+The camera: `startCamera` asks the plugin (`startCamera` with the camera chosen by the system's id,
+or `null` for the phone's default), which asks the system for the camera, opens it, and gives the
+engine the track to send; it answers which camera it opened and which way it faces, which the page
+keeps as `LocalVideo.facing` for mirroring the preview, and a refusal's code (`denied`, `none`,
+`failed`) becomes `cameraError` and a `CameraError` thrown, as `VoiceCall` throws one. Nothing is
+asked outside a call or where the camera is not granted, as in `VoiceCall`. `stopCamera` and
+`clearCameraError` go to the plugin's methods of those names (the latter also forgetting the page's
+own failure). `setAudioDevices` keeps the chosen camera's id for the next start and, while the
+camera is on, moves it with the plugin's `switchCamera`, which answers the new facing; the cameras
+to choose from are the phone's, listed by the plugin's `cameras()` with each one's facing as the
+system says it (`usePhoneCameras` in `useAudioDevices.ts`), so the flip button and the camera list
+work as in a browser.
 
-- The camera, screen sharing (browser and external), and the file transfers reject or throw
+What is shown is what is watched: `showVideo` counts the places showing video, and while there are
+any the engine is asked (`setWatched`) to watch every screen and camera another participant sends,
+in the participants' order (`watchedOf`), again whenever a snapshot changes that, and none when
+nothing shows them; the engine cuts the list to `maxWatchedVideo`. Outside a call nothing is asked,
+since the engine keeps nothing to watch.
+
+What a native call has no counterpart for is never a silent no-op:
+
+- Screen sharing (browser and external) and the file transfers reject or throw
   `NativeCallUnavailableError`, naming what is missing; the controls that would ask are hidden by
   the grants above.
-- `showVideo` returns a function and does nothing: the engine watches no video yet.
-- `setAudioDevices` takes the system's defaults (the phone's one microphone is what is sent, and the
-  route is where the call plays) and rejects a device chosen by id, which the engine has no
-  counterpart for.
-- `setInputVolume(1)` is what the engine does (the microphone as captured); any other gain is
-  reported, since neither platform's audio device offers a gain over it yet.
+- `setAudioDevices` takes the system's default microphone and speaker (the phone's one microphone is
+  what is sent, and the route is where the call plays) and rejects either chosen by id, which the
+  engine has no counterpart for.
+- The microphone is sent as the phone captures it: neither platform's audio device module applies a
+  gain over it, so `NativeCall.hasInputVolume` is `false` (`VoiceCall`'s is `true`), the sync never
+  calls `setInputVolume` on it (`applyVolumes` in `sync.ts`), the input volume slider is left out of
+  Settings and of the mute button's popover, whose arrow goes with it
+  ([the call screen](call-screen.md), Device arrows), and `setInputVolume` throws
+  `NativeCallUnavailableError` should anything call it.
 
 ## The microphone and the system's permission
 
@@ -120,6 +147,55 @@ whether it is in use, whether the device has a receiver, and the kind chosen; `u
 reads `PhoneOutputs` off them (`outputsOf`), so the Speaker button shows only while a phone has its
 receiver and loudspeaker and nothing else to play through, as before.
 
+## Video
+
+The phone's call engine draws every picture natively, behind a transparent web view: the page leaves
+a transparent hole where each picture goes and draws names, buttons, popovers, and dialogs over it
+as it does over a `<video>`, and nothing is ever drawn above the page. Every picture in the state is
+a `VideoSource` of the `native` kind, a surface named by the engine's track id (`media.md`, Showing
+cameras), and `ScreenTile` draws one as a hole (`NativePicture`). Three things cross the bridge for
+it (`src/features/voice/nativeVideo.ts`):
+
+- **The page reports every hole's rectangle** (`AspenCall.setTiles`, every tile as
+  `{ tile, surface, rect, visible, mirrored, cover, fullScreen, pictureInPicture }`): `tile` is the
+  page's id for the hole, unique for the page's life, since two tiles may show one surface (a
+  share's thumbnail and the focused screen); `rect` is in CSS pixels of the page as they appear on
+  screen (the visual viewport's offset and scale applied), which the native side converts to its own
+  units; `visible` says whether the hole is on screen at all; `mirrored` mirrors the picture (the
+  self preview, while the camera faces its user); `cover` crops the picture to fill the hole rather
+  than fitting it whole; `fullScreen` says the tile fills the screen, on which the native side takes
+  the screen's own bounds rather than the rectangle, so a turn needs no round trip through the
+  page's layout; and `pictureInPicture` names the one picture the system's picture in picture is to
+  show. `NativeVideoLayout` measures every hole on an animation frame whenever a hole mounts,
+  unmounts, or changes what it shows, whenever a hole's own size changes (`ResizeObserver`), and
+  whenever anything on the page may have moved one (a scroll anywhere, a transition or animation
+  starting, the window or the visual viewport resizing), and keeps measuring every frame until every
+  hole has stood still for two frames, so the last frame of a transition is reported too; an
+  unchanged layout is not sent again, and a rectangle is rounded to half a pixel so a settled layout
+  never reads as motion. This is the known weak point of the design: the native picture follows the
+  page's layout a frame or two behind while a tile moves, so the call screen on a phone pages rather
+  than scrolls (`call-screen.md`, On a phone).
+- **The native side reports each picture's shape back** (`shape` events,
+  `{ surface, width, height, rotation }`, upright: a phone's camera held upright is taller than
+  wide, the sender's rotation already applied), as its first frame arrives and whenever it changes,
+  which `useNativePictureShape` gives `ScreenTile` in place of a `<video>`'s dimensions.
+- **The native side says when the system shows the call as a picture in picture** (`pip` events,
+  `{ active }`), which `usePictureInPicture` gives the call screen: on Android the whole page is
+  shown small then, so the stage shows the one picture alone; on iOS the system draws the picture
+  itself and the page is unaffected.
+
+The holes are cut through the page by `styles.css`: while any hole is on the page the root carries
+`data-video-holes`, under which the root and every ancestor of a hole (`[data-video-hole]`) paint no
+background, and `NativeVideoBackdrop` (mounted once at the app's root) paints the page's ground
+beneath everything with the holes' rectangles cut out as an even-odd `clip-path`, so what was behind
+each hole is the native picture and nothing else changes. A hole is a rectangle; a tile's rounded
+corners are an opaque frame the tile draws over the hole's corners in the ground's colour, since the
+native pictures have no corner radius. Until a picture's first frame the hole shows the native
+container behind the web view, which is black, as a `<video>` with nothing to play is.
+
+How each platform draws the surfaces, captures the camera, and shows a picture in picture is
+`ios-app.md` and `android-builds.md`, The call engine (Video).
+
 ## Sounds
 
 The call's sounds (`callSounds.ts`: joining, leaving, shares, transfers, losing and regaining the
@@ -133,24 +209,28 @@ holds the call, and through the route the call plays on, is on the device checkl
 
 ## The stages
 
-This is the first stage of the native call's bridge, voice alone; each later one adds to the same
-plugin and the same `NativeCall`:
+The native call's bridge is built in stages, each adding to the same plugin and the same
+`NativeCall`; the first two are in place:
 
-1. Voice (this stage): join, leave, mute, deafen, hold, server mutes, per-person volume, session
-   endings, the routes.
-2. Video: the engine's `videos` and `share_audio` as opaque surfaces behind a transparent web view,
-   `showVideo` sending `watch`, the camera (`startCamera`, `stopCamera`, `cameraError`, the flip),
-   and the grants `canCamera` set from the snapshot.
+1. Voice: join, leave, mute, deafen, hold, server mutes, per-person volume, session endings, the
+   routes.
+2. Video: the engine's `videos` as surfaces behind a transparent web view, `showVideo` sending
+   `watch`, the camera (`startCamera`, `stopCamera`, `cameraError`, the flip), and `canCamera` from
+   the snapshot's grants.
 3. Screen sharing from the phone (`canShare`, `startScreenShare`).
 4. File transfers in the engine (`canTransfer`, `files`, and the offer and transfer commands).
 5. The call's sounds and rings in the engine, from the same cues the page derives today.
-6. Microphone gain and device choice (`setInputVolume`, `setAudioDevices` by id).
+6. The microphone chosen by device (`setAudioDevices` by id). A gain on it is not planned: the
+   phones' audio device modules apply none, which `hasInputVolume` says.
 
 ## Proofs
 
 - `src/api/nativeCall.test.ts` (Vitest, a fake plugin): every mapping, parsing, revision ordering,
-  the re-read on waking, each forwarded command, the volumes, the join's outcomes, and the
-  rejections. `src/api/audioRoute.test.tsx` reads the outputs off the typed routes.
+  the re-read on waking, each forwarded command, the volumes, the join's outcomes, the video (the
+  videos as surfaces, the watching following what is shown, the camera's start, facing, failures,
+  choice, and stop), the missing input volume, and the rejections. `src/api/audioRoute.test.tsx`
+  reads the outputs off the typed routes; `test/sync.test.ts` in the protocol package checks that
+  the sync never tells a call without `hasInputVolume` the microphone's volume.
 - `AppTests/AspenCallPluginTests` (iOS) and `androidTest`'s `AspenCallPluginTest` (Android) drive
   the real bridge from the app's own page, as `scripts/check_mobile_call.py` runs them beside the
   engine's tests against a deployment of its own (`ios-app.md` and `android-builds.md`, The proof).

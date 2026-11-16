@@ -116,20 +116,18 @@ export function orientationFor(width: number, height: number): "landscape" | "po
 }
 
 /**
- * Turns the screen to the picture's orientation while it is full screen, and frees it again
- * after. Where the orientation cannot be locked (a desktop, a browser outside full screen), the
- * request is refused and nothing changes.
+ * Turns the screen to the orientation that shows a picture of `shape` largest while it is full
+ * screen, and frees it again after. Where the orientation cannot be locked (a desktop, a
+ * browser outside full screen), the request is refused and nothing changes.
  */
 export function useOrientationLock(
   state: FullScreenState,
-  video: RefObject<HTMLVideoElement | null>,
+  shape: { width: number; height: number } | null,
 ) {
+  const width = shape?.width ?? 0;
+  const height = shape?.height ?? 0;
   useEffect(() => {
-    const element = video.current;
-    const orientation =
-      state === "off" || element === null
-        ? null
-        : orientationFor(element.videoWidth, element.videoHeight);
+    const orientation = state === "off" ? null : orientationFor(width, height);
     if (orientation === null) {
       return;
     }
@@ -140,5 +138,5 @@ export function useOrientationLock(
     return () => {
       void plugin.then((screen) => screen.unlock()).catch(() => undefined);
     };
-  }, [state, video]);
+  }, [state, width, height]);
 }

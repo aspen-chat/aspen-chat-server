@@ -29,7 +29,11 @@ import {
   SpeakerphoneButton,
   WithDeviceArrow,
 } from "@/features/voice/DeviceArrows";
-import { useCameraFlip, useSpeakerphoneButton } from "@/features/voice/deviceControls";
+import {
+  useCameraFlip,
+  useMicrophoneOptions,
+  useSpeakerphoneButton,
+} from "@/features/voice/deviceControls";
 import { FilesButton } from "@/features/voice/FilesPanel";
 import { isMobilePlatform } from "@/features/layout/platform";
 import { MEDIUM_WIDTH, useMediaQuery } from "@/features/layout/useMediaQuery";
@@ -44,7 +48,8 @@ const SECONDS: Intl.NumberFormatOptions = { style: "unit", unit: "second", unitD
 /**
  * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
  * people), which opens that room, and below it its buttons (`CallControls`). Mute, deafen,
- * and camera each have an arrow at their end for choosing their device.
+ * and camera each have an arrow at their end for choosing their device, mute's only where
+ * there is a microphone or a volume to choose (`useMicrophoneOptions`).
  */
 export function CallBar() {
   const m = useMessages();
@@ -52,6 +57,7 @@ export function CallBar() {
   const call = useVoiceCall();
   const channel = useChannel(call.channelId ?? "");
   const seconds = useNumberFormat(SECONDS);
+  const microphoneOptions = useMicrophoneOptions();
   if (call.status === "idle" || call.channelId === null) {
     return null;
   }
@@ -132,7 +138,7 @@ export function CallBar() {
               )
             }
           >
-            <InputDevices />
+            {microphoneOptions ? <InputDevices /> : null}
           </WithDeviceArrow>
         }
         deafen={

@@ -166,11 +166,11 @@ export interface VoiceCallState {
    * sent from outside the browser is previewed from the voice server, while video is shown
    * (`showVideo`).
    */
-  localScreen: MediaStreamTrack | null;
+  localScreen: VideoSource | null;
   /** The screens other participants are sharing, while video is shown, in the order they arrived. */
   screens: readonly RemoteScreen[];
   /** This client's camera while it is on, for its own tile; `null` when off. */
-  localCamera: MediaStreamTrack | null;
+  localCamera: VideoSource | null;
   /** The cameras other participants have on, while video is shown, in the order they arrived. */
   cameras: readonly RemoteScreen[];
   /**
@@ -207,12 +207,33 @@ export interface VoiceCallState {
   readonly endedReason: VoiceSessionEndReason | "kicked" | "accessLost" | null;
 }
 
-/** A screen another participant is sharing, or their camera, as a playable video track. */
+/** Which way a camera looks: toward its user (`front`), or away from them (`back`). */
+export type VideoFacing = "front" | "back";
+
+/**
+ * A picture the call screen draws. Where the browser carries the call's media it is a
+ * `MediaStreamTrack`, which a `<video>` plays; in the mobile apps, whose calls the phone's
+ * engine carries (`NativeCall`), it is a surface the phone draws natively behind the page,
+ * named by the engine's track id, and the page leaves a hole for it where the picture goes
+ * (`ScreenTile`). A native camera of the user's own says which way it faces, so its preview
+ * can be mirrored as a mirror would show them; a picture received from someone else says
+ * nothing of it. Every reader decides by `kind`.
+ */
+export type VideoSource =
+  | { readonly kind: "track"; readonly track: MediaStreamTrack }
+  | { readonly kind: "native"; readonly surface: string; readonly facing: VideoFacing | null };
+
+/** `track` as the picture the call screen draws. */
+export function trackSource(track: MediaStreamTrack): VideoSource {
+  return { kind: "track", track };
+}
+
+/** A screen another participant is sharing, or their camera, as a picture to draw. */
 export interface RemoteScreen {
   readonly user: string;
   /** The media section carrying it, unique in the call for as long as it is shown. */
   readonly id: string;
-  readonly track: MediaStreamTrack;
+  readonly video: VideoSource;
 }
 
 export interface VoiceCallOptions {
@@ -452,7 +473,14 @@ export interface Call {
     output: DeviceChoice;
     camera?: DeviceChoice;
   }): Promise<void>;
-  /** How loud the user's microphone is sent: a gain, 1 as captured. */
+  /**
+   * Whether `setInputVolume` can change how loud the microphone is sent. A browser scales the
+   * microphone itself; the phones' audio device modules apply no gain over what they capture, so
+   * the mobile apps' calls say `false`, the input volume slider is not shown for them, and
+   * `setInputVolume` is never called on them.
+   */
+  readonly hasInputVolume: boolean;
+  /** How loud the user's microphone is sent: a gain, 1 as captured. Only where `hasInputVolume`. */
   setInputVolume(gain: number): void;
   /** Sets every received sound's gain again from `userVolume`, after what it answers has changed. */
   refreshVolumes(): void;
@@ -809,7 +837,7 @@ export class VoiceCall implements Call {
       capture.video.contentHint = contentHint;
     }
     this.#screen = capture;
-    this.#set({ sharingScreen: true, localScreen: capture.video });
+    this.#set({ sharingScreen: true, localScreen: trackSource(capture.video) });
     capture.video.addEventListener("ended", () => {
       if (this.#screen === capture) {
         this.stopScreenShare();
@@ -936,7 +964,7 @@ export class VoiceCall implements Call {
     }
     const camera = { track };
     this.#camera = camera;
-    this.#set({ localCamera: track, cameraError: null });
+    this.#set({ localCamera: trackSource(track), cameraError: null });
     this.#endWithTrack(camera, track);
     this.#startSending("camera", { track, encoding: CAMERA_ENCODING });
   }
@@ -1019,7 +1047,7 @@ export class VoiceCall implements Call {
       return;
     }
     if (current()) {
-      this.#set({ localCamera: track });
+      this.#set({ localCamera: trackSource(track) });
     }
   }
 
@@ -1056,6 +1084,8 @@ export class VoiceCall implements Call {
       this.#holdMicrophone();
     }
   }
+
+  readonly hasInputVolume: boolean = true;
 
   /**
    * How loud the user's microphone is sent, from their preference: a gain, 1 as captured.
@@ -1859,28 +1889,31 @@ export class VoiceCall implements Call {
         }
         const transceiver = this.#transceiver(mid);
         if (transceiver !== null) {
-          kept.push({ user: section.user, id: mid, track: transceiver.receiver.track });
+          kept.push({
+            user: section.user,
+            id: mid,
+            video: trackSource(transceiver.receiver.track),
+          });
         }
       }
       return kept;
     };
     const preview =
       this.#externalShare === null
-        ? null
+        ? undefined
         : [...this.#sections].find(
             ([, section]) =>
               section.carries === "video" && section.source === "screen" && section.user === self,
           )?.[0];
+    const previewTrack =
+      preview === undefined ? undefined : this.#transceiver(preview)?.receiver.track;
     this.#set({
       screens: shown("screen", this.#state.screens),
       cameras: shown("camera", this.#state.cameras),
       ...(this.#externalShare === null
         ? {}
         : {
-            localScreen:
-              preview === undefined || preview === null
-                ? null
-                : (this.#transceiver(preview)?.receiver.track ?? null),
+            localScreen: previewTrack === undefined ? null : trackSource(previewTrack),
           }),
     });
   }

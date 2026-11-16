@@ -148,15 +148,25 @@ The call bar shows it under its buttons with what to do.
 
 ### Showing cameras
 
+Every picture the call screen draws, a camera or a shared screen, is a `VideoSource` (`voice.ts`): a
+`MediaStreamTrack` where the browser carries the call's media, which a `<video>` plays, or in the
+mobile apps a surface the phone's call engine draws natively behind the page, named by the engine's
+track id, for which the page leaves a hole ([native calls](native-calls.md), Video).
+`RemoteScreen.video`, `state.localCamera`, and `state.localScreen` carry one, and every reader
+decides by its `kind`.
+
 The call screen shows each camera above its owner's name in place of the avatar. The tile is four
 columns wide where they fit and the whole row where not, and the camera's picture in it takes the
-camera's own shape (`ScreenTile`'s `natural`, read from the picture as its frames arrive), no taller
-than 70% of the screen, so tiles are as uneven as the cameras. The user's own is mirrored while it
-faces them or its direction is unknown (`trackFacing`: the track's `facingMode`, else its name), and
-a phone's back camera is not. A camera goes full screen by its corner button or a double click
-(`ScreenTile`), but not the F key, which means the shared screen. Each track plays in a `<video>` of
-its own, since WebKit on iOS draws a phone's other camera, put on the element that played the first,
-at the first one's rotated size, a portrait picture shrunk inside a black square.
+camera's own shape (`ScreenTile`'s `natural`, read from the picture as its frames arrive: a track's
+from its `<video>`, a native surface's from what the phone reports of it), no taller than 70% of the
+screen, so tiles are as uneven as the cameras; on a phone, and wherever the picture is native, the
+camera fills its tile instead, cropped ([the call screen](call-screen.md), On a phone). The user's
+own is mirrored while it faces them or its direction is unknown (`trackFacing`: a native camera's
+facing as the phone says it; a track's `facingMode`, else its name), and a phone's back camera is
+not. A camera goes full screen by its corner button or a double click (`ScreenTile`), but not the F
+key, which means the shared screen. Each track plays in a `<video>` of its own, since WebKit on iOS
+draws a phone's other camera, put on the element that played the first, at the first one's rotated
+size, a portrait picture shrunk inside a black square.
 
 ## Signalling frames
 

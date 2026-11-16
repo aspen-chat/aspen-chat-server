@@ -25,7 +25,8 @@ import { useMessages } from "@/i18n/context";
 /**
  * A call bar button with the small arrow at its end that opens `children` in a popover above
  * it. The arrow lies over the button's own padding, out of the layout, so the button keeps the
- * size and place it has without one.
+ * size and place it has without one. With `null` for `children` there is nothing to open, and
+ * the button stands alone.
  */
 export function WithDeviceArrow({
   label,
@@ -36,6 +37,9 @@ export function WithDeviceArrow({
   control: ReactNode;
   children: ReactNode;
 }) {
+  if (children === null) {
+    return <div className="relative flex min-w-0 flex-1">{control}</div>;
+  }
   return (
     <div className="relative flex min-w-0 flex-1">
       {control}
@@ -63,7 +67,7 @@ export function WithDeviceArrow({
 
 /**
  * The microphone the call sends and how loud. On a phone or tablet with one microphone there is
- * nothing to choose, and only the volume shows.
+ * nothing to choose, and only the volume shows, where the call applies one.
  */
 export function InputDevices() {
   const m = useMessages();
@@ -85,13 +89,15 @@ export function InputDevices() {
           defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
         />
       )}
-      <VolumeSlider
-        label={m.voice.inputVolume}
-        gain={gain}
-        onChange={(value) => {
-          void sync.preferences.set(INPUT_VOLUME, value);
-        }}
-      />
+      {sync.voice.hasInputVolume && (
+        <VolumeSlider
+          label={m.voice.inputVolume}
+          gain={gain}
+          onChange={(value) => {
+            void sync.preferences.set(INPUT_VOLUME, value);
+          }}
+        />
+      )}
     </>
   );
 }

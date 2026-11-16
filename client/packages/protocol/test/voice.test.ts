@@ -19,6 +19,7 @@ import {
   type CameraFailure,
   type CaptureOffer,
   type VoiceMedia,
+  trackSource,
 } from "../src";
 import type { ClientMessage, MediaSource, Section } from "../src/generated/voiceSignal";
 
@@ -1007,14 +1008,14 @@ describe("VoiceCall", () => {
     const back = cameraTracks[1]?.track;
     expect(front?.stopped).toBe(true);
     expect(cameraTracks.map((c) => c.besideOpen)).toEqual([false, false]);
-    expect(call.state.localCamera).toBe(back);
+    expect(call.state.localCamera).toEqual({ kind: "track", track: back });
     // The same section sends the new camera, with nothing renegotiated.
     expect(sendingOn("camera")?.sender.track).toBe(back);
     expect(FakeSocket.instances[0]?.sent.filter((f) => f.type === "stopSending")).toEqual([]);
     // The camera it moved from ending, as iOS ends it, leaves the camera on; the one in use
     // ending turns it off.
     front?.end();
-    expect(call.state.localCamera).toBe(back);
+    expect(call.state.localCamera).toEqual({ kind: "track", track: back });
     back?.end();
     expect(call.state.localCamera).toBeNull();
     // With no camera to move to, the camera turns off and says why.
@@ -1036,7 +1037,7 @@ describe("VoiceCall", () => {
       call.setAudioDevices({ ...devices, camera: { id: "front", label: "Front Camera" } }),
     ]);
     const latest = cameraTracks.at(-1)?.track;
-    expect(call.state.localCamera).toBe(latest);
+    expect(call.state.localCamera).toEqual({ kind: "track", track: latest });
     expect(latest?.stopped).toBe(false);
     expect(cameraTracks.filter((c) => !c.track.stopped)).toHaveLength(1);
   });
@@ -1100,7 +1101,7 @@ describe("VoiceCall", () => {
     await call.startScreenShare();
     await settle();
     expect(call.state.sharingScreen).toBe(true);
-    expect(call.state.localScreen).toBe(screens[0]?.video);
+    expect(call.state.localScreen).toEqual({ kind: "track", track: screens[0]?.video });
     expect(socket?.sent.filter((f) => f.type === "send")).toEqual([
       { type: "send", source: "microphone" },
       { type: "send", source: "screen" },
@@ -1156,7 +1157,7 @@ describe("VoiceCall", () => {
       prepared: prepared as unknown as { video: MediaStreamTrack; audio: null },
     });
     expect(screens).toHaveLength(0);
-    expect(call.state.localScreen).toBe(prepared.video);
+    expect(call.state.localScreen).toEqual({ kind: "track", track: prepared.video });
     const sends = FakeSocket.instances[0]?.sent.filter((f) => f.type === "send");
     expect(sends?.map((f) => f.source)).toEqual(["microphone", "screen"]);
     call.stopScreenShare();
@@ -1183,7 +1184,10 @@ describe("VoiceCall", () => {
     expect(socket?.answers("capture")).toEqual([
       { type: "answer", connection: "capture", revision: 1, sdp: "capture answer 1" },
     ]);
-    expect(call.state).toMatchObject({ sharingScreen: true, localScreen: screens[0]?.video });
+    expect(call.state).toMatchObject({
+      sharingScreen: true,
+      localScreen: { kind: "track", track: screens[0]?.video },
+    });
     // an external share cannot start alongside it
     const external = fakeSender(false);
     await call.startExternalScreenShare(external.sender as never);
@@ -1459,6 +1463,7 @@ describe("VoiceCall", () => {
   it("opens the microphone at the input volume and changes it on the open one", async () => {
     FakeSocket.behaviour = new Map();
     const { call, inputVolumes } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    expect(call.hasInputVolume).toBe(true);
     call.setInputVolume(1.5);
     await call.join(channel);
     call.setInputVolume(0.5);
@@ -1657,7 +1662,9 @@ describe("VoiceCall", () => {
     socket?.offer();
     await settle();
     expect(call.state.cameras.map((c) => [c.user, c.id])).toEqual([["cat", "v1"]]);
-    expect(call.state.cameras[0]?.track).toBe(connection()?.transceiver("v1")?.receiver.track);
+    const received = connection()?.transceiver("v1")?.receiver.track;
+    expect(received).toBeDefined();
+    expect(call.state.cameras[0]?.video).toEqual(received && trackSource(received));
     expect(volumes.at(-1)).toBe("a1=0.25");
     expect(played.filter((id) => id === "a1")).toHaveLength(1);
   });

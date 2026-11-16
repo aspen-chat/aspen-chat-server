@@ -5,6 +5,8 @@ export type { ClientMessage, ServerEvent, ServerMessage } from "./generated/even
  * `CallState`, `call_bridge_schema.json`), which the apps' `NativeCall` reads.
  */
 export type { CallState as EngineCallState } from "./generated/callBridge";
+/** A video a call asks the voice server for, as the signalling's `watch` names it. */
+export type { WatchedVideo } from "./generated/voiceSignal";
 export {
   AspenClient,
   problemOf,
@@ -400,6 +402,9 @@ export {
   type Call,
   type CameraFailure,
   type RemoteScreen,
+  trackSource,
+  type VideoFacing,
+  type VideoSource,
   type VoiceCallListener,
   type VoiceCallOptions,
   type VoiceCallState,

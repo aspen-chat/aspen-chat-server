@@ -7,6 +7,7 @@ import { SavedSignInsGate } from "@/features/auth/SavedSignInsGate";
 import { ServerForm } from "@/features/auth/ServerForm";
 import { ServerChoiceContext } from "@/features/auth/serverChoice";
 import { Toasts } from "@/features/layout/Toasts";
+import { NativeVideoBackdrop } from "@/features/voice/NativeVideoBackdrop";
 import { router } from "@/router";
 
 /** The app, once the sign-ins saved on this device can be read. */
@@ -76,6 +77,7 @@ function ChosenServer() {
       >
         <RouterProvider router={router} />
         <Toasts fallback />
+        <NativeVideoBackdrop />
       </ServerChoiceContext.Provider>
     </AspenProvider>
   );

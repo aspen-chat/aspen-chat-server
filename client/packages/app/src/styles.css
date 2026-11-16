@@ -491,6 +491,20 @@ body,
   padding-bottom: 0;
 }
 
+/* In the mobile apps a call's pictures are drawn natively behind the page, which leaves a
+   transparent hole where each goes (`features/voice/nativeVideo.tsx`, `data-video-hole`). A
+   hole shows the picture only if nothing above it paints, so while any hole is on the page
+   (`data-video-holes` on the root) the root and every ancestor of a hole paint no background;
+   `NativeVideoBackdrop` paints the page's ground beneath everything with the holes cut out, so
+   the page looks as it did. Unlayered, so it stands over Tailwind's utilities on the same
+   elements. What is beside an ancestor (a header, a pane's neighbour) is not an ancestor and
+   paints as ever, as does everything drawn over the hole. */
+:root[data-video-holes],
+:root[data-video-holes] :has([data-video-hole]) {
+  background-color: transparent;
+  background-image: none;
+}
+
 /* The title bar's strip is where the window is dragged by, and a drag region takes every click
    in it, whatever is drawn over it. Overlays (popovers, menus, tooltips) are rendered beside
    `#root`, and one that opens over the strip must still be clicked. */

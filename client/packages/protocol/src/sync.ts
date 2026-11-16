@@ -675,10 +675,13 @@ export class AspenSync {
     };
     this.preferences.subscribe(applyDevices);
     applyDevices();
-    // So do the microphone's volume and the call's, which every person's own volume is scaled by.
+    // So do the microphone's volume, where the call can apply one, and the call's, which every
+    // person's own volume is scaled by.
     let outputVolume = this.preferences.get(OUTPUT_VOLUME);
     const applyVolumes = () => {
-      this.voice.setInputVolume(this.preferences.get(INPUT_VOLUME));
+      if (this.voice.hasInputVolume) {
+        this.voice.setInputVolume(this.preferences.get(INPUT_VOLUME));
+      }
       const output = this.preferences.get(OUTPUT_VOLUME);
       if (output !== outputVolume) {
         outputVolume = output;

@@ -1,5 +1,5 @@
 import { DEFAULT_DEVICE, VIDEO_INPUT, resolveDevice } from "@aspen/protocol";
-import { usePreference, useVoiceCall } from "@/api/hooks";
+import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import { choosesSpeakerphone, usePhoneOutputs } from "@/api/audioRoute";
 import { isMobilePlatform } from "@/features/layout/platform";
 import {
@@ -17,6 +17,17 @@ import { useAudioDevices } from "@/features/settings/useAudioDevices";
  */
 export function useSpeakerphoneButton(): boolean {
   return choosesSpeakerphone(usePhoneOutputs()) && isMobilePlatform();
+}
+
+/**
+ * Whether the mute button has options to open (`InputDevices`): the microphone's volume where
+ * the call applies one (`Call.hasInputVolume`), and on a computer the choice of microphone. A
+ * phone whose call the phone's own engine carries has neither: its own microphone is sent as
+ * captured, and where the call plays is the routes', so the arrow is left off.
+ */
+export function useMicrophoneOptions(): boolean {
+  const sync = useSync();
+  return sync.voice.hasInputVolume || !isMobilePlatform();
 }
 
 /**

@@ -35,8 +35,13 @@ Mute, deafen, and camera each have a small upward arrow at their end (`WithDevic
   that takes its share of the row and the control fills it, so the arrows take no room of their own.
   The arrow is not made larger on a touch screen.
 - The mute arrow shows while a moderator has muted the user and while they only listen, since the
-  microphone's choice and volume still apply. The camera's shows with the camera button, unless the
-  camera flips.
+  microphone's choice and volume still apply, and only where there is a microphone or a volume to
+  offer (`useMicrophoneOptions`, `deviceControls.ts`): the volume where the call applies one
+  (`Call.hasInputVolume`, which the mobile apps' native calls answer `false`, since neither phone's
+  audio device module applies a gain), and the microphone's choice on a computer. A phone whose call
+  its engine carries has neither, and its mute button stands alone; its input volume slider is left
+  out of Settings' Audio and video section too. The camera's shows with the camera button, unless
+  the camera flips.
 - The popovers write the same preferences as Settings' Audio and video section, which also has the
   two volumes, so both always agree.
 - Where the browser does not name devices yet, the popover shows the same notice and Allow button as
@@ -89,6 +94,21 @@ while something shows them (see [media](media.md#receiving)). It shows:
 
 `ChannelHeader` is the bar both channel screens share.
 
+### On a phone
+
+Where one pane fills the screen (`useOnePane`), the call is a grid that pages rather than a list
+that scrolls (`PagedCall`): each shared screen is a page of its own, and the people, and those a
+DM's call is ringing, are pages of up to `TILES_PER_PAGE` tiles (four, two by two; one or two fill
+the page), swiped between with the pages snapping, so nothing is ever half shown and nothing moves
+but between pages. Dots under the pages say which shows, and a screen reader hears the page's
+number. A camera in a cell fills it, cropped to the cell's shape (`ScreenTile`'s `cover`), the name
+and marks drawn over its foot. The layout is for the mobile apps' native video, which is drawn
+behind the page and follows its layout a frame or two behind (`native-calls.md`, Video): a picture
+that pages is still while it is looked at, where one that scrolled under the finger would trail it.
+While Android shows the call as a picture in picture, which shows the whole page small, the stage is
+the one picture the system shows (`PictureInPictureStage`): the focused screen, else the first
+camera of someone else, edge to edge and nothing beside it.
+
 ## Full screen
 
 The large screen goes full screen with its corner button, a double click, or F (`ScreenTile`,
@@ -97,7 +117,9 @@ The large screen goes full screen with its corner button, a double click, or F (
 - It uses the Fullscreen API where that works, and otherwise fills the app's window.
 - It is left the same ways, or with Escape.
 - The mobile apps always fill the window, since Capacitor's WebView dismisses any element that asks
-  for the whole screen. There the system's back gesture leaves it too.
+  for the whole screen. There the system's back gesture leaves it too, and a picture the phone draws
+  natively is told it is full screen (`setTiles`' `fullScreen`), on which the native side takes the
+  screen's bounds itself rather than waiting for the page's layout after a turn.
 - While full screen, the phone turns to the picture's orientation (`@capacitor/screen-orientation`,
   `useOrientationLock`) and is freed again after. A desktop refuses the lock and nothing changes.
 

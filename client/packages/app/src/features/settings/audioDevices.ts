@@ -5,6 +5,8 @@ import {
   SAME_AS_VOICE,
   type DeviceChoice,
   type PreferenceStore,
+  type VideoFacing,
+  type VideoSource,
 } from "@aspen/protocol";
 
 /** A microphone or speaker as the browser lists it. */
@@ -14,7 +16,7 @@ export interface AudioDevice {
 }
 
 /** Which way a camera looks: toward its user, or away from them. */
-export type CameraFacing = "front" | "back";
+export type CameraFacing = VideoFacing;
 
 export interface CameraDevice extends AudioDevice {
   /** `null` for a camera that looks neither way, or that neither the browser nor its name places. */
@@ -51,21 +53,33 @@ export function cameraFacing(device: ListedDevice): CameraFacing | null {
   return front === back ? null : front ? "front" : "back";
 }
 
+/** A picture as `trackFacing` reads it: a track's name and settings, or a native camera's facing. */
+export type FacingSource =
+  | { readonly kind: "track"; readonly track: Pick<MediaStreamTrack, "label" | "getSettings"> }
+  | { readonly kind: "native"; readonly facing: CameraFacing | null };
+
 /**
- * Which way an open camera faces: as its track's settings say (`facingMode`, which phones'
- * browsers give), or else as its name says.
+ * Which way an open camera faces. A camera the phone's call engine opened says so itself (the
+ * system places it); a browser's track says so in its settings (`facingMode`, which phones'
+ * browsers give), or else in its name.
  */
-export function trackFacing(
-  track: Pick<MediaStreamTrack, "label" | "getSettings">,
-): CameraFacing | null {
-  const mode = track.getSettings().facingMode;
-  if (mode === "user") {
-    return "front";
+export function trackFacing(source: FacingSource | VideoSource): CameraFacing | null {
+  switch (source.kind) {
+    case "native":
+      return source.facing;
+    case "track": {
+      const mode = source.track.getSettings().facingMode;
+      if (mode === "user") {
+        return "front";
+      }
+      if (mode === "environment") {
+        return "back";
+      }
+      return cameraFacing({ deviceId: "", kind: "videoinput", label: source.track.label });
+    }
+    default:
+      return source satisfies never;
   }
-  if (mode === "environment") {
-    return "back";
-  }
-  return cameraFacing({ deviceId: "", kind: "videoinput", label: track.label });
 }
 
 /**

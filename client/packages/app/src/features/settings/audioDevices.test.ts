@@ -53,16 +53,22 @@ describe("cameraFacing", () => {
 });
 
 describe("trackFacing", () => {
-  const track = (label: string, facingMode?: string) => ({
-    label,
-    getSettings: () => (facingMode === undefined ? {} : { facingMode }),
-  });
+  const track = (label: string, facingMode?: string) =>
+    ({
+      kind: "track",
+      track: { label, getSettings: () => (facingMode === undefined ? {} : { facingMode }) },
+    }) as const;
 
   it("takes the open camera's settings first, and its name where they say nothing", () => {
     expect(trackFacing(track("Front Camera", "environment"))).toBe("back");
     expect(trackFacing(track("", "user"))).toBe("front");
     expect(trackFacing(track("Back Ultra Wide Camera"))).toBe("back");
     expect(trackFacing(track("Integrated Webcam"))).toBeNull();
+  });
+
+  it("takes a native camera's facing as the phone says it", () => {
+    expect(trackFacing({ kind: "native", facing: "back" })).toBe("back");
+    expect(trackFacing({ kind: "native", surface: "s", facing: null })).toBeNull();
   });
 });
 

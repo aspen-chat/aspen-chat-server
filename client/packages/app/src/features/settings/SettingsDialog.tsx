@@ -155,13 +155,15 @@ function AudioSection() {
         devices={devices.inputs}
         defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
       />
-      <VolumeSlider
-        label={m.voice.inputVolume}
-        gain={inputVolume}
-        onChange={(value) => {
-          void sync.preferences.set(INPUT_VOLUME, value);
-        }}
-      />
+      {sync.voice.hasInputVolume && (
+        <VolumeSlider
+          label={m.voice.inputVolume}
+          gain={inputVolume}
+          onChange={(value) => {
+            void sync.preferences.set(INPUT_VOLUME, value);
+          }}
+        />
+      )}
       <DeviceSelect
         label={m.settings.speaker}
         definition={AUDIO_OUTPUT}
