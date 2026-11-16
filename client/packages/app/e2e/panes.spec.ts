@@ -58,6 +58,9 @@ test("the member list's edge moves from the keyboard, within its bounds", async 
   await expect(separator).toHaveAttribute("aria-valuenow", String(before));
 });
 
+/** The bar at the head of the conversation, the first header in it: no message holds one. */
+const channelHead = (page: Page) => page.getByRole("main").locator("header").first();
+
 test("the bars at the head of the channel list, the channel, and a thread are one height", async ({
   page,
 }) => {
@@ -69,7 +72,7 @@ test("the bars at the head of the channel list, the channel, and a thread are on
     Promise.all(
       [
         page.getByRole("heading", { level: 1, name: "Family" }).locator(".."),
-        page.locator("main > header"),
+        channelHead(page),
         page.getByRole("complementary", { name: "Thread" }).locator("header"),
       ].map(async (bar) => (await bar.boundingBox())?.height),
     );
@@ -79,7 +82,7 @@ test("the bars at the head of the channel list, the channel, and a thread are on
   await expect
     .poll(async () => [
       (await page.getByRole("heading", { level: 1 }).locator("..").boundingBox())?.height,
-      (await page.locator("main > header").boundingBox())?.height,
+      (await channelHead(page).boundingBox())?.height,
     ])
     .toEqual([53, 53]);
 });
