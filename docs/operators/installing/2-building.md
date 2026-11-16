@@ -25,11 +25,15 @@ The API server and `aspen-migrate` link the system's OpenSSL and libpq:
 Without `ffmpeg` and `ffprobe`, the API server shows pictures inline and offers videos for download.
 See [`[media.previews]`](../configuration/previews.md#mediapreviews).
 
-### 64-bit ARM
+### For other machines
 
-For 64-bit ARM, such as a Raspberry Pi 5, `scripts/cross_aarch64.py` builds everything on an x86-64
-Linux machine. On the Pi, the API server needs `libssl3` and `libpq5`, and the voice server nothing
-beyond the C library.
+A binary needs at least the versions of the C library and OpenSSL it was built against, so the
+servers built on one machine may refuse to start on another with older ones. To build on one machine
+for others, `scripts/baseline_build.py` builds on x86-64 Linux against Debian 12's libraries, for
+x86-64 (`--arch x86_64`) or 64-bit ARM such as a Raspberry Pi 5 (`--arch aarch64`), and checks the
+result. Those binaries run on Debian 12, Ubuntu 24.04, Raspberry Pi OS Bookworm, and anything newer;
+the API server needs `libssl3` and `libpq5` there, and the voice server nothing beyond the C
+library. `scripts/baseline_build.py --arch x86_64 out` names the directory they land in.
 
 ## The web client
 

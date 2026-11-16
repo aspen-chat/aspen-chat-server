@@ -186,7 +186,7 @@ function collect(strict: boolean): Attributions {
 
 const COMPONENTS: readonly ComponentId[] = ["app", "desktop", "mobile", "server"];
 
-/** The platforms the servers are built for (`scripts/cross_aarch64.py` makes the ARM ones). */
+/** The platforms the servers are built for (`scripts/baseline_build.py` makes each). */
 const SERVER_PLATFORMS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
 
 const DESKTOP_PLATFORMS = [

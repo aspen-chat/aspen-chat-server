@@ -1,33 +1,46 @@
 #!/usr/bin/env python3
-"""Cross-compiles Aspen's servers for 64-bit ARM Linux (a Raspberry Pi 5, say) on an x86-64 Linux
-machine, with the clang and lld already installed there.
+"""Builds Aspen's servers for 64-bit Linux, x86-64 or ARM, against a Debian sysroot, so that the
+binaries run on that Debian release and anything newer, whatever the build machine runs.
 
-The binaries are linked against a Debian sysroot, by default Debian 12 (bookworm, glibc 2.36),
-so they run on Raspberry Pi OS Bookworm and anything newer; a toolchain that links against the
-build machine's own, newer glibc makes binaries an older Pi refuses to start. The script fetches
-the Debian arm64 packages Aspen builds against (the C library, OpenSSL, libpq, and their
-dependencies) and unpacks them into a sysroot, which needs no root and installs nothing outside
-the build directory. Everything is compiled with clang for the target and linked with lld: the
-Rust code and the C in the crates that build C (ring, aws-lc, jemalloc, libwebp).
+A binary links against the C library and OpenSSL of the system it is built on, and needs at least
+those versions wherever it runs: built on a rolling-release machine, it needs that machine's glibc
+and OpenSSL, which a server on a long-term release lacks. This script builds against the oldest
+release the binaries must run on instead, by default Debian 12 (bookworm: glibc 2.36, OpenSSL 3),
+which every current Debian, Ubuntu LTS, and Raspberry Pi OS meets. Every server binary that leaves
+the machine it was built on is built this way.
 
-jemalloc is built for 64 KiB pages, which also runs on kernels with 4 KiB and 16 KiB pages:
-Raspberry Pi OS on a Pi 5 boots a 16 KiB-page kernel by default, where a jemalloc built for
-4 KiB pages aborts at startup.
+The script fetches the Debian packages Aspen builds against (the C library, OpenSSL, libpq, and
+their dependencies) for the target architecture and unpacks them into a sysroot, which needs no
+root and installs nothing outside the build directory. Everything is compiled with clang for the
+target and linked with lld: the Rust code and the C in the crates that build C (ring, aws-lc,
+jemalloc, libwebp). Each architecture and release builds into a target directory of its own under
+`target/cross/`, so a baseline build never rebuilds the usual `target/` or the other way round.
 
-    scripts/cross_aarch64.py            set up if needed, build, and check the binaries
-    scripts/cross_aarch64.py setup      fetch the sysroot and write the toolchain files
-    scripts/cross_aarch64.py build      build (sets up first if needed)
-    scripts/cross_aarch64.py check      check the built binaries
-    scripts/cross_aarch64.py env        print the environment, to run cargo by hand:
-                                        eval "$(scripts/cross_aarch64.py env)"
+On ARM, jemalloc is built for 64 KiB pages, which also runs on kernels with 4 KiB and 16 KiB pages:
+Raspberry Pi OS on a Pi 5 boots a 16 KiB-page kernel by default, where a jemalloc built for 4 KiB
+pages aborts at startup.
 
-On the Pi, the binaries need `apt install libssl3 libpq5` (present on most installations).
-Needs Python 3.12 or later (3.14 for a Debian release whose packages are zstd-compressed),
-clang, lld, llvm-ar, llvm-readelf, pkg-config, rustup, and network access. The script also
-unpacks Debian's user-mode arm64 emulator, which the checks start each built binary under.
+    scripts/baseline_build.py --arch ARCH            set up if needed, build, and check
+    scripts/baseline_build.py --arch ARCH setup      fetch the sysroot and write the toolchain files
+    scripts/baseline_build.py --arch ARCH build      build (sets up first if needed)
+    scripts/baseline_build.py --arch ARCH check      check the built binaries
+    scripts/baseline_build.py --arch ARCH out        print the directory the binaries land in
+    scripts/baseline_build.py --arch ARCH env        print the environment, to run cargo by hand:
+                                                     eval "$(scripts/baseline_build.py --arch ARCH env)"
 
-`check --dir DIR` checks binaries built some other way, such as natively on an ARM machine in
-CI; that needs only Python 3.10 and `readelf`.
+ARCH is `x86_64` or `aarch64`. Where the binaries run, they need `apt install libssl3 libpq5`
+(present on most installations), and the voice server neither. Needs Python 3.12 or later (3.14 for
+a Debian release whose packages are zstd-compressed), clang, lld, llvm-ar, llvm-readelf,
+pkg-config, rustup, and network access.
+
+The checks start each built binary against the sysroot's own C library and OpenSSL: through the
+sysroot's dynamic loader when the target is this machine's architecture, and otherwise under
+Debian's user-mode emulator for it, which setup unpacks. They also refuse a binary that needs a
+glibc symbol newer than the release's or a shared library the release does not provide.
+
+`check --dir DIR` checks binaries built some other way, such as natively on an ARM machine in CI;
+that needs only Python 3.10 and `readelf`, and starts the binaries directly when no sysroot has
+been set up.
 """
 
 from __future__ import annotations
@@ -36,6 +49,7 @@ import argparse
 import io
 import lzma
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -47,9 +61,42 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-RUST_TARGET = "aarch64-unknown-linux-gnu"
-TRIPLE = "aarch64-linux-gnu"
 MIRROR = "https://deb.debian.org/debian"
+
+
+@dataclass(frozen=True)
+class Arch:
+    rust_target: str
+    triple: str
+    # Debian's name for the architecture, in its package indexes.
+    debian: str
+    # What readelf's file header names the machine.
+    elf_machine: str
+    # The dynamic loader, in `lib/<triple>/` of the sysroot.
+    loader: str
+    # jemalloc's page size as a power of two, when the architecture's kernels differ in it.
+    jemalloc_lg_page: str | None
+
+
+ARCHES = {
+    "x86_64": Arch(
+        rust_target="x86_64-unknown-linux-gnu",
+        triple="x86_64-linux-gnu",
+        debian="amd64",
+        elf_machine="X86-64",
+        loader="ld-linux-x86-64.so.2",
+        jemalloc_lg_page=None,
+    ),
+    # 64 KiB, which serves every smaller kernel page.
+    "aarch64": Arch(
+        rust_target="aarch64-unknown-linux-gnu",
+        triple="aarch64-linux-gnu",
+        debian="arm64",
+        elf_machine="AArch64",
+        loader="ld-linux-aarch64.so.1",
+        jemalloc_lg_page="16",
+    ),
+}
 # Debian releases, and the glibc each ships: the newest glibc symbol a binary may need.
 RELEASES = {"bookworm": (2, 36), "trixie": (2, 41)}
 # What Aspen compiles and links against; their dependencies come along.
@@ -62,23 +109,42 @@ ROOT_PACKAGES = [
 ]
 # Trixie's compiler runtime is GCC 14's.
 ROOT_PACKAGES_TRIXIE = {"libgcc-12-dev": "libgcc-14-dev"}
-# The binaries a Pi needs: the chat server, the voice server, and the migration runner.
+# The servers: the chat server, the voice server, and the migration runner.
 PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
 BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
-# jemalloc's page size, as a power of two: 64 KiB, which serves every smaller kernel page.
-JEMALLOC_LG_PAGE = "16"
-# Shared libraries the binaries may need beyond the C runtime, and the Debian
-# package that provides each on the Pi.
+# Shared libraries the binaries may need beyond the C runtime, and the Debian package that
+# provides each where they run. A binary needing any other library is refused: it was linked
+# against something the deployment's machines are not promised to have.
 RUNTIME_PACKAGES = {"libssl.so.3": "libssl3", "libcrypto.so.3": "libssl3", "libpq.so.5": "libpq5"}
+# The C runtime, which every Linux the release floor admits has.
+C_RUNTIME = {
+    "libc.so.6",
+    "libm.so.6",
+    "libgcc_s.so.1",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    *(arch.loader for arch in ARCHES.values()),
+}
+
+
+def host_arch() -> str | None:
+    machine = platform.machine()
+    return {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(machine)
 
 
 @dataclass
 class Paths:
+    arch_name: str
     release: str
 
     @property
+    def arch(self) -> Arch:
+        return ARCHES[self.arch_name]
+
+    @property
     def root(self) -> Path:
-        return REPO / "target" / "cross" / f"aarch64-{self.release}"
+        return REPO / "target" / "cross" / f"{self.arch_name}-{self.release}"
 
     @property
     def sysroot(self) -> Path:
@@ -97,12 +163,28 @@ class Paths:
         return self.root / "tools"
 
     @property
+    def target_dir(self) -> Path:
+        return self.root / "target"
+
+    @property
     def ready(self) -> Path:
         return self.root / ".ready"
 
+    def out(self, profile: str) -> Path:
+        return self.target_dir / self.arch.rust_target / profile
+
+    @property
+    def library_dirs(self) -> list[Path]:
+        triple = self.arch.triple
+        return [self.sysroot / d for d in (f"lib/{triple}", f"usr/lib/{triple}", "lib", "usr/lib")]
+
+    @property
+    def emulator(self) -> Path:
+        return self.tools / f"qemu-{self.arch_name}-static"
+
 
 def say(message: str) -> None:
-    print(f"cross_aarch64: {message}", file=sys.stderr, flush=True)
+    print(f"baseline_build: {message}", file=sys.stderr, flush=True)
 
 
 def fail(message: str) -> None:
@@ -134,11 +216,11 @@ def fetch(url: str, destination: Path) -> Path:
     return destination
 
 
-def package_index(paths: Paths) -> dict[str, dict[str, str]]:
-    """The release's arm64 package index, by package name."""
+def package_index(paths: Paths, release: str, debian_arch: str) -> dict[str, dict[str, str]]:
+    """A release's package index for one architecture, by package name."""
     index_file = fetch(
-        f"{MIRROR}/dists/{paths.release}/main/binary-arm64/Packages.xz",
-        paths.debs / "Packages.xz",
+        f"{MIRROR}/dists/{release}/main/binary-{debian_arch}/Packages.xz",
+        paths.debs / f"Packages-{release}-{debian_arch}.xz",
     )
     packages: dict[str, dict[str, str]] = {}
     text = lzma.decompress(index_file.read_bytes()).decode()
@@ -173,7 +255,7 @@ def wanted(name: str) -> bool:
     return name.startswith("lib") or name in {"linux-libc-dev"} or name.startswith("gcc-") and name.endswith("-base")
 
 
-def resolve(index: dict[str, dict[str, str]], roots: list[str], release: str) -> list[dict[str, str]]:
+def resolve(index: dict[str, dict[str, str]], roots: list[str], paths: Paths) -> list[dict[str, str]]:
     provides: dict[str, str] = {}
     for name, fields in index.items():
         for provided in fields.get("Provides", "").split(","):
@@ -187,7 +269,7 @@ def resolve(index: dict[str, dict[str, str]], roots: list[str], release: str) ->
         real = name if name in index else provides.get(name)
         if real is None:
             if name in roots:
-                fail(f"{name} is not in Debian {release}'s arm64 index")
+                fail(f"{name} is not in Debian {paths.release}'s {paths.arch.debian} index")
             continue
         if real in chosen:
             continue
@@ -246,10 +328,10 @@ def relativise_links(sysroot: Path) -> None:
 
 
 def make_sysroot(paths: Paths) -> None:
-    index = package_index(paths)
+    index = package_index(paths, paths.release, paths.arch.debian)
     roots = [ROOT_PACKAGES_TRIXIE.get(p, p) if paths.release == "trixie" else p for p in ROOT_PACKAGES]
-    chosen = resolve(index, roots, paths.release)
-    say(f"fetching {len(chosen)} Debian {paths.release} arm64 packages")
+    chosen = resolve(index, roots, paths)
+    say(f"fetching {len(chosen)} Debian {paths.release} {paths.arch.debian} packages")
     if paths.sysroot.exists():
         shutil.rmtree(paths.sysroot)
     paths.sysroot.mkdir(parents=True)
@@ -265,7 +347,7 @@ def make_sysroot(paths: Paths) -> None:
 
 def target_flags(paths: Paths) -> list[str]:
     """What makes clang compile for the target, against the sysroot."""
-    return [f"--target={TRIPLE}", f"--sysroot={paths.sysroot}"]
+    return [f"--target={paths.arch.triple}", f"--sysroot={paths.sysroot}"]
 
 
 def wrapper_flags(paths: Paths) -> list[str]:
@@ -279,66 +361,77 @@ def wrapper_flags(paths: Paths) -> list[str]:
 # --- An emulator for the target -------------------------------------------------------------
 
 
-def qemu(paths: Paths) -> Path:
-    """Debian's statically linked user-mode emulator for arm64, unpacked into the build directory,
-    which the checks start the built binaries under. It is called by path, not registered with the
-    kernel, so it needs no root.
+def unpack_emulator(paths: Paths) -> None:
+    """Debian's statically linked user-mode emulator for the target, for this machine's
+    architecture, unpacked into the build directory when the two differ. The checks start the
+    built binaries under it. It is called by path, not registered with the kernel, so it needs
+    no root.
     """
-    emulator = paths.tools / "qemu-aarch64-static"
-    if emulator.exists():
-        return emulator
-    index_file = fetch(
-        f"{MIRROR}/dists/bookworm/main/binary-amd64/Packages.xz", paths.debs / "Packages-amd64.xz"
-    )
-    text = lzma.decompress(index_file.read_bytes()).decode()
-    stanza = next(s for s in text.split("\n\n") if s.startswith("Package: qemu-user-static\n"))
-    filename = re.search(r"^Filename: (.+)$", stanza, re.M).group(1)
+    host = host_arch()
+    if host == paths.arch_name or paths.emulator.exists():
+        return
+    if host is None:
+        fail(f"no emulator for {paths.arch_name} on a {platform.machine()} machine")
+    # The emulator is static, so bookworm's runs on any newer system.
+    index = package_index(paths, "bookworm", ARCHES[host].debian)
+    filename = index["qemu-user-static"]["Filename"]
     deb = fetch(f"{MIRROR}/{filename}", paths.debs / Path(filename).name)
     staging = paths.tools / "qemu-staging"
     unpack(deb, staging)
     paths.tools.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(staging / "usr" / "bin" / "qemu-aarch64-static", emulator)
+    shutil.copy2(staging / "usr" / "bin" / paths.emulator.name, paths.emulator)
     shutil.rmtree(staging)
-    return emulator
 
 
 def write_toolchain(paths: Paths) -> None:
     paths.bin.mkdir(parents=True, exist_ok=True)
-    qemu(paths)
+    unpack_emulator(paths)
     flags = " ".join(shlex.quote(f) for f in wrapper_flags(paths))
-    wrapper = paths.bin / f"{TRIPLE}-cc"
+    wrapper = paths.bin / f"{paths.arch.triple}-cc"
     wrapper.write_text(f'#!/bin/sh\nexec clang {flags} "$@"\n')
     wrapper.chmod(0o755)
 
 
 def build_env(paths: Paths) -> dict[str, str]:
-    """What cargo and the crates' build scripts read."""
-    target = RUST_TARGET.replace("-", "_")
-    pkg_config_libdir = f"{paths.sysroot}/usr/lib/{TRIPLE}/pkgconfig:{paths.sysroot}/usr/share/pkgconfig"
-    cc = str(paths.bin / f"{TRIPLE}-cc")
-    return {
+    """What cargo and the crates' build scripts read.
+
+    When the target is this machine's architecture, cargo links the build scripts and proc macros
+    with the target's linker too, and their C is compiled with the target's compiler, both against
+    the sysroot; they then run on this machine, whose glibc is newer than the sysroot's.
+    """
+    triple = paths.arch.triple
+    target = paths.arch.rust_target.replace("-", "_")
+    pkg_config_libdir = f"{paths.sysroot}/usr/lib/{triple}/pkgconfig:{paths.sysroot}/usr/share/pkgconfig"
+    cc = str(paths.bin / f"{triple}-cc")
+    env = {
+        "CARGO_TARGET_DIR": str(paths.target_dir),
         f"CARGO_TARGET_{target.upper()}_LINKER": cc,
         f"CC_{target}": cc,
         f"AR_{target}": "llvm-ar",
-        # Build scripts compiling for this machine read HOST_*.
-        "HOST_CC": "clang",
+        # Build scripts compiling for this machine read HOST_*. When the target is this machine's
+        # architecture, some (aws-lc-sys's) read it for the target's C as well, so it compiles
+        # against the sysroot too.
+        "HOST_CC": cc if host_arch() == paths.arch_name else "clang",
+        "HOST_AR": "llvm-ar",
         # Anything that asks pkg-config is answered from the sysroot.
         f"PKG_CONFIG_SYSROOT_DIR_{target}": str(paths.sysroot),
         f"PKG_CONFIG_LIBDIR_{target}": pkg_config_libdir,
         f"PKG_CONFIG_ALLOW_CROSS_{target}": "1",
-        f"{target.upper()}_OPENSSL_LIB_DIR": f"{paths.sysroot}/usr/lib/{TRIPLE}",
+        f"{target.upper()}_OPENSSL_LIB_DIR": f"{paths.sysroot}/usr/lib/{triple}",
         f"{target.upper()}_OPENSSL_INCLUDE_DIR": f"{paths.sysroot}/usr/include",
         # pq-sys, built without its pkg-config feature, otherwise asks this machine's pg_config
         # and links against this machine's libraries.
-        f"PQ_LIB_DIR_{target.upper()}": f"{paths.sysroot}/usr/lib/{TRIPLE}",
-        "JEMALLOC_SYS_WITH_LG_PAGE": JEMALLOC_LG_PAGE,
+        f"PQ_LIB_DIR_{target.upper()}": f"{paths.sysroot}/usr/lib/{triple}",
     }
+    if paths.arch.jemalloc_lg_page:
+        env["JEMALLOC_SYS_WITH_LG_PAGE"] = paths.arch.jemalloc_lg_page
+    return env
 
 
 def setup(paths: Paths) -> None:
     require_tools()
     # Run from the checkout so the target goes to the toolchain rust-toolchain.toml pins.
-    subprocess.run(["rustup", "target", "add", RUST_TARGET], cwd=REPO, check=True)
+    subprocess.run(["rustup", "target", "add", paths.arch.rust_target], cwd=REPO, check=True)
     make_sysroot(paths)
     write_toolchain(paths)
     paths.ready.write_text("")
@@ -349,7 +442,7 @@ def ensure_setup(paths: Paths) -> None:
     if not paths.ready.exists():
         setup(paths)
     else:
-        # The wrappers and cross file name absolute paths; rewrite them in case the checkout moved.
+        # The wrappers name absolute paths; rewrite them in case the checkout moved.
         write_toolchain(paths)
 
 
@@ -358,7 +451,7 @@ def ensure_setup(paths: Paths) -> None:
 
 def build(paths: Paths, profile: str, jobs: int | None) -> None:
     ensure_setup(paths)
-    command = ["cargo", "build", "--target", RUST_TARGET]
+    command = ["cargo", "build", "--locked", "--target", paths.arch.rust_target]
     if profile == "release":
         command.append("--release")
     for package in PACKAGES:
@@ -377,9 +470,14 @@ def readelf(binary: Path, *flags: str) -> str:
     return subprocess.run([tool, "--wide", *flags, str(binary)], capture_output=True, text=True, check=True).stdout
 
 
+def in_sysroot(paths: Paths, library: str) -> bool:
+    return any((directory / library).exists() for directory in paths.library_dirs)
+
+
 def check(paths: Paths, profile: str, directory: Path | None = None) -> None:
-    out = directory or REPO / "target" / RUST_TARGET / profile
+    out = directory or paths.out(profile)
     newest_allowed = RELEASES[paths.release]
+    has_sysroot = paths.ready.exists()
     problems = []
     needed_packages: set[str] = set()
     for name in BINARIES:
@@ -388,8 +486,9 @@ def check(paths: Paths, profile: str, directory: Path | None = None) -> None:
             problems.append(f"{name}: not built ({binary})")
             continue
         header = readelf(binary, "--file-header")
-        if "AArch64" not in header:
-            problems.append(f"{name}: not an AArch64 binary")
+        machine = re.search(r"^\s*Machine:\s*(.+)$", header, re.M)
+        if machine is None or not machine.group(1).strip().endswith(paths.arch.elf_machine):
+            problems.append(f"{name}: not an {paths.arch.elf_machine} binary")
         versions = {
             tuple(int(p) for p in m.split("."))
             for m in re.findall(r"GLIBC_(\d+\.\d+(?:\.\d+)?)", readelf(binary, "--version-info"))
@@ -401,71 +500,91 @@ def check(paths: Paths, profile: str, directory: Path | None = None) -> None:
                 f"{'.'.join(map(str, newest_allowed))}"
             )
         needed = re.findall(r"\(NEEDED\).*\[(.+?)\]", readelf(binary, "--dynamic"))
-        needed_packages |= {RUNTIME_PACKAGES[n] for n in needed if n in RUNTIME_PACKAGES}
+        for library in needed:
+            if library in RUNTIME_PACKAGES:
+                needed_packages.add(RUNTIME_PACKAGES[library])
+            elif library not in C_RUNTIME:
+                problems.append(f"{name}: needs {library}, which the servers are not built to need")
+                continue
+            if has_sysroot and not in_sysroot(paths, library):
+                problems.append(f"{name}: needs {library}, which Debian {paths.release} does not provide")
         size = binary.stat().st_size / (1024 * 1024)
         say(
-            f"{name}: AArch64, needs glibc {'.'.join(map(str, newest))}, "
+            f"{name}: {paths.arch.elf_machine}, needs glibc {'.'.join(map(str, newest))}, "
             f"{size:.0f} MiB, links {', '.join(needed)}"
         )
-    problems += run_checks(paths, out)
+    if not problems:
+        problems += run_checks(paths, out)
     if problems:
         for problem in problems:
             say(problem)
         sys.exit(1)
     say(f"binaries in {out}; they run on Debian {paths.release} or newer")
     if needed_packages:
-        say(f"on the Pi: sudo apt install {' '.join(sorted(needed_packages))}")
+        say(f"where they run: sudo apt install {' '.join(sorted(needed_packages))}")
 
 
-def runner(paths: Paths) -> list[str] | None:
-    """How to run a target binary here: directly on an ARM machine, through the emulator on
-    this one when setup has unpacked it, or not at all."""
-    import platform
-
-    if platform.machine() in ("aarch64", "arm64"):
-        return []
-    emulator = paths.tools / "qemu-aarch64-static"
-    if emulator.exists():
-        return [str(emulator), "-L", str(paths.sysroot)]
+def runner(paths: Paths) -> tuple[list[str], str] | None:
+    """How to run a target binary here, and what that proves: against the sysroot's own C
+    library and OpenSSL, through its loader or under the emulator; directly, when this machine
+    is the target's architecture and has no sysroot; or not at all."""
+    native = host_arch() == paths.arch_name
+    if paths.ready.exists():
+        if native:
+            loader = paths.sysroot / "lib" / paths.arch.triple / paths.arch.loader
+            library_path = ":".join(str(d) for d in paths.library_dirs)
+            # The loader reads this machine's /etc/ld.so.cache unless told not to, which would
+            # find this machine's libraries before the sysroot's.
+            return [str(loader), "--inhibit-cache", "--library-path", library_path], "against the sysroot"
+        if paths.emulator.exists():
+            return [str(paths.emulator), "-L", str(paths.sysroot)], "under emulation, against the sysroot"
+    if native:
+        return [], "on this machine"
     return None
 
 
 def run_checks(paths: Paths, out: Path) -> list[str]:
-    """Starts each binary, and checks jemalloc runs with 64 KiB pages, which also serve a
-    kernel with 4 KiB or 16 KiB pages."""
-    prefix = runner(paths)
-    if prefix is None:
-        say("not starting the binaries: no emulator here (run setup) and this is not an ARM machine")
+    """Starts each binary, and checks jemalloc runs with the page size the architecture needs."""
+    found = runner(paths)
+    if found is None:
+        say(f"not starting the binaries: no emulator here (run setup) and this is not an {paths.arch_name} machine")
         return []
+    prefix, how = found
     problems = []
     for name in BINARIES:
         started = subprocess.run([*prefix, str(out / name), "--help"], capture_output=True, text=True)
         if started.returncode != 0:
             problems.append(f"{name}: does not start: {started.stderr.strip()[-300:]}")
-    stats = subprocess.run(
-        [*prefix, str(out / "voice_server"), "--help"],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "MALLOC_CONF": "stats_print:true"},
-    )
-    page = re.search(r"Page size: (\d+)", stats.stderr + stats.stdout)
-    expected = 1 << int(JEMALLOC_LG_PAGE)
-    if page is None or int(page.group(1)) != expected:
-        problems.append(
-            f"jemalloc runs with {page.group(1) if page else 'unknown'}-byte pages, not {expected}; "
-            "build with JEMALLOC_SYS_WITH_LG_PAGE=16"
+    lg_page = paths.arch.jemalloc_lg_page
+    if lg_page:
+        stats = subprocess.run(
+            [*prefix, str(out / "voice_server"), "--help"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "MALLOC_CONF": "stats_print:true"},
         )
+        page = re.search(r"Page size: (\d+)", stats.stderr + stats.stdout)
+        expected = 1 << int(lg_page)
+        if page is None or int(page.group(1)) != expected:
+            problems.append(
+                f"jemalloc runs with {page.group(1) if page else 'unknown'}-byte pages, not {expected}; "
+                f"build with JEMALLOC_SYS_WITH_LG_PAGE={lg_page}"
+            )
+        how += f"; jemalloc uses {expected // 1024} KiB pages"
     if not problems:
-        say(f"all start{' under emulation' if prefix else ''}; jemalloc uses {expected // 1024} KiB pages")
+        say(f"all start {how}")
     return problems
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Cross-compile Aspen's servers for 64-bit ARM Linux.",
+        description="Build Aspen's servers for 64-bit Linux against a Debian sysroot.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("command", nargs="?", default="all", choices=["all", "setup", "build", "check", "env"])
+    parser.add_argument(
+        "command", nargs="?", default="all", choices=["all", "setup", "build", "check", "out", "env"]
+    )
+    parser.add_argument("--arch", required=True, choices=sorted(ARCHES), help="the architecture to build for")
     parser.add_argument(
         "--release-of",
         dest="release",
@@ -477,7 +596,7 @@ def main() -> None:
     parser.add_argument("-j", "--jobs", type=int, help="parallel jobs for cargo")
     parser.add_argument("--dir", type=Path, help="check: the directory holding the binaries")
     args = parser.parse_args()
-    paths = Paths(args.release)
+    paths = Paths(args.arch, args.release)
     profile = "debug" if args.debug else "release"
     match args.command:
         case "setup":
@@ -486,6 +605,8 @@ def main() -> None:
             build(paths, profile, args.jobs)
         case "check":
             check(paths, profile, args.dir)
+        case "out":
+            print(paths.out(profile))
         case "env":
             ensure_setup(paths)
             for key, value in build_env(paths).items():

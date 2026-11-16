@@ -286,23 +286,30 @@ or what an operator must open, route, or back up updates it in the same commit.
    the client's code generator (`pnpm codegen` in `client/`) reads them from the repository root and
    can regenerate them itself. Regenerate them whenever API types change.
 
-5. Build for 64-bit ARM (a Raspberry Pi 5, say) on an x86-64 Linux machine:
+5. Build servers that run elsewhere, on x86-64 or 64-bit ARM (a Raspberry Pi 5, say), on an x86-64
+   Linux machine:
 
    ```
-   scripts/cross_aarch64.py
+   scripts/baseline_build.py --arch x86_64    # or --arch aarch64
    ```
 
-   It fetches a Debian 12 arm64 sysroot (glibc 2.36, so the binaries run on Raspberry Pi OS Bookworm
-   and newer) into `target/cross/`, compiles everything with the clang and lld already installed
-   (the Rust code and the crates' C: ring, aws-lc, jemalloc, and libwebp), and checks the result:
-   AArch64, no glibc symbol newer than the sysroot's, and each binary starting under Debian's
-   user-mode emulator, which it also unpacks there. It needs no root. The binaries land in
-   `target/aarch64-unknown-linux-gnu/release/`; on the Pi they need only `libssl3` and `libpq5`, and
-   the voice server neither. `eval "$(scripts/cross_aarch64.py env)"` sets up a shell to run cargo
-   for the target by hand. Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its
-   page size when compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc
-   built for 4 KiB pages aborts at startup there, while 64 KiB pages serve every smaller kernel page
-   size.
+   A binary built against this machine's libraries needs at least their versions wherever it runs,
+   so a rolling-release workstation's builds refuse to start on a long-term release (its OpenSSL's
+   soname, its glibc's symbols). Every server binary that leaves the machine it was built on is
+   built this way instead. The script fetches a Debian 12 sysroot for the architecture (glibc 2.36
+   and OpenSSL 3, so the binaries run on Debian 12, Ubuntu 24.04, Raspberry Pi OS Bookworm, and
+   newer) into `target/cross/<arch>-bookworm/`, compiles everything with the clang and lld already
+   installed (the Rust code and the crates' C: ring, aws-lc, jemalloc, and libwebp) into a target
+   directory there of its own, and checks the result: the architecture, no glibc symbol newer than
+   the sysroot's, no shared library but the C runtime, `libssl3`, and `libpq5`, and each binary
+   starting against the sysroot's own libraries, through its loader on x86-64 and under Debian's
+   user-mode emulator, which it also unpacks there, on ARM. It needs no root.
+   `scripts/baseline_build.py --arch ARCH out` names the directory the binaries land in; where they
+   run they need only `libssl3` and `libpq5`, and the voice server neither.
+   `eval "$(scripts/baseline_build.py --arch ARCH env)"` sets up a shell to run cargo for the target
+   by hand. Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its page size when
+   compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB
+   pages aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
 
 6. Run two deployments that federate, for developing federation:
 
@@ -485,14 +492,14 @@ sent to Apple's notary service without waiting, and an App Store build for TestF
 debug build; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list of
 the public media prefixes against the server's, `media_store::PublicPrefix`), and
 `scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
-container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and
-`scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts;
-`scripts/check_permissions.py`, `scripts/check_nats_memory.py`, `scripts/check_mana.py`, and
-`scripts/check_calls.py` run in the x86-64 job against its debug build, the first building and
-installing the example plugins, the last calling between Chromium and Firefox through Playwright.
-Every job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
-example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail
-the build.
+container on GitHub's arm64 runner (tests included); the baseline build script on x86-64 for both
+architectures; and `scripts/smoke_servers.py` against all three builds, the ARM ones on an arm64
+runner, each kept as an artifact; `scripts/check_permissions.py`, `scripts/check_nats_memory.py`,
+`scripts/check_mana.py`, and `scripts/check_calls.py` run in the x86-64 job against its debug build,
+the first building and installing the example plugins, the last calling between Chromium and Firefox
+through Playwright. Every job runs the toolchain `rust-toolchain.toml` pins, which lists the
+`wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository is
+built. Clippy warnings fail the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or

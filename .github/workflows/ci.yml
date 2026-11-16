@@ -828,7 +828,7 @@ jobs:
       - run: cargo build --locked --release -p aspen-chat-server -p voice_server -p aspen-migrate
       - run: cargo test --locked --release --workspace
       - name: Check the binaries (architecture, glibc, start-up, jemalloc's page size)
-        run: python3 scripts/cross_aarch64.py check --dir target/release
+        run: python3 scripts/baseline_build.py --arch aarch64 check --dir target/release
       - name: Package
         run: |
           mkdir dist
@@ -856,18 +856,52 @@ jobs:
           key: arm64-cross
           cache-directories: target/cross
       - name: Set up, build, and check
-        run: python3 scripts/cross_aarch64.py
+        run: python3 scripts/baseline_build.py --arch aarch64
       - name: Package
         run: |
           mkdir dist
+          out=$(python3 scripts/baseline_build.py --arch aarch64 out)
           for binary in aspen-chat-server voice_server aspen-migrate; do
-            cp "target/aarch64-unknown-linux-gnu/release/$binary" dist/
+            cp "$out/$binary" dist/
           done
           tar -C dist -czf aspen-aarch64-bookworm-cross.tar.gz .
       - uses: actions/upload-artifact@v7
         with:
           name: aspen-aarch64-bookworm-cross
           path: aspen-aarch64-bookworm-cross.tar.gz
+
+  x86_64-baseline:
+    name: x86-64 (Debian 12) — build against the baseline, start, and serve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm pkg-config
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: x86_64-baseline
+          cache-directories: target/cross
+      - name: Set up, build, and check
+        run: python3 scripts/baseline_build.py --arch x86_64
+      - name: Package
+        run: |
+          mkdir dist
+          out=$(python3 scripts/baseline_build.py --arch x86_64 out)
+          for binary in aspen-chat-server voice_server aspen-migrate; do
+            cp "$out/$binary" dist/
+          done
+          tar -C dist -czf aspen-x86_64-bookworm.tar.gz .
+      - name: Start the services, then the servers, and use them
+        run: python3 scripts/smoke_servers.py --bin dist --start-services
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aspen-x86_64-bookworm
+          path: aspen-x86_64-bookworm.tar.gz
 
   arm64-smoke:
     name: ARM64 — servers start and serve (${{ matrix.build }})
