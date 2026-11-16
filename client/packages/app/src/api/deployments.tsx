@@ -29,6 +29,7 @@ import {
 import { guardSending } from "./sendingGuard";
 import { sessionStore } from "./sessions";
 import { tellUploadFailures } from "./uploadFailures";
+import { nativeCallFactory } from "./nativeCallFactory";
 import { nativeSendsUploads, nativeUploadTransport } from "./uploadsBridge";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -70,15 +71,18 @@ export function DeploymentsProvider({
             solvePuzzle: solveInWorkers,
           }),
         sync: (client) => {
+          const made: { sync: AspenSync | null } = { sync: null };
           const sync = new AspenSync({
             client,
             ...(nativeSendsUploads() ? { uploadTransport: nativeUploadTransport(client) } : {}),
+            ...nativeCallFactory(() => made.sync),
             preferences: homeSync.preferences,
             validateEvents: import.meta.env.DEV,
             onInvalidEvent: (raw, errors) => {
               console.warn("dropped a server event that does not match the schema", errors, raw);
             },
           });
+          made.sync = sync;
           guards.push(guardSending(sync), tellUploadFailures(sync));
           return sync;
         },

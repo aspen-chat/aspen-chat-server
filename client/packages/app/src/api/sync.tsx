@@ -5,6 +5,8 @@ import { reportActivity } from "./activity";
 import { DeploymentsProvider } from "./deployments";
 import { guardSending, wordSendingGuard } from "./sendingGuard";
 import { tellUploadFailures, wordUploadFailures } from "./uploadFailures";
+import { wordCallNames } from "./callName";
+import { nativeCallFactory } from "./nativeCallFactory";
 import { nativeSendsUploads, nativeUploadTransport, wordNativeUploads } from "./uploadsBridge";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 
@@ -25,18 +27,21 @@ export function SyncProvider({
   attended: boolean;
   children: ReactNode;
 }) {
-  const sync = useMemo(
-    () =>
-      new AspenSync({
-        client,
-        ...(nativeSendsUploads() ? { uploadTransport: nativeUploadTransport(client) } : {}),
-        validateEvents: import.meta.env.DEV,
-        onInvalidEvent: (raw, errors) => {
-          console.warn("dropped a server event that does not match the schema", errors, raw);
-        },
-      }),
-    [client],
-  );
+  const sync = useMemo(() => {
+    // The call's system name reads the sync's store, which exists only once the sync is made.
+    const made: { sync: AspenSync | null } = { sync: null };
+    const sync = new AspenSync({
+      client,
+      ...(nativeSendsUploads() ? { uploadTransport: nativeUploadTransport(client) } : {}),
+      ...nativeCallFactory(() => made.sync),
+      validateEvents: import.meta.env.DEV,
+      onInvalidEvent: (raw, errors) => {
+        console.warn("dropped a server event that does not match the schema", errors, raw);
+      },
+    });
+    made.sync = sync;
+    return sync;
+  }, [client]);
   useEffect(() => {
     sync.start();
     const stopGuarding = guardSending(sync);
@@ -53,6 +58,7 @@ export function SyncProvider({
     wordSendingGuard(m);
     wordUploadFailures(m);
     wordNativeUploads(m);
+    wordCallNames(m);
   }, [m]);
   return (
     <HomeSyncContext.Provider value={sync}>

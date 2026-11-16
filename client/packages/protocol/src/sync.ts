@@ -68,7 +68,7 @@ import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type AttachmentChange, type UploadTarget, updateAttachment, uploadIcon } from "./upload";
 import { AttachmentUploads, browserUploadTransport, type UploadTransport } from "./uploads";
 import { eventStreamUrl } from "./urls";
-import { VoiceCall } from "./voice";
+import { type Call, VoiceCall, type VoiceCallOptions } from "./voice";
 import type { VoiceMedia } from "./voiceMedia";
 
 // The store's record, which the event stream carries; a read's record is assignable to it.
@@ -418,6 +418,12 @@ export interface AspenSyncOptions {
   /** The browser's media for voice calls; `browserVoiceMedia()` in the app, a fake in tests. */
   voiceMedia?: VoiceMedia;
   /**
+   * Makes the call this sync holds as `voice` from the options it would give `VoiceCall`, which
+   * it makes by default; the mobile apps give one that makes a `NativeCall` over the phone's
+   * call engine instead, which uses none of the browser's media.
+   */
+  createCall?: (options: VoiceCallOptions) => Call;
+  /**
    * Where device preferences live. Defaults to the page's `localStorage` when there is one;
    * `null` keeps them for the session only.
    */
@@ -476,8 +482,11 @@ export class AspenSync {
   readonly store: RecordStore;
   /** The Administration Dashboard's calls. */
   readonly admin: AdminApi;
-  /** The voice call, if any; a `VoiceCall` even when idle so the UI can subscribe once. */
-  readonly voice: VoiceCall;
+  /**
+   * The user's call, if any: a `Call` even when idle so the UI can subscribe once, made by the
+   * `createCall` option, `VoiceCall` by default.
+   */
+  readonly voice: Call;
   /** The user's preferences, device-scoped and account-scoped alike. */
   readonly preferences: PreferenceStore;
   readonly #client: AspenClient;
@@ -605,7 +614,7 @@ export class AspenSync {
       storage: options.preferenceStorage === undefined ? pageStorage() : options.preferenceStorage,
     });
     this.#random = options.random ?? Math.random;
-    const voiceOptions: ConstructorParameters<typeof VoiceCall>[0] = {
+    const voiceOptions: VoiceCallOptions = {
       client: options.client,
       media: options.voiceMedia ?? lazyBrowserMedia(),
       now: this.#now,
@@ -621,7 +630,7 @@ export class AspenSync {
     }
     voiceOptions.userVolume = (userId, source) =>
       source === "screenAudio" ? this.#streamGain(userId) : this.#userGain(userId);
-    this.voice = new VoiceCall(voiceOptions);
+    this.voice = (options.createCall ?? ((made) => new VoiceCall(made)))(voiceOptions);
     // A block made or lifted, here or on another deployment, changes who is heard at once.
     this.store.subscribe("silenced", () => {
       this.voice.refreshVolumes();

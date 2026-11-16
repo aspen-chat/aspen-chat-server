@@ -235,7 +235,8 @@ export interface VoiceCallOptions {
 
 export type VoiceCallListener = () => void;
 
-const IDLE: VoiceCallState = {
+/** The state of a call no one is in, as `VoiceCall` and `NativeCall` both start and end. */
+export const IDLE_CALL_STATE: VoiceCallState = {
   status: "idle",
   channelId: null,
   session: null,
@@ -261,6 +262,8 @@ const IDLE: VoiceCallState = {
   stateRefused: null,
   endedReason: null,
 };
+
+const IDLE = IDLE_CALL_STATE;
 
 function sameChoice(a: DeviceChoice, b: DeviceChoice): boolean {
   if (a === DEFAULT_DEVICE || b === DEFAULT_DEVICE) {
@@ -387,7 +390,79 @@ function isVideo(source: MediaSource): source is "screen" | "camera" {
   return source === "screen" || source === "camera";
 }
 
-export class VoiceCall {
+/**
+ * The user's own call, as the app commands and reads it, whether or not a browser carries its
+ * media: `VoiceCall` runs the call in the browser (desktop and web), and the mobile apps'
+ * `NativeCall` forwards each command to the phone's call engine and mirrors its state. The app
+ * reads `state` and hears every change through `subscribe`; `AspenSync.voice` is one of these,
+ * made by its `createCall` option.
+ */
+export interface Call {
+  readonly state: VoiceCallState;
+  /** Calls `listener` after every change to `state`, until the function returned is called. */
+  readonly subscribe: (listener: VoiceCallListener) => () => void;
+  /**
+   * Joins a channel's call, leaving any current one first. Resolves once the call is connected
+   * (or left meanwhile), and rejects with what failed when it is not.
+   */
+  join(channelId: string): Promise<void>;
+  /** Leaves the call, if any. */
+  leave(): void;
+  /** Clears `endedReason` once the user has seen it. */
+  acknowledgeEnd(): void;
+  /** Shows other participants' video until the function returned is called. */
+  showVideo(): () => void;
+  /** Offers a file to everyone else in the call for `validForSeconds`; the offer's id. */
+  offerFile(file: Blob, name: string, allowDirect: boolean, validForSeconds: number): string;
+  /** Takes back one of the user's offers; transfers already started go on. */
+  withdrawOffer(offer: string): void;
+  /** Accepts an offer in the transfer mode the user acknowledged, writing it to `sink` when given. */
+  acceptOffer(offer: string, mode: TransferMode, sink?: FileSink): void;
+  /** Cancels one transfer, which ends at once on both sides. */
+  cancelTransfer(offer: string, peer: string): void;
+  /** Forgets a finished transfer, and any file it received. */
+  dismissTransfer(offer: string, peer: string): void;
+  setMuted(muted: boolean): void;
+  setDeafened(deafened: boolean): void;
+  /** Puts the call on hold, or takes it off, as `VoiceCallState.held` describes. */
+  setHeld(held: boolean): void;
+  /** Follows a moderator's mute of the user in the call's community being made or lifted. */
+  setServerMuted(serverMuted: boolean): void;
+  /** Forgets a refusal to unmute or undeafen once the user has seen it. */
+  clearStateRefusal(): void;
+  /** Shares the screen, as `VoiceCall.startScreenShare` describes its options. */
+  startScreenShare(options?: {
+    prepared?: ScreenCapture;
+    audio?: ExternalAudio;
+    contentHint?: "motion" | "detail" | "text";
+  }): Promise<void>;
+  /** Shares something sent from outside the browser, resolving once its first offer is answered. */
+  startExternalScreenShare(share: ExternalShare): Promise<void>;
+  /** Stops sharing the screen, if sharing. Safe to call at any time. */
+  stopScreenShare(): void;
+  /** Turns the camera on; a failure to open it is kept as `cameraError` and thrown. */
+  startCamera(): Promise<void>;
+  /** Dismisses the reason the camera last failed. */
+  clearCameraError(): void;
+  /** Turns the camera off, if it is on. */
+  stopCamera(): void;
+  /** The devices the call uses, from the user's preferences; takes effect at once. */
+  setAudioDevices(devices: {
+    input: DeviceChoice;
+    output: DeviceChoice;
+    camera?: DeviceChoice;
+  }): Promise<void>;
+  /** How loud the user's microphone is sent: a gain, 1 as captured. */
+  setInputVolume(gain: number): void;
+  /** Sets every received sound's gain again from `userVolume`, after what it answers has changed. */
+  refreshVolumes(): void;
+  /** How loud `userId`'s voice, or with `source` `screenAudio` the sound of their share, is heard. */
+  setUserVolume(userId: string, gain: number, source?: AudioSource): void;
+  /** Called by the sync layer with every `voiceSessionEnded` event. */
+  onSessionEnded(event: { id: string; channel: string; reason: VoiceSessionEndReason }): void;
+}
+
+export class VoiceCall implements Call {
   readonly #client: AspenClient;
   readonly #media: VoiceMedia;
   readonly #Socket: typeof globalThis.WebSocket;

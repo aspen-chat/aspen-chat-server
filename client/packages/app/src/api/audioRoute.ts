@@ -1,7 +1,8 @@
 import { SPEAKERPHONE } from "@aspen/protocol";
-import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import type { PluginListenerHandle } from "@capacitor/core";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useCallSource } from "./calls";
+import { AspenCall, nativeCalls, type PhoneRoutes } from "./nativeCall";
 
 /**
  * What a phone can play a call through: its receiver (the earpiece held to the ear, which an
@@ -15,25 +16,17 @@ export interface PhoneOutputs {
 }
 
 /**
- * The mobile apps' native side of a call's output (`AspenAudioRoute`, in each): web code can
- * neither list a phone's receiver and loudspeaker nor choose between them. `setSpeakerphone`
- * holds the choice until `release`, which gives the route back to the system; `outputsChange`
- * tells when something is connected or taken away.
+ * The outputs as the call's typed routes (`AspenCall.routes`) say: the receiver where the
+ * device has one, the loudspeaker always, and anything of another kind among the routes. Web
+ * code can neither list a phone's receiver and loudspeaker nor choose between them, so both
+ * come from the native side.
  */
-interface AspenAudioRoutePlugin {
-  outputs(): Promise<PhoneOutputs>;
-  setSpeakerphone(options: { on: boolean }): Promise<void>;
-  release(): Promise<void>;
-  addListener(
-    event: "outputsChange",
-    listener: (outputs: PhoneOutputs) => void,
-  ): Promise<PluginListenerHandle>;
-}
-
-const AspenAudioRoute = registerPlugin<AspenAudioRoutePlugin>("AspenAudioRoute");
-
-function canRoute(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable("AspenAudioRoute");
+export function outputsOf(routes: PhoneRoutes): PhoneOutputs {
+  return {
+    receiver: routes.hasReceiver,
+    speaker: true,
+    other: routes.routes.some((route) => route.kind !== "receiver" && route.kind !== "loudspeaker"),
+  };
 }
 
 /** Whether the choice is the receiver or the loudspeaker alone: nothing else is connected. */
@@ -45,14 +38,14 @@ export function choosesSpeakerphone(outputs: PhoneOutputs | null): boolean {
 export function usePhoneOutputs(): PhoneOutputs | null {
   const [outputs, setOutputs] = useState<PhoneOutputs | null>(null);
   useEffect(() => {
-    if (!canRoute()) {
+    if (!nativeCalls()) {
       return;
     }
     let live = true;
     let handle: PluginListenerHandle | null = null;
-    void AspenAudioRoute.addListener("outputsChange", (changed) => {
+    void AspenCall.addListener("routes", (changed) => {
       if (live) {
-        setOutputs(changed);
+        setOutputs(outputsOf(changed));
       }
     }).then((added) => {
       if (live) {
@@ -61,10 +54,10 @@ export function usePhoneOutputs(): PhoneOutputs | null {
         void added.remove();
       }
     });
-    void AspenAudioRoute.outputs().then(
+    void AspenCall.routes().then(
       (read) => {
         if (live) {
-          setOutputs(read);
+          setOutputs(outputsOf(read));
         }
       },
       () => undefined,
@@ -80,7 +73,9 @@ export function usePhoneOutputs(): PhoneOutputs | null {
 /**
  * In the mobile apps, plays a call through the loudspeaker or the receiver as `SPEAKERPHONE`
  * says, from when the call starts until it ends, and again whenever the choice or what is
- * connected changes. While anything else is connected the system's own route is left alone.
+ * connected changes: the choice goes to the call engine's routes (`AspenCall.setRoute`), which
+ * move the call's own audio. While anything else is connected the system's own route is left
+ * alone (`clearRoute`).
  */
 export function useFollowSpeakerphone(): void {
   const source = useCallSource();
@@ -97,12 +92,14 @@ export function useFollowSpeakerphone(): void {
   );
   const holds = inCall && choosesSpeakerphone(outputs);
   useEffect(() => {
-    if (!canRoute()) {
+    if (!nativeCalls()) {
       return;
     }
     const routed = holds
-      ? AspenAudioRoute.setSpeakerphone({ on: speakerphone })
-      : AspenAudioRoute.release();
-    void routed.catch(() => undefined);
+      ? AspenCall.setRoute({ kind: speakerphone ? "loudspeaker" : "receiver" })
+      : AspenCall.clearRoute();
+    routed.catch((error: unknown) => {
+      console.error(error);
+    });
   }, [holds, speakerphone, outputs]);
 }
