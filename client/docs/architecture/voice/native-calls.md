@@ -224,7 +224,7 @@ ringtone, a deployment lost) stay in the page.
 ## The stages
 
 The native call's bridge is built in stages, each adding to the same plugin and the same
-`NativeCall`; voice, video, and the sounds are in place:
+`NativeCall`; voice, video, the sounds, and the phones' side of rings are in place:
 
 1. Voice: join, leave, mute, deafen, hold, server mutes, per-person volume, session endings, the
    routes.
@@ -235,7 +235,11 @@ The native call's bridge is built in stages, each adding to the same plugin and 
 4. Screen sharing from the phone (`canShare`, `startScreenShare`).
 5. File transfers in the engine (`canTransfer`, `files`, and the offer and transfer commands), whose
    two sound cues come with them.
-6. Rings in the engine.
+6. Rings: the engine's ring watch (`voice_client/src/ring.rs`) and each phone ringing natively from
+   a `call` push are in place (`ios-app.md` and `android-builds.md`, Rings), and a ring answered
+   there joins through the deployment's one engine (`CallEngines`), the one the plugin commands, so
+   the page shows the call as any other. The page's own ring (`dm-calls-and-rings.md`) is as it was
+   beside the phone's.
 7. The microphone chosen by device (`setAudioDevices` by id). A gain on it is not planned: the
    phones' audio device modules apply none, which `hasInputVolume` says.
 
