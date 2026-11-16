@@ -169,17 +169,19 @@ call (`CallSystem` on iOS, Telecom following the engine on Android), as the engi
 
 The Speaker button sets `SPEAKERPHONE`; `useFollowSpeakerphone` (`src/api/audioRoute.ts`) applies it
 from the call's start to its end as `AspenCall.setRoute({ kind })`, `loudspeaker` or `receiver`, and
-`clearRoute` when the call ends or something else is connected. One path: the plugin gives the
-choice to `CallRoutes` (iOS: the override of the output port, applied again on every route change
-and when CallKit activates the session; Android: Telecom's `requestEndpointChange`, kept as the
-call's `chosen` kind and applied once Telecom lists the call's endpoints), which moves the engine's
-own audio. The web view's audio has no route of its own any more: the former `AspenAudioRoute`
-plugin, which chose the web view's route, is gone. What the phone can play through comes back the
-same way, typed: `AspenCall.routes()` and its `routes` event give each route's kind (`receiver`,
-`loudspeaker`, `bluetooth`, `wiredHeadset`, `car`, `other`), the system's name for display alone,
-whether it is in use, whether the device has a receiver, and the kind chosen; `usePhoneOutputs`
-reads `PhoneOutputs` off them (`outputsOf`), so the Speaker button shows only while a phone has its
-receiver and loudspeaker and nothing else to play through, as before.
+`clearRoute` when the call ends or something else is connected, withdrawing only a choice it
+applied: outside a call the page applies none and so clears none, whatever the routes say, since a
+choice held there is the native side's own (or a test's), not the page's. One path: the plugin gives
+the choice to `CallRoutes` (iOS: the override of the output port, applied again on every route
+change and when CallKit activates the session; Android: Telecom's `requestEndpointChange`, kept as
+the call's `chosen` kind and applied once Telecom lists the call's endpoints), which moves the
+engine's own audio. The web view's audio has no route of its own any more: the former
+`AspenAudioRoute` plugin, which chose the web view's route, is gone. What the phone can play through
+comes back the same way, typed: `AspenCall.routes()` and its `routes` event give each route's kind
+(`receiver`, `loudspeaker`, `bluetooth`, `wiredHeadset`, `car`, `other`), the system's name for
+display alone, whether it is in use, whether the device has a receiver, and the kind chosen;
+`usePhoneOutputs` reads `PhoneOutputs` off them (`outputsOf`), so the Speaker button shows only
+while a phone has its receiver and loudspeaker and nothing else to play through, as before.
 
 ## Video
 
@@ -279,7 +281,8 @@ The native call's bridge is built in stages, each adding to the same plugin and 
   volumes, the join's outcomes, the video (the videos as surfaces, the watching following what is
   shown, the camera's start, facing, failures, choice, and stop), the capabilities
   (`playsOwnSounds`, no `hasAudioDeviceChoice`, no `hasInputVolume`), and the rejections.
-  `src/api/audioRoute.test.tsx` reads the outputs off the typed routes;
+  `src/api/audioRoute.test.tsx` reads the outputs off the typed routes and has the speakerphone
+  choice applied to a call that exists and withdrawn only where it was applied;
   `src/api/filesBridge.test.ts` picks and releases a file and names a chosen place;
   `test/sync.test.ts` in the protocol package checks that the sync never tells a call without
   `hasInputVolume` the microphone's volume; `src/features/voice/callSounds.test.ts` that

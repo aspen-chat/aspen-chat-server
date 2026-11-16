@@ -1,6 +1,6 @@
 import { SPEAKERPHONE } from "@aspen/protocol";
 import type { PluginListenerHandle } from "@capacitor/core";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useCallSource } from "./calls";
 import { AspenCall, nativeCalls, type PhoneRoutes } from "./nativeCall";
 
@@ -74,8 +74,10 @@ export function usePhoneOutputs(): PhoneOutputs | null {
  * In the mobile apps, plays a call through the loudspeaker or the receiver as `SPEAKERPHONE`
  * says, from when the call starts until it ends, and again whenever the choice or what is
  * connected changes: the choice goes to the call engine's routes (`AspenCall.setRoute`), which
- * move the call's own audio. While anything else is connected the system's own route is left
- * alone (`clearRoute`).
+ * move the call's own audio. The choice is withdrawn (`clearRoute`) when the call it was made
+ * for ends, and while anything else is connected, so the system's own route applies; a choice
+ * the page did not make (one the native side holds, or a test's) is never withdrawn, so outside
+ * a call, where the page applies none, it clears none either, whatever the routes say.
  */
 export function useFollowSpeakerphone(): void {
   const source = useCallSource();
@@ -91,13 +93,22 @@ export function useFollowSpeakerphone(): void {
     () => preferences?.get(SPEAKERPHONE) ?? SPEAKERPHONE.fallback,
   );
   const holds = inCall && choosesSpeakerphone(outputs);
+  /** Whether the page's choice stands on the native side, so there is one to withdraw. */
+  const applied = useRef(false);
   useEffect(() => {
     if (!nativeCalls()) {
       return;
     }
-    const routed = holds
-      ? AspenCall.setRoute({ kind: speakerphone ? "loudspeaker" : "receiver" })
-      : AspenCall.clearRoute();
+    let routed: Promise<void>;
+    if (holds) {
+      applied.current = true;
+      routed = AspenCall.setRoute({ kind: speakerphone ? "loudspeaker" : "receiver" });
+    } else if (applied.current) {
+      applied.current = false;
+      routed = AspenCall.clearRoute();
+    } else {
+      return;
+    }
     routed.catch((error: unknown) => {
       console.error(error);
     });
