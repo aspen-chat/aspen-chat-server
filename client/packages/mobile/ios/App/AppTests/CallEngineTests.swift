@@ -101,6 +101,15 @@ final class CallEngineTests: XCTestCase {
         return value
     }
 
+    override func setUp() {
+        super.setUp()
+        // The simulator's audio server starts no output for a test process (each `AVAudioPlayer`
+        // start blocks the main queue for the HAL's timeouts and fails), so the call's sounds
+        // play on players in software, which read the recording and count as playing for its
+        // length.
+        CallSounds.makePlayer = { try SoftwareSoundPlayer(url: $0) }
+    }
+
     override func tearDown() {
         if let keptPushState {
             _ = PushStateStore.save(json: keptPushState)
@@ -196,8 +205,8 @@ final class CallEngineTests: XCTestCase {
         let socketsBefore = sockets.connections
         let connectionsBefore = peerConnections.created.count
         // The call's sounds, as the engine cues them and the layer plays them on the session the
-        // test activated as CallKit would: each is recorded as it starts, with the player's state
-        // and the session's category and mode at that moment.
+        // test activated as CallKit would, into players in software (`setUp`): each is recorded
+        // as it starts, with the player's state and the session's category and mode then.
         let sounds = SoundsSeen()
         let soundsListening = await MainActor.run { call.audio.sounds.listen { sounds.add($0) } }
         defer { soundsListening.cancel() }
@@ -420,7 +429,7 @@ final class CallEngineTests: XCTestCase {
         let played = sounds.played
         XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
         XCTAssertFalse(played.contains { $0.cue == .disconnected || $0.cue == .reconnected }, "a resume within the grace is no loss: \(played.map(\.cue))")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played by an AVAudioPlayer on the active session (\(joined.category.rawValue), \(joined.mode.rawValue))")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
     }
 
     // MARK: Helpers

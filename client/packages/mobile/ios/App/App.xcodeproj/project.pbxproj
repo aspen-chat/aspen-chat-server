@@ -62,6 +62,7 @@
 		A5E000000000000000000295 /* aspen-sound-effects-pack in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000285 /* aspen-sound-effects-pack */; };
 		A5E000000000000000000292 /* RootViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000282 /* RootViewController.swift */; };
 		A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000283 /* SyntheticVideoCapturer.swift */; };
+		A5E000000000000000000296 /* SoftwareSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000286 /* SoftwareSoundPlayer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -147,6 +148,7 @@
 		A5E000000000000000000285 /* aspen-sound-effects-pack */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "aspen-sound-effects-pack"; path = "../../../../../app/src/features/notifications/sounds/aspen-sound-effects-pack"; sourceTree = "<group>"; };
 		A5E000000000000000000282 /* RootViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootViewController.swift; sourceTree = "<group>"; };
 		A5E000000000000000000283 /* SyntheticVideoCapturer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticVideoCapturer.swift; sourceTree = "<group>"; };
+		A5E000000000000000000286 /* SoftwareSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareSoundPlayer.swift; sourceTree = "<group>"; };
 		A5E000000000000000000213 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -241,6 +243,7 @@
 				A5E000000000000000000217 /* CallRoutesTests.swift */,
 				A5E000000000000000000219 /* AspenCallPluginTests.swift */,
 				A5E000000000000000000283 /* SyntheticVideoCapturer.swift */,
+				A5E000000000000000000286 /* SoftwareSoundPlayer.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -572,6 +575,7 @@
 				A5E000000000000000000239 /* CallRoutesTests.swift in Sources */,
 				A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */,
 				A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */,
+				A5E000000000000000000296 /* SoftwareSoundPlayer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

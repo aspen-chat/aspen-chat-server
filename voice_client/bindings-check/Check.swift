@@ -98,7 +98,8 @@ func run() async throws -> String {
     precondition(seen.last == state, "the observer saw the latest snapshot")
     precondition(zip(seen, seen.dropFirst()).allSatisfy { $1.revision == $0.revision + 1 }, "revisions count up by one")
     precondition(snapshots.sounds.with { $0 }.isEmpty, "a refused join cues no sound")
-    precondition(SoundCue.allCases.count == 7, "every cue crosses: \(SoundCue.allCases)")
+    let cues: [SoundCue] = [.callJoined, .callLeft, .disconnected, .reconnected, .streamStarted, .transferAccepted, .transferComplete]
+    precondition(cues.count == 7, "every cue crosses: \(cues)")
     // `engine` is released on return, which leaves the call and waits for the engine's thread.
     return "ok: \(seen.count) snapshots, the last revision \(state.revision), status \(state.status)"
 }

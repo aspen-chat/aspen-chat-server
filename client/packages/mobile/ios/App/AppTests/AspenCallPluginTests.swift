@@ -50,10 +50,12 @@ final class AspenCallPluginTests: XCTestCase {
         try await super.setUp()
         continueAfterFailure = false
         // The simulator's own audio unit aborts the process when initialized, so the engines the
-        // plugin makes run on an audio device in software, and the camera on a capturer in
-        // software, the simulator having none.
+        // plugin makes run on an audio device in software, the camera on a capturer in software,
+        // the simulator having none, and the call's sounds on players in software, since the
+        // simulator's audio server starts no output for a test process.
         CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
         CallEngine.camera.makeCapturer = { SyntheticVideoCapturer() }
+        CallSounds.makePlayer = { try SoftwareSoundPlayer(url: $0) }
         (webView, bridgeViewController) = try await MainActor.run {
             let windows = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }

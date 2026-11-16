@@ -1,6 +1,21 @@
 import AVFoundation
 import Foundation
 
+/// What plays one recording for `CallSounds`: an `AVAudioPlayer` in the app, and in the
+/// simulator's proof a player in software, since the simulator's audio server starts no output
+/// for a test process (each attempt blocks the main queue for the HAL's timeouts and fails).
+protocol CallSoundPlayer: AnyObject {
+    var isPlaying: Bool { get }
+    /// Where the next `play` starts, in seconds.
+    var currentTime: TimeInterval { get set }
+    func prepareToPlay() -> Bool
+    /// Starts playing; `false` when the system would not.
+    func play() -> Bool
+    func stop()
+}
+
+extension AVAudioPlayer: CallSoundPlayer {}
+
 /// The call's sounds, as the engine cues them (`CallObserver.playSound`), played on the call's
 /// own audio session: each cue is a recording of the Aspen Sound Effects Pack, bundled as the
 /// folder `aspen-sound-effects-pack` (the same files the web client plays), played by an
@@ -20,7 +35,7 @@ import Foundation
 ///
 /// `play` may be called from any thread (the engine's); everything else runs on the main queue,
 /// where CallKit's activation arrives too.
-final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+final class CallSounds: @unchecked Sendable {
     /// How long a cue waits for the session's activation before it is dropped: the web client's
     /// `START_LIMIT_MS`, past which a sound held for a speaker would be stale.
     static let activationWait: TimeInterval = 2
@@ -28,12 +43,15 @@ final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     static let maxPlayingPerCue = 2
     /// The bundled folder the recordings are in.
     static let folder = "aspen-sound-effects-pack"
+    /// Makes the player of one recording: an `AVAudioPlayer`, which the simulator's proof
+    /// replaces with a player in software before the first engine is made.
+    static var makePlayer: (URL) throws -> CallSoundPlayer = { try AVAudioPlayer(contentsOf: $0) }
 
     /// A cue the layer has started playing, for the proof: the player, which is playing as it
     /// is given, and the session it plays on.
     struct Played {
         let cue: SoundCue
-        let player: AVAudioPlayer
+        let player: CallSoundPlayer
         let category: AVAudioSession.Category
         let mode: AVAudioSession.Mode
     }
@@ -63,7 +81,7 @@ final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     /// Cues that arrived while the session was inactive, each with when, for `activationWait`.
     private var waiting: [(cue: SoundCue, since: Date)] = []
     /// The players made for each cue, at most `maxPlayingPerCue`; one that is not playing is used again.
-    private var players: [SoundCue: [AVAudioPlayer]] = [:]
+    private var players: [SoundCue: [CallSoundPlayer]] = [:]
     private var listeners: [UUID: Listener] = [:]
 
     init(bundle: Bundle = .main) {
@@ -148,7 +166,7 @@ final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
 
     /// A player for `cue` that is not playing, made when every one made so far plays and there
     /// is room for another; `nil` past `maxPlayingPerCue`, or when the recording is not bundled.
-    private func player(for cue: SoundCue) -> AVAudioPlayer? {
+    private func player(for cue: SoundCue) -> CallSoundPlayer? {
         var made = players[cue] ?? []
         if let idle = made.first(where: { !$0.isPlaying }) {
             return idle
@@ -161,9 +179,8 @@ final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
             return nil
         }
         do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.delegate = self
-            player.prepareToPlay()
+            let player = try Self.makePlayer(url)
+            _ = player.prepareToPlay()
             made.append(player)
             players[cue] = made
             return player
@@ -171,9 +188,5 @@ final class CallSounds: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
             NSLog("The call's sound %@ could not be read: %@", Self.file(of: cue), String(describing: error))
             return nil
         }
-    }
-
-    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        NSLog("The call's sound could not be decoded: %@", String(describing: error))
     }
 }

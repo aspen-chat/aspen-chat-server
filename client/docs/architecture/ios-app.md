@@ -250,7 +250,12 @@ and is dropped past that, and one arriving while the session is inactive is drop
 deactivation stops a sound under way. At most two of one cue play at once (`maxPlayingPerCue`, the
 web client's `MAX_PLAYING_PER_SOUND`), a third not being heard; the engine spaces repeats of a cue
 itself. `play` takes the cue on the engine's thread and hops to the main queue, where the activation
-arrives too.
+arrives too. The player is behind `CallSoundPlayer` (`CallSounds.makePlayer`), which the simulator's
+proof replaces with a player in software (`AppTests/SoftwareSoundPlayer.swift`): the simulator's
+audio server starts no output for a test process (`HALC_ProxyIOContext::_StartIO` fails after the
+HAL's 30-second waits, each `AVAudioPlayer.play` blocking the main queue for them), so what the
+simulator proves is which cue plays which bundled file, only on an active session, and at most two
+at once; the sound itself is the device's to show.
 
 ### Routes
 
@@ -347,8 +352,9 @@ for every outgoing call, the simulator has no such app, and it ends a call whose
 open about half a second after the start action is fulfilled, with an end action the provider
 performs (`callservicesd`'s log: `Failed to open URL facetime://?showInCallUI=1`, then
 `disconnect reason: 55`). So the simulator shows the start action performed and the end action
-handled, and nothing after; and it plays through the Mac, with no receiver, headset, or cellular
-radio. These stand to be checked on an iPhone:
+handled, and nothing after; it plays through the Mac, with no receiver, headset, or cellular radio;
+and its audio server starts no output for a test process, so the call's sounds are proved into
+players in software. These stand to be checked on an iPhone:
 
 - [ ] An outgoing call stands: started from the app in the foreground, it shows no system in-call UI
       over the app, is reported connected, and ends when the user leaves.
@@ -430,16 +436,18 @@ flows on across the resume; and the camera is stopped before the leave. The pict
 started on the browser's camera where the system supports one, and the simulator's does not, which
 the log line says. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
 played as the engine connects and again as the browser joins, the leaving as the call is left, no
-loss is said of the resume within the grace, and each is an `AVAudioPlayer` playing as the cue is
-given, on the session the test activated as CallKit would (play and record, voice chat), which the
-log line names too. `AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use,
-a receiver listed for the iPhone idiom), the kind of each port type, and the proximity rule, and
-holds and resets a choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under
-test is the app, whose `MainViewController` has loaded the web shell with the plugin registered, so
-the test finds its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the
-app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision
-0, of its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker
-and reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
+loss is said of the resume within the grace, and each is a player playing as the cue is given, on
+the session the test activated as CallKit would (play and record, voice chat), which the log line
+names too; the players are in software (`SoftwareSoundPlayer`, Sounds above), each having read its
+bundled recording, since the simulator's audio server starts no output for a test process.
+`AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
+for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
+choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app,
+whose `MainViewController` has loaded the web shell with the plugin registered, so the test finds
+its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the app's
+`NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision 0, of
+its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker and
+reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
 stands; the simulator has no receiver port) and clears it, mutes and unmutes outside a call and sees
 each in a snapshot, has malformed commands refused by name, reports whether the page's
 `AudioContext` runs with the call's session active, and joins the channel through the plugin: the
