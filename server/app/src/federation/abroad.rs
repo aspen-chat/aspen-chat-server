@@ -626,9 +626,10 @@ async fn arrive(
     .await
 }
 
-/// Makes `user`'s avatar a copy of `home`'s icon `home_icon`, or takes it away with `None`. The
-/// copy it replaces is deleted once nothing uses it, so a home that changes its user's avatar
-/// at every sign-in leaves one copy here, not one for each.
+/// Makes `user`'s avatar a copy of `home`'s icon `home_icon`, stored as every icon is
+/// (`icon::as_stored`), or takes it away with `None`. The copy it replaces is deleted once
+/// nothing uses it, so a home that changes its user's avatar at every sign-in leaves one copy
+/// here, not one for each.
 async fn copy_avatar(
     state: &GlobalServerContext,
     user_id: UserId,
@@ -656,6 +657,11 @@ async fn copy_avatar(
         Some((bytes, mime_type)) => {
             let id = IconId::new();
             let key = crate::icon::storage_key(id);
+            let crate::icon::Stored {
+                bytes,
+                mime_type,
+                fitted: _,
+            } = crate::icon::as_stored(bytes, mime_type).await;
             state.media_store.put_bytes(&key, bytes, &mime_type).await?;
             Some(crate::icon::Icon {
                 id,

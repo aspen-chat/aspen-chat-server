@@ -14,3 +14,7 @@
     <meta property="og:image:height" content="{{ size }}" />
 {%- endif %}
     <meta name="twitter:card" content="summary" />
+    <script type="application/json" id="{{ profile_element_id }}">{{ profile_json|safe }}</script>
+{%- if let Some(icon) = preload_icon %}
+    <link rel="preload" as="image" href="{{ icon }}" />
+{%- endif %}

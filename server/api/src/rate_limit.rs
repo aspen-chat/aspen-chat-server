@@ -82,11 +82,11 @@ pub const OIDC_BACK_CHANNEL_LOGOUT: (&str, &str) = (
     aspen_app::identity_provider::BACK_CHANNEL_LOGOUT_PATH,
 );
 
-/// The web client's pages (`api::web_client`), served outside `API_PREFIX` and not in the
-/// OpenAPI document: an invite's, and every other. Each checks its own limits, and over them is
-/// served without reading what it previews as rather than refused. Its files are not limited.
+/// The web client's invite page (`api::web_client`), served outside `API_PREFIX` and not in the
+/// OpenAPI document. It checks its own limits, and over them is served as the deployment's page
+/// rather than refused. The web client's other pages and its files are not limited: they are
+/// made from what the server holds, reading nothing.
 pub const WEB_CLIENT_INVITE: (&str, &str) = ("GET", "/invite/{code}");
-pub const WEB_CLIENT_PAGE: (&str, &str) = ("GET", "/{*path}");
 
 /// Plugins' own routes (`api::plugin::route`), which are not in the OpenAPI document.
 pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
@@ -130,7 +130,6 @@ pub fn routes() -> Vec<Route> {
         OIDC_CALLBACK,
         OIDC_BACK_CHANNEL_LOGOUT,
         WEB_CLIENT_INVITE,
-        WEB_CLIENT_PAGE,
     ] {
         routes.push(Route::new(method, template, Access::Anonymous));
     }

@@ -5,7 +5,6 @@
 //! them, and to the services that unfurl links, before they do.
 
 use crate::context::GlobalServerContext;
-use crate::deployment_settings;
 use crate::icon::Icon;
 use aspen_schema::{community, icon, invite};
 use chrono::Utc;
@@ -30,25 +29,13 @@ pub struct Preview {
     pub community: Option<Subject>,
 }
 
-/// The preview of every page but an invite's.
-pub async fn of_deployment(state: &GlobalServerContext) -> crate::Result<Preview> {
-    let read = deployment_settings::read_with_icon(state).await?;
-    Ok(Preview {
-        deployment: Subject {
-            name: read.settings.display_name,
-            icon: read.icon,
-        },
-        community: None,
-    })
-}
-
-/// The preview of every page but an invite's from what this server already holds: the
-/// deployment's name, without its icon, which takes a read.
-pub fn by_name(state: &GlobalServerContext) -> Preview {
+/// The preview of every page but an invite's, from this server's copy of the settings.
+pub fn of_deployment(state: &GlobalServerContext) -> Preview {
+    let read = state.settings.profile();
     Preview {
         deployment: Subject {
-            name: state.settings().display_name.clone(),
-            icon: None,
+            name: read.settings.display_name.clone(),
+            icon: read.icon.clone(),
         },
         community: None,
     }
@@ -58,7 +45,7 @@ pub fn by_name(state: &GlobalServerContext) -> Preview {
 /// revoked nor expired and the community is not deleted, and otherwise the deployment, so a
 /// link that no longer works previews as no community at all.
 pub async fn of_invite(state: &GlobalServerContext, code: &str) -> crate::Result<Preview> {
-    let mut preview = of_deployment(state).await?;
+    let mut preview = of_deployment(state);
     let mut conn = state.connection_pool.get().await?;
     let found: Option<(String, Option<Icon>)> = invite::table
         .inner_join(community::table)

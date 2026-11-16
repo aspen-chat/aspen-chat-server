@@ -35,6 +35,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`recountMembers`](#recountmembers)                 | maintenance                                        | hourly                                                         | Recounts each community's members.                                                                                                                             |
 | [`recordStats`](#recordstats)                       | maintenance                                        | hourly                                                         | Writes today's deployment totals.                                                                                                                              |
 | [`forgetIcon`](#forgeticon)                         | maintenance                                        |                                                                | Deletes one icon nothing uses.                                                                                                                                 |
+| [`shrinkIcons`](#shrinkicons)                       | maintenance                                        |                                                                | Stores icons confirmed before icons were stored fitted, fitted.                                                                                                |
 | [`purgeEvidence`](#purgeevidence)                   | maintenance                                        | daily                                                          | Deletes deleted messages' files past the retention.                                                                                                            |
 | [`fitStreams`](#fitstreams)                         | normal                                             | every fifteen seconds                                          | Sizes the NATS streams to their settings and NATS's memory.                                                                                                    |
 | [`forgetIdentityProvider`](#forgetidentityprovider) | normal                                             |                                                                | Deletes a removed identity provider's links.                                                                                                                   |
@@ -163,6 +164,21 @@ database queues it, through the triggers of `aspen_icon_let_go` and `aspen_icon_
 
 - a day after an icon's upload is confirmed, for one never put to use, and
 - as soon as a user, community, or the deployment lets go of its icon or is deleted.
+
+### `shrinkIcons`
+
+Stores every icon confirmed before icons were stored fitted within 512 pixels as WebP
+(`icon::shrink_step`, `icon::as_stored`; see [Icons](../icons.md)). A migration queues it once.
+Eight icons a step, in id order, each step's last id kept as its progress:
+
+- an icon whose WebP would not be at least a tenth smaller, or that moves, is left as it is;
+- one that is fitted has its picture stored over the old under its own key, so every link holds, and
+  its type written to its row;
+- the deployment's own icon also raises the settings' revision, so every server reads it again
+  (`deployment_settings::icon_stored_anew`);
+- an icon deleted while its picture was fitted has that picture deleted too.
+
+The originals are not kept.
 
 ## Deleted roles and emoji
 

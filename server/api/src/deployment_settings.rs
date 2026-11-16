@@ -81,7 +81,7 @@ impl EmailPolicy {
 }
 
 impl DeploymentProfile {
-    fn new(state: &GlobalServerContext, read: WithIcon) -> Self {
+    pub fn new(state: &GlobalServerContext, read: &WithIcon) -> Self {
         Self {
             email: EmailPolicy::new(state, &read.settings),
             mana: ManaPolicy {
@@ -89,8 +89,8 @@ impl DeploymentProfile {
                 max: read.settings.mana_max,
                 attachment_cost: read.settings.mana_attachment_cost,
             },
-            display_name: read.settings.display_name,
-            icon: read.icon.map(|icon| icon_to_api(state, icon)),
+            display_name: read.settings.display_name.clone(),
+            icon: read.icon.clone().map(|icon| icon_to_api(state, icon)),
             web_client_url: state.config.public_url.clone(),
         }
     }
@@ -123,21 +123,21 @@ impl From<DeploymentProfileUpdateRequest> for SettingsChange {
     }
 }
 
-/// How the deployment presents itself: its display name and icon. Unauthenticated.
+/// How the deployment presents itself: its display name and icon. Unauthenticated, and needs no
+/// device credential: the sign-in screen shows it before anything else, and it is answered from
+/// the server's own copy of the settings.
 #[utoipa::path(
     get,
     path = "/deployment",
     tag = TAG_DEPLOYMENT,
     responses(
         (status = OK, body = DeploymentProfile),
-        (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn get_deployment_profile(
     State(state): State<GlobalServerContext>,
-) -> ApiResult<Json<DeploymentProfile>> {
-    let read = deployment_settings::read_with_icon(&state).await?;
-    Ok(Json(DeploymentProfile::new(&state, read)))
+) -> Json<DeploymentProfile> {
+    Json(DeploymentProfile::new(&state, &state.settings.profile()))
 }
 
 /// Changes the deployment's display name or icon. Takes Manage deployment settings.
@@ -161,7 +161,7 @@ pub async fn update_deployment_profile(
     Json(request): Json<DeploymentProfileUpdateRequest>,
 ) -> ApiResult<Json<DeploymentProfile>> {
     let read = deployment_settings::update_as(&state, &access, request.into()).await?;
-    Ok(Json(DeploymentProfile::new(&state, read)))
+    Ok(Json(DeploymentProfile::new(&state, &read)))
 }
 
 /// The policies the deployment's administrators set.
@@ -325,8 +325,8 @@ pub async fn get_settings(
     AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<DeploymentSettings>> {
     access.require(DeploymentPermission::ManageDeploymentSettings)?;
-    let read = deployment_settings::read_with_icon(&state).await?;
-    Ok(Json(DeploymentSettings::new(&state, &read.settings)))
+    let settings = deployment_settings::read(&state).await?;
+    Ok(Json(DeploymentSettings::new(&state, &settings)))
 }
 
 /// Changes the deployment's policies, for every server at once. Turning on two factors closes

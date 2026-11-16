@@ -4,7 +4,8 @@
 //! say what the link opens (`app::open_graph`), so a link pasted into a chat, a post, or a
 //! message previews as the deployment, or as the community an invite leads to. Crawlers read
 //! only the HTML, never running the web client's script, so the tags have to be in the page as
-//! served.
+//! served. The page also carries the deployment's profile, and preloads its icon, for the
+//! sign-in screen to show before its script could read them.
 //!
 //! Everything is read from the directory on each request, so a new release of the web client is
 //! served as soon as it is in place. The server does not start without it (`check`).
@@ -14,6 +15,7 @@
 //! keeps any other page from framing it, and lets it reach only what it uses, and `nosniff`, no
 //! referrer, no opener shared with another page, and, over `https`, HSTS.
 
+use crate::deployment_settings::DeploymentProfile;
 use crate::error::{ApiError, ApiResult, ProblemCode};
 use crate::extract::Path;
 use crate::rate_limit::{self, PeerAddr};
@@ -104,10 +106,41 @@ struct Image {
     size: Option<u32>,
 }
 
+/// The `id` of the element in the page's head holding the deployment's profile, as
+/// `GET /deployment` answers it, which the web client reads in place of that request
+/// (`client/packages/app/src/features/auth/deploymentProfile.ts`; both match
+/// `spec/web_client_page.json`).
+const PROFILE_ELEMENT_ID: &str = "aspen-deployment-profile";
+
 #[derive(Template)]
 #[template(path = "web_client/open_graph.html")]
 struct HeadTemplate<'a> {
     tags: &'a Tags,
+    profile_element_id: &'a str,
+    /// The profile as JSON that cannot end the `<script>` element holding it ([`script_json`]).
+    profile_json: &'a str,
+    /// The deployment's icon, which the sign-in screen shows, fetched as the page loads rather
+    /// than once its script has run.
+    preload_icon: Option<&'a str>,
+}
+
+/// `value` as JSON that can stand inside a `<script>` element: `<`, `>`, and `&` are written as
+/// escapes, so no `</script>` or `<!--` can occur in it, and so are U+2028 and U+2029, which
+/// some readers take for line ends. JSON reads the escapes as the characters they stand for.
+fn script_json(value: &impl serde::Serialize) -> serde_json::Result<String> {
+    let json = serde_json::to_string(value)?;
+    let mut escaped = String::with_capacity(json.len());
+    for character in json.chars() {
+        match character {
+            '<' => escaped.push_str("\\u003c"),
+            '>' => escaped.push_str("\\u003e"),
+            '&' => escaped.push_str("\\u0026"),
+            '\u{2028}' => escaped.push_str("\\u2028"),
+            '\u{2029}' => escaped.push_str("\\u2029"),
+            other => escaped.push(other),
+        }
+    }
+    Ok(escaped)
 }
 
 /// Refuses to start without the web client: `[web_client] dir` must hold an `index.html` with a
@@ -178,33 +211,14 @@ async fn file_headers(
     response
 }
 
-/// Every page of the web client but an invite's. Over its limits it previews as the deployment
-/// by name alone, without reading its icon.
-async fn page(
-    State(state): State<GlobalServerContext>,
-    peer: Option<Extension<PeerAddr>>,
-    headers: HeaderMap,
-    uri: Uri,
-) -> ApiResult<Response> {
+/// Every page of the web client but an invite's, which previews as the deployment.
+async fn page(State(state): State<GlobalServerContext>, uri: Uri) -> ApiResult<Response> {
     // A file of a release no longer served, which a page of that release may still ask for, is
     // missing rather than a page its script cannot run.
     if uri.path().starts_with(ASSETS) {
         return Err(ApiError::new(ProblemCode::NotFound));
     }
-    let within = rate_limit::within_limits(
-        &state,
-        rate_limit::WEB_CLIENT_PAGE,
-        peer.map(|Extension(peer)| peer),
-        &headers,
-        Vec::new(),
-    )
-    .await;
-    let preview = if within {
-        app::open_graph::of_deployment(&state).await
-    } else {
-        Ok(app::open_graph::by_name(&state))
-    };
-    respond(&state, &uri, preview).await
+    respond(&state, &uri, Ok(app::open_graph::of_deployment(&state))).await
 }
 
 /// An invite's page, `/invite/{code}`, which previews as the invite's community. One whose
@@ -230,7 +244,7 @@ pub async fn invite_page(
     let preview = if read_invite {
         app::open_graph::of_invite(&state, &code).await
     } else {
-        app::open_graph::of_deployment(&state).await
+        Ok(app::open_graph::of_deployment(&state))
     };
     respond(&state, &uri, preview).await
 }
@@ -270,10 +284,22 @@ async fn respond(
         })?;
     let preview = preview.unwrap_or_else(|error| {
         tracing::warn!(%error, "Could not read what a web client page previews as");
-        app::open_graph::by_name(state)
+        app::open_graph::of_deployment(state)
     });
     let tags = tags(state, base, uri, preview);
-    let head = HeadTemplate { tags: &tags }.render().map_err(|error| {
+    let profile = DeploymentProfile::new(state, &state.settings.profile());
+    let profile_json = script_json(&profile).map_err(|error| {
+        tracing::error!(%error, "Could not write the deployment's profile into a web client page");
+        ApiError::new(ProblemCode::Internal)
+    })?;
+    let head = HeadTemplate {
+        tags: &tags,
+        profile_element_id: PROFILE_ELEMENT_ID,
+        profile_json: &profile_json,
+        preload_icon: profile.icon.as_ref().map(|icon| icon.download_url.as_str()),
+    }
+    .render()
+    .map_err(|error| {
         tracing::error!(%error, "Could not render the web client's Open Graph tags");
         ApiError::new(ProblemCode::Internal)
     })?;
@@ -529,8 +555,57 @@ mod tests {
     }
 
     fn render(tags: &Tags) -> String {
-        let head = HeadTemplate { tags }.render().unwrap();
+        render_with(tags, "{}", None)
+    }
+
+    fn render_with(tags: &Tags, profile_json: &str, preload_icon: Option<&str>) -> String {
+        let head = HeadTemplate {
+            tags,
+            profile_element_id: PROFILE_ELEMENT_ID,
+            profile_json,
+            preload_icon,
+        }
+        .render()
+        .unwrap();
         with_head(INDEX, &head).unwrap()
+    }
+
+    #[test]
+    fn the_profile_element_is_named_as_the_client_reads_it() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("../../../spec/web_client_page.json")).unwrap();
+        assert_eq!(spec["profileElementId"], PROFILE_ELEMENT_ID);
+    }
+
+    #[test]
+    fn the_profile_cannot_end_its_script() {
+        let name = "</script><script>alert(1)</script><!-- & \u{2028}\u{2029}";
+        let json = script_json(&serde_json::json!({ "displayName": name })).unwrap();
+        for forbidden in ["<", ">", "&", "\u{2028}", "\u{2029}"] {
+            assert!(!json.contains(forbidden), "{forbidden:?} in {json}");
+        }
+        let read: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(read["displayName"], name);
+
+        let page = render_with(&tags("Gardeners"), &json, None);
+        let opening = format!(r#"<script type="application/json" id="{PROFILE_ELEMENT_ID}">"#);
+        let start = page.find(&opening).unwrap() + opening.len();
+        let end = start + page[start..].find("</script>").unwrap();
+        assert_eq!(&page[start..end], json);
+        assert!(end < page.find("</head>").unwrap());
+        assert!(!page.contains(r#"rel="preload""#));
+    }
+
+    #[test]
+    fn the_icon_is_preloaded_when_there_is_one() {
+        let page = render_with(
+            &tags("Gardeners"),
+            "{}",
+            Some("https://media.example.org/icons/a?b=1&c=2"),
+        );
+        assert!(page.contains(
+            r#"<link rel="preload" as="image" href="https://media.example.org/icons/a?b=1&#38;c=2" />"#
+        ));
     }
 
     #[test]

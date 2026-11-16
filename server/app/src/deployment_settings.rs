@@ -422,40 +422,47 @@ struct Touched {
     settings: bool,
 }
 
-/// The settings with their icon, as the profile shows them.
+/// The settings with their icon, as the profile shows them and each server holds them.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WithIcon {
-    pub settings: DeploymentSettings,
+    pub settings: Arc<DeploymentSettings>,
     /// The icon, only once its upload is confirmed.
     pub icon: Option<Icon>,
 }
 
-/// Each server's copy of the settings, which requests read instead of the row.
+/// Each server's copy of the settings and their icon, which requests read instead of the row:
+/// the profile (`GET /deployment`, the web client's pages) is answered from it with no query.
 #[derive(Clone)]
-pub struct SettingsCache(Arc<watch::Sender<Arc<DeploymentSettings>>>);
+pub struct SettingsCache(Arc<watch::Sender<Arc<WithIcon>>>);
 
 impl SettingsCache {
-    /// A copy holding `settings`, read as the server starts.
-    pub fn new(settings: DeploymentSettings) -> Self {
-        Self(Arc::new(watch::Sender::new(Arc::new(settings))))
+    /// A copy holding `read`, read as the server starts.
+    pub fn new(read: WithIcon) -> Self {
+        Self(Arc::new(watch::Sender::new(Arc::new(read))))
     }
 
     /// The settings as this server last read them.
     pub fn current(&self) -> Arc<DeploymentSettings> {
+        self.0.borrow().settings.clone()
+    }
+
+    /// The settings with their icon as this server last read them.
+    pub fn profile(&self) -> Arc<WithIcon> {
         self.0.borrow().clone()
     }
 
     /// A receiver told of each change this server reads.
-    pub fn subscribe(&self) -> watch::Receiver<Arc<DeploymentSettings>> {
+    pub fn subscribe(&self) -> watch::Receiver<Arc<WithIcon>> {
         self.0.subscribe()
     }
 
-    /// Takes `settings` as read from the row, unless this copy already holds a later revision.
-    fn offer(&self, settings: DeploymentSettings) {
+    /// Takes `read` as read from the row, unless this copy already holds a later revision.
+    fn offer(&self, read: WithIcon) {
         self.0.send_if_modified(|held| {
-            if settings.revision < held.revision || **held == settings {
+            if read.settings.revision < held.settings.revision || **held == read {
                 return false;
             }
-            *held = Arc::new(settings);
+            *held = Arc::new(read);
             true
         });
     }
@@ -470,6 +477,12 @@ pub async fn load(conn: &mut AsyncPgConnection) -> crate::Result<DeploymentSetti
         .into())
 }
 
+/// The settings as the row holds them now, for an administrator, who may have just changed them
+/// on another server whose change this server's copy has not caught up with.
+pub async fn read(state: &GlobalServerContext) -> crate::Result<DeploymentSettings> {
+    load(state.connection_pool.get().await?.as_mut()).await
+}
+
 /// The settings as the row holds them, with the row locked until the transaction ends, so that
 /// what is done with them is done before any change to them.
 pub(crate) async fn load_locked(conn: &mut AsyncPgConnection) -> crate::Result<DeploymentSettings> {
@@ -481,9 +494,8 @@ pub(crate) async fn load_locked(conn: &mut AsyncPgConnection) -> crate::Result<D
         .into())
 }
 
-/// The settings with their icon, for the profile.
-pub async fn read_with_icon(state: &GlobalServerContext) -> crate::Result<WithIcon> {
-    let mut conn = state.connection_pool.get().await?;
+/// The settings with their icon as the row holds them now.
+pub async fn load_with_icon(conn: &mut AsyncPgConnection) -> crate::Result<WithIcon> {
     let (row, icon): (SettingsRow, Option<Icon>) = deployment_settings::table
         .left_join(
             icon::table.on(icon::id
@@ -492,10 +504,10 @@ pub async fn read_with_icon(state: &GlobalServerContext) -> crate::Result<WithIc
                 .and(icon::ready_at.is_not_null())),
         )
         .select((SettingsRow::as_select(), Option::<Icon>::as_select()))
-        .first(conn.as_mut())
+        .first(conn)
         .await?;
     Ok(WithIcon {
-        settings: row.into(),
+        settings: Arc::new(row.into()),
         icon,
     })
 }
@@ -568,7 +580,7 @@ pub async fn update_as(
             .await?;
         }
     }
-    let changed = update(
+    update(
         state,
         conn.as_mut(),
         crate::email::available(state),
@@ -576,9 +588,11 @@ pub async fn update_as(
         change,
     )
     .await?;
-    state.settings.offer(changed.clone());
-    drop(conn);
-    read_with_icon(state).await
+    // Read with its icon and offered at once, so this server's next read of the profile is
+    // the change rather than waiting for the watcher.
+    let read = load_with_icon(conn.as_mut()).await?;
+    state.settings.offer(read.clone());
+    Ok(read)
 }
 
 /// Changes the settings, for the dashboard (through [`update_as`]) or the terminal, and answers
@@ -771,6 +785,28 @@ async fn bucket(context: &async_nats::jetstream::Context) -> crate::Result<Store
         .map_err(crate::Error::from)
 }
 
+/// Has every server read the settings again when `icon` is the deployment's, whose picture was
+/// stored anew (`icon::shrink_step`): its row is unchanged but for `revision`, so each server's
+/// copy of the icon would otherwise keep the type it was read with. Part of `conn`'s
+/// transaction, like every change to the settings.
+pub(crate) async fn icon_stored_anew(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    icon: IconId,
+) -> crate::Result<()> {
+    let revision: Option<i64> =
+        diesel::update(deployment_settings::table.filter(deployment_settings::icon.eq(icon)))
+            .set(deployment_settings::revision.eq(deployment_settings::revision + 1))
+            .returning(deployment_settings::revision)
+            .get_result(conn)
+            .await
+            .optional()?;
+    if let Some(revision) = revision {
+        ring(state.nats(), revision).await?;
+    }
+    Ok(())
+}
+
 /// Tells every server that the settings reached `revision`.
 async fn ring(context: &async_nats::jetstream::Context, revision: i64) -> crate::Result<()> {
     bucket(context)
@@ -820,9 +856,9 @@ async fn follow(state: &GlobalServerContext) -> crate::Result<()> {
 async fn catch_up(state: &GlobalServerContext, revision: i64) -> crate::Result<()> {
     let deadline = tokio::time::Instant::now() + CATCH_UP;
     loop {
-        let settings = load(state.connection_pool.get().await?.as_mut()).await?;
-        let caught_up = settings.revision >= revision;
-        state.settings.offer(settings);
+        let read = load_with_icon(state.connection_pool.get().await?.as_mut()).await?;
+        let caught_up = read.settings.revision >= revision;
+        state.settings.offer(read);
         if caught_up || tokio::time::Instant::now() >= deadline {
             return Ok(());
         }

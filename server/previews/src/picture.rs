@@ -22,10 +22,17 @@ pub struct Picture {
     pub height: u32,
 }
 
-/// Makes the preview of the picture in `bytes`, or says why none is made. The picture is
-/// anyone's, so it is refused when it has more than `max_pixels` before any of it is decoded,
-/// whatever its kind, and decoding allocates no more than such a picture needs.
+/// Makes the preview of the picture in `bytes`, fitted within [`crate::BOX`], or says why none
+/// is made ([`fitted`]).
 pub fn preview(bytes: &[u8], max_pixels: u64) -> Result<Picture, &'static str> {
+    fitted(bytes, max_pixels, crate::BOX)
+}
+
+/// The picture in `bytes` brought into sRGB, fitted within `bounds` (width, then height), and
+/// encoded as WebP, or why it is not. The picture is anyone's, so it is refused when it has
+/// more than `max_pixels` before any of it is decoded, whatever its kind, and decoding
+/// allocates no more than such a picture needs.
+pub fn fitted(bytes: &[u8], max_pixels: u64, bounds: (u32, u32)) -> Result<Picture, &'static str> {
     let limits = limits(max_pixels);
     let reader = || {
         let mut reader = ImageReader::new(Cursor::new(bytes))
@@ -72,7 +79,7 @@ pub fn preview(bytes: &[u8], max_pixels: u64) -> Result<Picture, &'static str> {
     }
 
     let (width, height) = (image.width(), image.height());
-    let (target_width, target_height) = crate::fit((width, height), crate::BOX);
+    let (target_width, target_height) = crate::fit((width, height), bounds);
     if (target_width, target_height) != (width, height) {
         let mut resized = if alpha {
             DynamicImage::new_rgba8(target_width, target_height)
@@ -238,6 +245,16 @@ mod tests {
         let decoded = decode(&picture.webp);
         assert_eq!((decoded.width(), decoded.height()), (1280, 960));
         assert!(!decoded.color().has_alpha());
+    }
+
+    #[test]
+    fn a_picture_is_fitted_in_the_box_it_is_given() {
+        let picture = fitted(&jpeg(&photo(2000, 1000)), MAX_PIXELS, (512, 512)).unwrap();
+        assert_eq!((picture.width, picture.height), (512, 256));
+        let decoded = decode(&picture.webp);
+        assert_eq!((decoded.width(), decoded.height()), (512, 256));
+        let square = fitted(&jpeg(&photo(4096, 4096)), MAX_PIXELS, (512, 512)).unwrap();
+        assert_eq!((square.width, square.height), (512, 512));
     }
 
     #[test]

@@ -22,6 +22,7 @@ import argparse
 import base64
 import datetime
 import hashlib
+import html.parser
 import json
 import shutil
 import ssl
@@ -879,6 +880,20 @@ def picture(width: int = 1600, height: int = 1200) -> bytes:
             + chunk(b"IEND", b""))
 
 
+def webp_size(webp: bytes) -> tuple[int, int] | None:
+    """The width and height a lossy or lossless WebP's first chunk gives."""
+    kind = webp[12:16]
+    if kind == b"VP8 " and webp[23:26] == b"\x9d\x01\x2a":
+        width, height = struct.unpack("<HH", webp[26:30])
+        return width & 0x3FFF, height & 0x3FFF
+    if kind == b"VP8L" and webp[20] == 0x2F:
+        bits = int.from_bytes(webp[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if kind == b"VP8X":
+        return int.from_bytes(webp[24:27], "little") + 1, int.from_bytes(webp[27:30], "little") + 1
+    return None
+
+
 def upload_picture(world: World, token: str, png: bytes) -> str:
     handle = world.stack.api("POST", "/attachments",
                              {"fileName": "photo.png", "mimeType": "image/png", "byteSize": len(png)}, token)
@@ -1023,11 +1038,20 @@ def icons(world: World, check: Checks) -> None:
     own = upload_icon(world, world.member["token"], png)
     check("and a manager their own upload to the community",
           stack.status("PATCH", f"/communities/{world.community}", {"icon": own}, world.member["token"]) == 200)
+    stored_as = stack.api("GET", f"/icons/{icon}", token=world.owner["token"])["mimeType"]
     with urllib.request.urlopen(f"{stack.base}/api/v1/federation/icons/{icon}", timeout=15) as avatar:
         check("an avatar served from the web client's origin can run nothing there",
               avatar.headers.get("x-content-type-options") == "nosniff"
               and "sandbox" in (avatar.headers.get("content-security-policy") or "")
-              and avatar.headers.get("content-type") == "image/png")
+              and avatar.headers.get("content-type") == stored_as)
+    large = picture(1600, 1200)
+    fitted = upload_icon(world, world.owner["token"], large)
+    record = stack.api("GET", f"/icons/{fitted}", token=world.owner["token"])
+    with urllib.request.urlopen(record["downloadUrl"], timeout=15) as stored:
+        served = stored.read()
+    check("a large picture is stored as an icon fitted within 512 pixels, as WebP",
+          record["mimeType"] == "image/webp" and served[:4] == b"RIFF" and served[8:12] == b"WEBP"
+          and webp_size(served) == (512, 384) and len(served) < len(large))
 
 
 def operators(world: World, check: Checks) -> None:
@@ -1103,6 +1127,99 @@ def deployment_settings(world: World, check: Checks) -> None:
           soon(lambda: stack.status("GET", "/users/@me", token=world.member["token"]) == 200))
     stack.command("admin", "revoke", world.owner["name"])
 
+
+
+class PageHead(html.parser.HTMLParser):
+    """What a web client page carries for the sign-in screen: the profile it is served with (in
+    the element `spec/web_client_page.json` names) and the pictures it preloads."""
+
+    def __init__(self, page: str):
+        super().__init__()
+        self.element = json.loads((REPO / "spec" / "web_client_page.json").read_text())["profileElementId"]
+        self.profile: list[str] = []
+        self.preloads: list[str] = []
+        self._in_profile = False
+        self.feed(page)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        named = dict(attrs)
+        self._in_profile = tag == "script" and named.get("id") == self.element
+        if tag == "link" and named.get("rel") == "preload" and named.get("as") == "image":
+            self.preloads.append(named.get("href") or "")
+
+    def handle_endtag(self, tag: str) -> None:
+        self._in_profile = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_profile:
+            self.profile.append(data)
+
+
+def deployment_profile(world: World, check: Checks) -> None:
+    say("the deployment's profile, which the sign-in screen shows before anything else")
+    stack = world.stack
+
+    def profile() -> dict:
+        status, text = stack.request("GET", "/deployment", device=False)
+        if status != 200:
+            raise Failed(f"GET /deployment without a device credential answered {status} {text[:200]}")
+        return json.loads(text)
+
+    def page() -> PageHead:
+        with urllib.request.urlopen(f"{stack.base}/", timeout=15) as response:
+            return PageHead(response.read().decode())
+
+    stack.command("admin", "grant", world.owner["name"])
+    icon = upload_icon(world, world.owner["token"], picture(64, 64))
+    world.as_owner("PATCH", "/deployment", {"displayName": "Checked <deployment> & co", "icon": icon})
+    read = profile()
+    check("it is read without a device credential, and the server that made a change answers with it",
+          read["displayName"] == "Checked <deployment> & co" and read["icon"]["id"] == icon, read)
+    head = page()
+    check("the web client's page is served holding it, as its own read gives it",
+          len(head.profile) == 1 and json.loads(head.profile[0]) == read, head.profile)
+    check("with its icon preloaded", head.preloads == [read["icon"]["downloadUrl"]], head.preloads)
+    stack.command("settings", "set", "--display-name", "From the terminal")
+    check("a change from the terminal reaches both as it commits",
+          soon(lambda: profile()["displayName"] == "From the terminal"
+               and json.loads(page().profile[0])["displayName"] == "From the terminal"))
+    world.as_owner("PATCH", "/deployment", {"icon": None})
+    check("and a page without an icon preloads none",
+          profile()["icon"] is None and page().preloads == [])
+
+    # An icon stored as it was uploaded, as every icon confirmed before icons were stored fitted
+    # was: an upload marked ready without confirming, which stores nothing anew.
+    large = picture(1600, 1200)
+    handle = world.as_owner("POST", "/icons", {"mimeType": "image/png", "byteSize": len(large)})
+    put = urllib.request.Request(handle["uploadUrl"], data=large, method="PUT", headers={"content-type": "image/png"})
+    urllib.request.urlopen(put, timeout=15).close()
+    old = handle["id"]
+    staged = psql(f"SELECT storage_key FROM icon WHERE id = '{old}'", stack.database)
+    psql(f"UPDATE icon SET storage_key = 'uploads/' || storage_key, ready_at = now() WHERE id = '{old}'",
+         stack.database)
+    world.as_owner("PATCH", "/deployment", {"icon": old})
+    before = profile()["icon"]
+    check("an icon stored before is served as it was uploaded",
+          before["id"] == old and before["mimeType"] == "image/png", before)
+    psql("INSERT INTO job (id, kind, key, class, due, not_before, payload) "
+         "VALUES (gen_random_uuid(), 'shrinkIcons', NULL, 4, now(), now(), '{}')", stack.database)
+    check("the shrinkIcons job stores it fitted, and every server's profile follows",
+          soon(lambda: profile()["icon"]["mimeType"] == "image/webp", 30), profile()["icon"])
+    record = stack.api("GET", f"/icons/{old}", token=world.owner["token"])
+    # Served from the server's origin as the owner's avatar, since its staging key is not public.
+    avatar = stack.api("GET", "/users/@me", token=world.owner["token"]).get("icon")
+    world.as_owner("PATCH", "/users/@me", {"icon": old})
+    with urllib.request.urlopen(f"{stack.base}/api/v1/federation/icons/{old}", timeout=15) as stored:
+        served = stored.read()
+        served_type = stored.headers.get("content-type")
+    check("under the link it had, as WebP within 512 pixels",
+          record["mimeType"] == "image/webp" and served_type == "image/webp" and webp_size(served) == (512, 384),
+          (record, served_type, webp_size(served), staged))
+    check("and the job is done", soon(lambda: psql("SELECT count(*) FROM job WHERE kind = 'shrinkIcons'",
+                                                   stack.database) == "0", 30))
+    world.as_owner("PATCH", "/users/@me", {"icon": avatar})
+    world.as_owner("PATCH", "/deployment", {"icon": None, "displayName": None})
+    stack.command("admin", "revoke", world.owner["name"])
 
 
 def deployment_documents(world: World, check: Checks) -> None:
@@ -4240,7 +4357,7 @@ def speculative_sends(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
-             operators, deployment_settings, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, channel_online, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
+             operators, deployment_settings, deployment_profile, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, channel_online, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
              passkeys,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, community_takedowns, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,

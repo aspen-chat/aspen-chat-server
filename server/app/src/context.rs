@@ -207,7 +207,7 @@ impl GlobalServerContext {
             // Before anything reads or publishes to the streams, which this makes.
             crate::nats_memory::fit_locked(conn.as_mut(), &context, &nats_monitor, true).await?;
             (
-                crate::deployment_settings::load(conn.as_mut()).await?,
+                crate::deployment_settings::load_with_icon(conn.as_mut()).await?,
                 crate::server_secret::CodeKey::load(conn.as_mut()).await?,
                 crate::server_secret::JoinTokenKey::load(conn.as_mut()).await?,
                 crate::server_secret::HmacKey::load(conn.as_mut(), crate::server_secret::DEVICES)

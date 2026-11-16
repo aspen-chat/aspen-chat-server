@@ -7,7 +7,7 @@ running any script. So the server puts the preview's tags into the page.
 | ----------------------- | ------------------------------------------------------------- |
 | What a page previews as | `app::open_graph`, `app::open_graph::of_invite`               |
 | The tags' template      | `server/templates/web_client/open_graph.html` (askama)        |
-| The page's limits       | `api::rate_limit::within_limits`                              |
+| The invite page's limit | `api::rate_limit::within_limits`                              |
 | The Aspen mark          | `open-graph.png`, written by `client/scripts/export_icons.py` |
 
 ## The page and its tags
@@ -19,13 +19,21 @@ template `server/templates/web_client/open_graph.html` renders:
 - A description.
 - Open Graph tags: `og:site_name`, `og:title`, `og:description`, `og:url`, `og:image` with its type
   and alt text, and `twitter:card` `summary`.
+- The deployment's profile, as `GET /deployment` answers it, in a `<script type="application/json">`
+  whose `id` is the one `spec/web_client_page.json` names, and a `<link rel="preload" as="image">`
+  of its icon when it has one. The sign-in screen shows both before its script could have read them
+  (see `client/docs/architecture/sign-in.md`).
 
-The template escapes every value. The page is in the request's language (`Accept-Language`, as every
-response is).
+The template escapes every value. The profile is JSON with `<`, `>`, `&`, U+2028, and U+2029 written
+as escapes (`api::web_client::script_json`), so no text a deployment's administrators give it can
+end its element. The Content Security Policy runs no inline script; a JSON element is data, read by
+the page's own script. The page is in the request's language (`Accept-Language`, as every response
+is).
 
 ## What a page previews as
 
-`app::open_graph` decides it.
+`app::open_graph` decides it. The deployment's name and icon come from the server's copy of the
+settings (`SettingsCache`), so every page but a working invite's reads nothing.
 
 | Page                      | Title                                                              | Picture               |
 | ------------------------- | ------------------------------------------------------------------ | --------------------- |
@@ -59,23 +67,20 @@ one. So a path such as `//other.example/x` cannot name another host.
 
 ### When the preview cannot be read
 
-A preview that cannot be read (the database unreachable, say) leaves the page the deployment's by
-name alone, from the server's copy of the settings. It does not keep anyone from the web client.
+An invite whose preview cannot be read (the database unreachable, say) leaves the page the
+deployment's, from the server's copy of the settings. It does not keep anyone from the web client.
 Only a missing or unreadable `index.html` answers `500`.
 
 ## Limits
 
-Pages are never refused. Each checks its limits in its handler through
-`api::rate_limit::within_limits`, and over them is served without the read it would make:
+Pages are never refused. The invite page, `GET /invite/{code}`, checks its limit in its handler
+through `api::rate_limit::within_limits`: 60 a minute per address, burst 30, against guessing codes.
+Over it, the page previews as the deployment's, without reading the invite. Someone opening a link
+from a busy address still gets the web client.
 
-| Page                                  | Limit                                                     | Over it                                                                                                   |
-| ------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| A deployment's page, `GET /{*path}`   | The default per-address budget                            | Previews by the deployment's name alone, from the server's copy of the settings, without reading its icon |
-| The invite page, `GET /invite/{code}` | 60 a minute per address, burst 30, against guessing codes | Previews as the deployment's, without reading the invite                                                  |
-
-Someone opening a link from a busy address still gets the web client.
-
-The files are not limited. They are read from disk and cost what a static file server's would.
+Every other page, and the files, are not limited. A page is made from `index.html` and the server's
+copy of the settings, and the files are read from disk; each costs what a static file server's
+would.
 
 ## When access is given or taken away
 
@@ -88,15 +93,19 @@ The files are not limited. They are read from disk and cost what a static file s
    `app::open_graph::of_invite` (not revoked, not expired, community not deleted) on every request.
 3. **When it is lost, what happens to what is already open?** Nothing is held open. A revoked or
    expired invite, a deleted community, or a changed name or icon shows in the next request for the
-   page, since nothing is cached on the server and the page is `no-cache`. Previews an unfurling
+   page, since the invite is read on every request, the deployment's profile is the server's copy,
+   which follows every change as it commits, and the page is `no-cache`. Previews an unfurling
    service already made are its own copies and stay as they were until it fetches again. That is
    outside the deployment's reach, and is why the page shows nothing more than the community's name
    and icon.
 4. **When it is gained, how does a client already open find out?** A new invite or a renamed
    community previews as such on the next fetch.
-5. **Does every path that changes it announce it?** Nothing is announced. The page reads the
-   database each time.
+5. **Does every path that changes it announce it?** Nothing is announced. The page reads the invite
+   from the database each time; every change to the deployment's profile, from the dashboard, the
+   terminal, or the `shrinkIcons` job, rings the settings bucket that each server's copy follows.
 6. **Is it published inside the transaction that makes the change?** Nothing is published.
 
 `scripts/check_permissions.py` checks that an invite's page shows its community, a rename at once,
-and nothing of the community once the invite is revoked or expired or the community deleted.
+and nothing of the community once the invite is revoked or expired or the community deleted, and
+(`deployment_profile`) that every page carries the profile `GET /deployment` gives, following a
+change from the dashboard, the terminal, and the `shrinkIcons` job.

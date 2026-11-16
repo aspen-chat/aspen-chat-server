@@ -139,6 +139,8 @@ pub enum JobKind {
     RecordStats,
     /// Deleting an icon nothing uses any more.
     ForgetIcon,
+    /// Storing the icons confirmed before icons were stored fitted to their box, fitted.
+    ShrinkIcons,
     /// Deleting the files of deleted messages kept past the deployment's retention.
     PurgeEvidence,
     /// Sizing the NATS streams to their settings and the memory NATS has.

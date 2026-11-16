@@ -218,6 +218,13 @@ See [Device credentials](device-credentials.md).
   enough to matter would let anyone with enough networks spend it, and every new install needs a
   credential before it can sign in. A difficulty that rises under load would raise the cost of
   spending it further; the fixed difficulty and the high ceiling are what there is.
+- **The profile needs none.** The sign-in screen shows the deployment's icon and name before
+  anything else, so a profile that waited for a credential would keep a new install's welcome blank
+  for as long as the puzzle took: seconds on a phone, and several times the average for one puzzle
+  in twenty. Each server answers it from its copy of the settings, with no query, so a crowd behind
+  one address reading it costs next to nothing, and counting it by address alone, with a ceiling
+  high enough for that crowd, holds what it can cost. Every request that writes, guesses, or reads
+  the database still asks for one, and an install earns it while its person reads the welcome.
 - **Ninety days, renewed past half its life.** A device in use never solves the puzzle again, and
   one hoarded or copied ages out.
 - **Signed-in requests count by user alone.** A session already says who is asking, and it is
@@ -229,10 +236,9 @@ See [Device credentials](device-credentials.md).
   failure limits that hold guessing there, and spray passwords across names with the hashing pool as
   the only limit. On those routes a request counts as its address whatever session it presents; a
   valid session spares it only the device credential, since signed-in apps (this version's and
-  others') read `GET /auth/methods` and `GET /deployment` with their session and hold none. Where a
-  session is optional, it does count, so each address limit set there needs a user limit beside it,
-  which the limiter checks when it compiles the configuration rather than leaving to whoever writes
-  it.
+  others') read `GET /auth/methods` with their session and hold none. Where a session is optional,
+  it does count, so each address limit set there needs a user limit beside it, which the limiter
+  checks when it compiles the configuration rather than leaving to whoever writes it.
 - **Session and bot tokens are signed, so a made-up one is refused without the database.** Looking
   up a token takes the database, and signed-in requests are not counted by their address before
   their token is read. A limit on an address's rejected tokens, checked before each lookup, would
