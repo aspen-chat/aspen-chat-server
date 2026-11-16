@@ -1795,3 +1795,293 @@ async fn a_socket_closing_before_media_connects_is_the_candidates_failure() {
     assert_eq!(a.connections(), 1, "no resume while joining");
     w.admit(&b).await;
 }
+
+// --- Silence, reused sections, and what the user asked -----------------------------------------
+
+#[tokio::test(start_paused = true)]
+async fn muting_someone_for_me_tells_the_server_to_silence_them() {
+    let w = World::new(0.5);
+    let (bob, carol) = (Uuid::now_v7(), Uuid::now_v7());
+    let offer = Offer::to(w.channel, &[A]);
+    let a = w.sockets.server(A);
+    w.join(&offer).await;
+    a.ready(
+        w.session,
+        w.user,
+        vec![voice_protocol::signal::ParticipantInfo {
+            user: bob,
+            muted: false,
+            deafened: false,
+            speaking: false,
+            sources: Vec::new(),
+        }],
+        "secret-1",
+    );
+    settle().await;
+    let frames = a.received();
+    assert!(
+        !frames
+            .iter()
+            .any(|f| matches!(f, ClientMessage::Silence { .. })),
+        "a new place silences no one, which needs no saying: {frames:?}"
+    );
+    // Quieter is not silent.
+    w.send(Command::SetUserVolume {
+        user: bob,
+        source: MediaSource::Microphone,
+        gain: 0.5,
+    });
+    settle().await;
+    assert!(a.received().is_empty());
+    w.send(Command::SetUserMuted {
+        user: bob,
+        source: MediaSource::Microphone,
+        muted: true,
+    });
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Silence {
+            voices: vec![bob],
+            shares: Vec::new()
+        }]
+    );
+    // Someone not in the call is not named; once they join, they are silenced from the start.
+    w.send(Command::SetUserVolume {
+        user: carol,
+        source: MediaSource::ScreenAudio,
+        gain: 0.0,
+    });
+    settle().await;
+    assert!(a.received().is_empty());
+    a.send(&ServerMessage::ParticipantJoined {
+        user: carol,
+        muted: false,
+        deafened: false,
+    });
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Silence {
+            voices: vec![bob],
+            shares: vec![carol]
+        }]
+    );
+    // A volume above nothing is no silence; an unchanged set is not sent again.
+    w.send(Command::SetUserVolume {
+        user: bob,
+        source: MediaSource::Microphone,
+        gain: 2.0,
+    });
+    settle().await;
+    assert!(
+        a.received().is_empty(),
+        "muted for me still, whatever the volume"
+    );
+    w.send(Command::SetUserMuted {
+        user: bob,
+        source: MediaSource::Microphone,
+        muted: false,
+    });
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Silence {
+            voices: Vec::new(),
+            shares: vec![carol]
+        }]
+    );
+    a.send(&ServerMessage::ParticipantLeft { user: carol });
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Silence {
+            voices: Vec::new(),
+            shares: Vec::new()
+        }]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_silence_is_said_again_to_a_new_place_in_the_call_and_kept_through_a_resume() {
+    let w = World::new(0.5);
+    let bob = Uuid::now_v7();
+    let (_, a) = w.connected(A).await;
+    a.send(&ServerMessage::ParticipantJoined {
+        user: bob,
+        muted: false,
+        deafened: false,
+    });
+    w.send(Command::SetUserMuted {
+        user: bob,
+        source: MediaSource::Microphone,
+        muted: true,
+    });
+    settle().await;
+    a.received();
+    // Resumed: the server kept the silence, so it is not said again.
+    a.close();
+    settle().await;
+    a.received();
+    a.ready(
+        w.session,
+        w.user,
+        vec![voice_protocol::signal::ParticipantInfo {
+            user: bob,
+            muted: false,
+            deafened: false,
+            speaking: false,
+            sources: Vec::new(),
+        }],
+        "secret-2",
+    );
+    settle().await;
+    assert!(a.received().is_empty());
+    // Rejoined: a new place in the call starts with no one silenced, so it is said with `ready`.
+    a.send(&ServerMessage::Kicked {
+        reason: KickReason::ServerStopping,
+    });
+    settle().await;
+    advance(PAUSE).await;
+    a.received();
+    a.ready(
+        w.session,
+        w.user,
+        vec![voice_protocol::signal::ParticipantInfo {
+            user: bob,
+            muted: false,
+            deafened: false,
+            speaking: false,
+            sources: Vec::new(),
+        }],
+        "secret-3",
+    );
+    settle().await;
+    assert!(
+        a.received().contains(&ClientMessage::Silence {
+            voices: vec![bob],
+            shares: Vec::new()
+        }),
+        "said before any offer"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slot_moved_to_another_section_is_read_from_its_new_mid() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let pc = w.pcs.latest();
+    let (bob, carol) = (Uuid::now_v7(), Uuid::now_v7());
+    a.send(&ServerMessage::Slots {
+        assignments: vec![SlotAssignment {
+            slot: 0,
+            user: Some(carol),
+        }],
+    });
+    w.send(Command::SetUserVolume {
+        user: carol,
+        source: MediaSource::Microphone,
+        gain: 2.0,
+    });
+    settle().await;
+    assert_eq!(w.state().slots[0].track, Some(pc.received("0")));
+    pc.ops();
+    // The server moves slot 0 to mid 3 and gives mid 0 to Bob's camera.
+    a.offer(2, vec![video("0", bob, MediaSource::Camera), slot("3", 0)]);
+    settle().await;
+    let state = w.state();
+    assert_eq!(state.slots.len(), 1);
+    assert_eq!(state.slots[0].track, Some(pc.received("3")));
+    assert_eq!(state.slots[0].user, Some(carol));
+    assert_eq!(state.videos[0].user, bob);
+    assert_eq!(state.videos[0].track, pc.received("0"));
+    assert!(state.share_audio.is_empty());
+    assert!(
+        pc.ops().contains(&Op::SetVolume("3".to_string(), 2.0)),
+        "her volume follows her slot to its new section"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_video_section_reused_for_another_person_shows_that_person() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let pc = w.pcs.latest();
+    let (bob, carol) = (Uuid::now_v7(), Uuid::now_v7());
+    w.send(Command::SetUserMuted {
+        user: carol,
+        source: MediaSource::ScreenAudio,
+        muted: true,
+    });
+    a.offer(
+        2,
+        vec![
+            slot("0", 0),
+            video("1", bob, MediaSource::Screen),
+            share_audio("2", bob),
+        ],
+    );
+    settle().await;
+    let state = w.state();
+    assert_eq!(state.videos[0].user, bob);
+    assert_eq!(state.share_audio[0].user, bob);
+    pc.ops();
+    // Bob stops sharing and Carol starts: the server reuses both sections for her.
+    a.offer(
+        3,
+        vec![
+            slot("0", 0),
+            video("1", carol, MediaSource::Screen),
+            share_audio("2", carol),
+        ],
+    );
+    settle().await;
+    let state = w.state();
+    assert_eq!(state.videos.len(), 1);
+    assert_eq!(state.videos[0].user, carol);
+    assert_eq!(state.videos[0].track, pc.received("1"));
+    assert_eq!(state.share_audio.len(), 1);
+    assert_eq!(state.share_audio[0].user, carol);
+    assert!(
+        pc.ops().contains(&Op::SetVolume("2".to_string(), 0.0)),
+        "the reused section takes its new person's volume"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_state_shows_what_the_user_asked_apart_from_the_servers_word() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    assert!(!w.state().asked_muted && !w.state().asked_deafened);
+    // A moderator's mute: shown muted, but not asked.
+    a.send(&ServerMessage::ParticipantState {
+        user: w.user,
+        muted: true,
+        deafened: false,
+    });
+    settle().await;
+    let state = w.state();
+    assert!(state.muted && !state.asked_muted);
+    w.send(Command::SetDeafened(true));
+    settle().await;
+    let state = w.state();
+    assert!(state.asked_deafened && !state.asked_muted);
+    // A refused unmute leaves what was asked as what is shown.
+    w.send(Command::SetMuted(true));
+    settle().await;
+    assert!(w.state().asked_muted);
+    w.send(Command::SetMuted(false));
+    settle().await;
+    assert!(!w.state().asked_muted);
+    a.send(&error(
+        "too many setState frames",
+        false,
+        None,
+        Some("setState"),
+    ));
+    settle().await;
+    assert!(w.state().asked_muted, "the refusal keeps the mute as shown");
+    w.send(Command::Leave);
+    settle().await;
+    assert!(!w.state().asked_muted && !w.state().asked_deafened);
+}

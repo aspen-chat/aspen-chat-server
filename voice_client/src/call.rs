@@ -344,6 +344,9 @@ struct Live {
     resuming: Option<Resuming>,
     /// Since when the connection has been `disconnected` or `failed` mid-call, while it is.
     lost: Option<Lost>,
+    /// The last `silence` sent (its voices and shares), so an unchanged one is not sent again.
+    /// A new place in a call silences no one; a resumed one keeps what was said before.
+    silenced: (Vec<Uuid>, Vec<Uuid>),
 }
 
 /// A loss of the connection mid-call, asking for ICE restarts until it is back.
@@ -580,6 +583,7 @@ impl Call {
                     })
                     .gain = gain.clamp(0.0, 10.0);
                 self.apply_volumes(user, source).await;
+                self.update_silence().await;
             }
             Command::SetUserMuted {
                 user,
@@ -594,6 +598,7 @@ impl Call {
                     })
                     .muted = muted;
                 self.apply_volumes(user, source).await;
+                self.update_silence().await;
             }
             Command::SessionEnded {
                 session,
@@ -661,14 +666,21 @@ impl Call {
             microphone: self.state.microphone.clone(),
             ..CallState::default()
         };
-        self.asked = Asked::default();
+        self.set_asked(Asked::default());
+    }
+
+    /// The user's own last request, kept here and shown in the state.
+    fn set_asked(&mut self, asked: Asked) {
+        self.asked = asked;
+        self.state.asked_muted = asked.muted;
+        self.state.asked_deafened = asked.deafened;
     }
 
     /// Asks for `asked` as the user's mute and deafen. Outside a connected call it simply is the
     /// state; in one, whatever it silences shows at once and whatever it lifts waits for the
     /// voice server (`participantState`).
     async fn ask(&mut self, asked: Asked) {
-        self.asked = asked;
+        self.set_asked(asked);
         self.state.state_refused = None;
         if self.state.status != CallStatus::Connected {
             self.state.muted = asked.muted;
@@ -860,6 +872,43 @@ impl Call {
         for mid in mids {
             self.apply_volume(&mid, user, source).await;
         }
+    }
+
+    /// Tells the voice server whom this user plays at nothing (muted for me, or turned all the
+    /// way down), when that changed: it then puts none of their voice in this user's audio slots
+    /// and offers no sound of their share, so none plays even for the moment before a slot's
+    /// volume follows its new occupant. The per-slot volume stays for the volume itself.
+    async fn update_silence(&mut self) {
+        let now = {
+            let silenced = |source: MediaSource| -> Vec<Uuid> {
+                let mut users: Vec<Uuid> = self
+                    .state
+                    .participants
+                    .iter()
+                    .map(|p| p.user)
+                    .filter(|user| self.effective_volume(*user, source) == 0.0)
+                    .collect();
+                users.sort();
+                users
+            };
+            (
+                silenced(MediaSource::Microphone),
+                silenced(MediaSource::ScreenAudio),
+            )
+        };
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        if live.silenced == now {
+            return;
+        }
+        live.silenced = now.clone();
+        let link = live.link.clone();
+        link.send(ClientMessage::Silence {
+            voices: now.0,
+            shares: now.1,
+        })
+        .await;
     }
 
     fn slot_mid(&self, slot: u8) -> Option<String> {
@@ -1153,6 +1202,7 @@ impl Call {
             volumes_applied: HashMap::new(),
             resuming: None,
             lost: None,
+            silenced: (Vec::new(), Vec::new()),
         });
         let id = self.id();
         let observer = Arc::new(Forwarder {
@@ -1191,6 +1241,7 @@ impl Call {
             let video = self.state.watching.clone();
             self.set_watched(video).await;
         }
+        self.update_silence().await;
         self.timer(Timer::Connect, CONNECT_TIMEOUT);
     }
 
@@ -1605,9 +1656,13 @@ impl Call {
                     speaking: false,
                     sources: Vec::new(),
                 });
+                // Someone already silenced (muted for me before) is silenced from their first
+                // word.
+                self.update_silence().await;
             }
             ServerMessage::ParticipantLeft { user } => {
                 self.state.participants.retain(|p| p.user != user);
+                self.update_silence().await;
             }
             ServerMessage::ParticipantState {
                 user,
@@ -1680,10 +1735,10 @@ impl Call {
         match request {
             // Only unmuting or undeafening is ever refused: the user stays as they are shown.
             Some("setState") => {
-                self.asked = Asked {
+                self.set_asked(Asked {
                     muted: self.state.muted,
                     deafened: self.state.deafened,
-                };
+                });
                 self.state.state_refused = Some(refusal);
             }
             // The source last asked for, whose section the server will not offer.
@@ -1844,9 +1899,14 @@ impl Call {
         }
     }
 
-    /// Takes `sections` as what the connection carries: the tracks of the slots and videos
-    /// received are read, and a source whose section the server took away (its grant gone) is
-    /// forgotten.
+    /// Takes `sections` as what the connection carries, from this offer alone: a mid keeps no
+    /// meaning from one offer to the next, since the server reuses a section for other content (a
+    /// slot moved to another mid, a video section given to another person), so every section's
+    /// content and the track of each received one are read anew here, after the answer, which is
+    /// when the platform's receiver carries what the section now says. A source whose section the
+    /// server took away (its grant gone) is forgotten. Each received track arrives at the platform
+    /// in its stream (`{user}-camera` for a voice slot and camera, `{user}-share` for a screen and
+    /// its sound), which the peer connection tells it of itself; nothing of that passes here.
     async fn sections_applied(&mut self, sections: Vec<Section>, peer: &Peer) {
         let Some(live) = &mut self.live else {
             return;
@@ -2018,6 +2078,7 @@ impl Call {
                 self.state.audio_slots = audio_slots;
                 self.state.max_watched_video = max_watched_video;
                 self.state.status = CallStatus::Connected;
+                self.update_silence().await;
             }
             // The server would not take the participant back: the grace ran out, or the secret
             // was used. It is alive, so the channel is joined again at once.

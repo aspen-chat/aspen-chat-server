@@ -141,6 +141,11 @@ pub struct CallState {
     /// to be; outside one, what they last asked for.
     pub muted: bool,
     pub deafened: bool,
+    /// The mute and deafen the user themself last asked for, apart from the server's word, so a
+    /// hold (the system taking the call's audio) restores exactly what they asked rather than
+    /// asking a moderator's mute of them again.
+    pub asked_muted: bool,
+    pub asked_deafened: bool,
     /// Whether a moderator's mute of the user stands in the call's community.
     pub server_muted: bool,
     /// What the channel lets the user do, from the join offer and then `grantsChanged`.
@@ -185,6 +190,8 @@ impl Default for CallState {
             user: None,
             muted: false,
             deafened: false,
+            asked_muted: false,
+            asked_deafened: false,
             server_muted: false,
             grants: Grants::default(),
             participants: Vec::new(),
