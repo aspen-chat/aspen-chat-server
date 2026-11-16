@@ -7,8 +7,8 @@
 use crate::peer_connection::TrackId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use voice_protocol::signal::Grants;
 use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
-use voice_protocol::token::Grants;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]

@@ -37,11 +37,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use uuid::Uuid;
+use voice_protocol::signal::Grants;
 use voice_protocol::signal::{
     ClientMessage, ConnectionKind, KickReason, MediaSource, ParticipantInfo, RESUME_GRACE_SECONDS,
     Section, SectionContent, ServerMessage, SlotAssignment, WatchedVideo,
 };
-use voice_protocol::token::Grants;
 
 /// How long a candidate has to accept the socket and answer `identify` (or `resume`) with
 /// `ready`.
@@ -52,6 +52,13 @@ pub const PING_TIMEOUT: Duration = Duration::from_secs(3);
 /// gives up after thirty seconds of its own; a client that gives up sooner tries the next
 /// candidate while the user still waits.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How often a connection lost mid-call (`disconnected` or `failed`) asks for an ICE restart
+/// until it connects again, and how long it may stay lost before the call is joined again. A
+/// restart tried while the network is still away fails in its turn, and libwebrtc never checks a
+/// failed ICE generation again, so the restart asked for after the network returns is the one
+/// that reconnects; eight in half a minute stay within the voice server's limit on `restartIce`.
+pub const ICE_RESTART_INTERVAL: Duration = Duration::from_secs(4);
+pub const ICE_RECOVERY_LIMIT: Duration = Duration::from_secs(30);
 /// The most a lost call waits before joining again.
 pub const REJOIN_DELAY_MAX: Duration = Duration::from_secs(1);
 /// How long a rejoin that could not reach the server the API server still offered waits before
@@ -241,6 +248,10 @@ enum Timer {
     DeadServerRetry,
     /// The random pause before trying `resume` again.
     ResumeRetry,
+    /// `ICE_RESTART_INTERVAL` into a loss of the connection; `epoch` is the loss's, so a tick of
+    /// a loss the connection has come back from is let go. Outlives the steps a resume moves
+    /// through meanwhile, so it is judged by the epoch alone.
+    Restart { epoch: u64 },
 }
 
 /// One signalling socket, numbered so frames from one the call has let go are told apart.
@@ -331,6 +342,15 @@ struct Live {
     /// The volume last set on each receiver, so one is set only when it changes.
     volumes_applied: HashMap<TransceiverId, f64>,
     resuming: Option<Resuming>,
+    /// Since when the connection has been `disconnected` or `failed` mid-call, while it is.
+    lost: Option<Lost>,
+}
+
+/// A loss of the connection mid-call, asking for ICE restarts until it is back.
+#[derive(Clone, Copy)]
+struct Lost {
+    since: Instant,
+    epoch: u64,
 }
 
 impl Live {
@@ -798,11 +818,10 @@ impl Call {
     }
 
     /// Asks for `video`, the first `max_watched_video` of it: the server gives sections for no
-    /// more and leaves the rest out, so asking for them would only mislead the state.
+    /// more and leaves the rest out, so asking for them would only mislead the state. Sent as soon
+    /// as the call has its place (`ready`); kept for it before.
     async fn set_watched(&mut self, mut video: Vec<WatchedVideo>) {
-        if self.state.status == CallStatus::Connected
-            && let Some(live) = &self.live
-        {
+        if let Some(live) = &self.live {
             video.truncate(self.state.max_watched_video as usize);
             self.state.watching = video.clone();
             let link = live.link.clone();
@@ -1133,6 +1152,7 @@ impl Call {
             microphone_attached: None,
             volumes_applied: HashMap::new(),
             resuming: None,
+            lost: None,
         });
         let id = self.id();
         let observer = Arc::new(Forwarder {
@@ -1163,6 +1183,13 @@ impl Call {
         {
             self.request_source(MediaSource::Microphone, microphone)
                 .await;
+        }
+        // What is watched is asked for with `ready`, not once connected, so a rejoined call's
+        // first offer carries its videos; `ready` already names what each participant sends, and
+        // no `sources` frame comes for a source that was live before.
+        if !self.state.watching.is_empty() {
+            let video = self.state.watching.clone();
+            self.set_watched(video).await;
         }
         self.timer(Timer::Connect, CONNECT_TIMEOUT);
     }
@@ -1231,10 +1258,6 @@ impl Call {
         self.state.error_kind = None;
         self.state.retry_after_seconds = None;
         self.send_state().await;
-        if !self.state.watching.is_empty() {
-            let video = self.state.watching.clone();
-            self.set_watched(video).await;
-        }
     }
 
     /// Joins the channel again after a random pause of at most `REJOIN_DELAY_MAX`. With
@@ -1354,7 +1377,8 @@ impl Call {
                 step,
                 kind,
             } => {
-                if generation == self.generation && step == self.step {
+                let current = matches!(kind, Timer::Restart { .. }) || step == self.step;
+                if generation == self.generation && current {
                     self.timeout(kind).await;
                 }
             }
@@ -1426,37 +1450,74 @@ impl Call {
             return;
         }
         let joining = self.attempt.is_some();
-        let resuming = live.resuming.is_some();
-        let link = live.link.clone();
         match state {
             ConnectionState::Connected => {
+                live.lost = None;
                 if joining {
                     self.finish_join().await;
                 }
             }
-            ConnectionState::Failed => {
+            ConnectionState::Failed | ConnectionState::Disconnected => {
                 if joining {
-                    self.candidate_failed(Failure::Server(
-                        "media could not reach the voice server".to_string(),
-                    ))
-                    .await;
-                } else {
-                    // Media lost mid-call: the call is joined again rather than left silent.
-                    self.rejoin(false).await;
+                    if state == ConnectionState::Failed {
+                        self.candidate_failed(Failure::Server(
+                            "media could not reach the voice server".to_string(),
+                        ))
+                        .await;
+                    }
+                    return;
                 }
-            }
-            // A phone moving between networks: the server offers an ICE restart when it asks,
-            // and the next offer carries new credentials. Media that then fails rejoins.
-            ConnectionState::Disconnected => {
-                if !joining && !resuming {
-                    link.send(ClientMessage::RestartIce {
-                        connection: ConnectionKind::Call,
-                    })
-                    .await;
+                // Lost mid-call: new ICE credentials are asked for every `ICE_RESTART_INTERVAL`
+                // until it is back (`Timer::Restart`), at once when it failed, and after one
+                // interval when it only disconnected, since a network that returns quickly
+                // brings it back without one. A loss already being recovered goes on as it is.
+                if live.lost.is_some() {
+                    return;
                 }
+                let epoch = self.id();
+                if let Some(live) = &mut self.live {
+                    live.lost = Some(Lost {
+                        since: Instant::now(),
+                        epoch,
+                    });
+                }
+                if state == ConnectionState::Failed {
+                    self.restart_ice().await;
+                }
+                self.timer(Timer::Restart { epoch }, ICE_RESTART_INTERVAL);
             }
             ConnectionState::New | ConnectionState::Connecting | ConnectionState::Closed => {}
         }
+    }
+
+    /// Asks the server for new ICE credentials on the call connection, which its next offer
+    /// carries. Asked of a socket that has dropped, it is lost with it; the next interval asks
+    /// again on the resumed one.
+    async fn restart_ice(&mut self) {
+        if let Some(live) = &self.live {
+            let link = live.link.clone();
+            link.send(ClientMessage::RestartIce {
+                connection: ConnectionKind::Call,
+            })
+            .await;
+        }
+    }
+
+    /// `ICE_RESTART_INTERVAL` into the loss `epoch`: once lost for `ICE_RECOVERY_LIMIT` the
+    /// call is joined again rather than left silent; before that another restart is asked for.
+    async fn restart_due(&mut self, epoch: u64) {
+        let Some(lost) = self.live.as_ref().and_then(|live| live.lost) else {
+            return;
+        };
+        if lost.epoch != epoch || self.attempt.is_some() {
+            return;
+        }
+        if Instant::now().duration_since(lost.since) >= ICE_RECOVERY_LIMIT {
+            self.rejoin(false).await;
+            return;
+        }
+        self.restart_ice().await;
+        self.timer(Timer::Restart { epoch }, ICE_RESTART_INTERVAL);
     }
 
     async fn timeout(&mut self, kind: Timer) {
@@ -1486,6 +1547,7 @@ impl Call {
                 }
             }
             Timer::ResumeRetry => self.attempt_resume(),
+            Timer::Restart { epoch } => self.restart_due(epoch).await,
         }
     }
 

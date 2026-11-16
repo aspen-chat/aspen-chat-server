@@ -41,8 +41,8 @@ use crate::transport::{self, Received};
 use async_trait::async_trait;
 use std::sync::Arc;
 use uuid::Uuid;
+use voice_protocol::signal::Grants;
 use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
-use voice_protocol::token::Grants;
 
 uniffi::custom_type!(Uuid, String, {
     remote,

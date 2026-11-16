@@ -7,15 +7,16 @@ use std::time::Duration;
 use support::*;
 use uuid::Uuid;
 use voice_client::call::{
-    CONNECT_TIMEOUT, Command, DEAD_SERVER_RETRY, PING_TIMEOUT, READY_TIMEOUT, RESUME_GRACE,
+    CONNECT_TIMEOUT, Command, DEAD_SERVER_RETRY, ICE_RECOVERY_LIMIT, ICE_RESTART_INTERVAL,
+    PING_TIMEOUT, READY_TIMEOUT, RESUME_GRACE,
 };
 use voice_client::peer_connection::{ConnectionState, Direction, TrackId};
 use voice_client::state::{CallStatus, EndedReason, ErrorKind, SessionEndReason};
+use voice_protocol::signal::Grants;
 use voice_protocol::signal::{
     ClientMessage, ConnectionKind, KickReason, MediaSource, ServerMessage, SlotAssignment,
     SourceInfo, WatchedVideo,
 };
-use voice_protocol::token::Grants;
 
 const A: &str = "https://a.example.org";
 const B: &str = "https://b.example.org";
@@ -47,6 +48,8 @@ fn the_timeouts_are_as_documented() {
     assert_eq!(voice_client::call::REJOIN_DELAY_MAX, Duration::from_secs(1));
     assert_eq!(DEAD_SERVER_RETRY, Duration::from_secs(60));
     assert_eq!(RESUME_GRACE, Duration::from_secs(20));
+    assert_eq!(ICE_RESTART_INTERVAL, Duration::from_secs(4));
+    assert_eq!(ICE_RECOVERY_LIMIT, Duration::from_secs(30));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1352,27 +1355,123 @@ async fn a_rejoin_whose_fresh_offer_fails_fails_the_call() {
     );
 }
 
+const RESTART: ClientMessage = ClientMessage::RestartIce {
+    connection: ConnectionKind::Call,
+};
+
 #[tokio::test(start_paused = true)]
-async fn media_failing_mid_call_rejoins_and_a_disconnection_asks_for_an_ice_restart() {
+async fn a_lost_connection_asks_for_ice_restarts_every_interval_until_it_is_back() {
     let w = World::new(0.5);
     let (_, a) = w.connected(A).await;
+    let pc = w.pcs.latest();
     a.received();
-    w.pcs.latest().report(ConnectionState::Disconnected);
+    // Disconnected: the first restart waits an interval, since the network may come back alone.
+    pc.report(ConnectionState::Disconnected);
     settle().await;
-    assert_eq!(
-        a.received(),
-        vec![ClientMessage::RestartIce {
-            connection: ConnectionKind::Call
-        }]
-    );
+    assert!(a.received().is_empty());
+    advance(ICE_RESTART_INTERVAL - Duration::from_millis(1)).await;
+    assert!(a.received().is_empty());
+    advance(Duration::from_millis(1)).await;
+    assert_eq!(a.received(), vec![RESTART]);
+    // Failing while already lost starts no second loop.
+    pc.report(ConnectionState::Failed);
+    settle().await;
+    assert!(a.received().is_empty());
+    // The server's own restart offer, and ours, are applied through it.
+    pc.ops();
+    a.offer(2, vec![slot("0", 0)]);
+    settle().await;
+    assert!(matches!(
+        a.received().as_slice(),
+        [ClientMessage::Answer { revision: 2, .. }]
+    ));
+    assert!(!pc.ops().is_empty());
+    advance(ICE_RESTART_INTERVAL).await;
+    assert_eq!(a.received(), vec![RESTART]);
+    pc.report(ConnectionState::Connecting);
+    pc.report(ConnectionState::Connected);
+    settle().await;
+    advance(ICE_RESTART_INTERVAL * 3).await;
+    assert!(a.received().is_empty(), "back: no more restarts");
     assert_eq!(w.state().status, CallStatus::Connected);
-    w.pcs.latest().report(ConnectionState::Failed);
+    // Failed outright: the first restart is asked for at once.
+    pc.report(ConnectionState::Failed);
     settle().await;
+    assert_eq!(a.received(), vec![RESTART]);
+    // The socket drops with the network and is resumed: the restarts go on over the new one.
+    a.close();
+    settle().await;
+    advance(ICE_RESTART_INTERVAL).await;
+    a.received();
+    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    advance(ICE_RESTART_INTERVAL).await;
+    assert_eq!(a.received(), vec![RESTART]);
+    pc.report(ConnectionState::Connected);
+    advance(ICE_RESTART_INTERVAL * 2).await;
+    assert!(a.received().is_empty());
+    assert_eq!(w.http.offers_asked(), 1, "never rejoined");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_lost_for_the_limit_is_rejoined() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let pc = w.pcs.latest();
+    a.received();
+    pc.report(ConnectionState::Failed);
+    settle().await;
+    let mut restarts = a.received().len();
+    let mut elapsed = Duration::ZERO;
+    while elapsed + ICE_RESTART_INTERVAL < ICE_RECOVERY_LIMIT {
+        advance(ICE_RESTART_INTERVAL).await;
+        elapsed += ICE_RESTART_INTERVAL;
+        restarts += a.received().iter().filter(|f| **f == RESTART).count();
+        assert_eq!(w.state().status, CallStatus::Connected, "at {elapsed:?}");
+    }
+    assert_eq!(restarts, 8, "eight restarts in half a minute");
+    advance(ICE_RESTART_INTERVAL).await;
     assert_eq!(w.state().status, CallStatus::Rejoining);
     assert_eq!(a.received(), vec![ClientMessage::Leave]);
+    assert!(pc.is_closed());
     advance(PAUSE).await;
     assert_eq!(w.http.offers_asked(), 2);
     w.admit(&a).await;
+    // The old loss's ticks reach nothing.
+    advance(ICE_RECOVERY_LIMIT).await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert!(a.received().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejoined_call_asks_for_its_videos_with_ready() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let bob = Uuid::now_v7();
+    let watched = vec![WatchedVideo {
+        user: bob,
+        source: MediaSource::Camera,
+    }];
+    w.send(Command::SetWatched(watched.clone()));
+    settle().await;
+    a.received();
+    a.send(&ServerMessage::Kicked {
+        reason: KickReason::ServerStopping,
+    });
+    settle().await;
+    advance(PAUSE).await;
+    a.received();
+    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    settle().await;
+    let frames = a.received();
+    assert!(
+        frames.contains(&ClientMessage::Watch {
+            video: watched.clone()
+        }),
+        "watched before any offer or connection: {frames:?}"
+    );
+    assert_eq!(w.state().watching, watched);
 }
 
 #[tokio::test(start_paused = true)]
