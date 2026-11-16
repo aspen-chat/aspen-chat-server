@@ -25,4 +25,7 @@ ext {
     jnaVersion = '5.19.1'
     kotlinxCoroutinesVersion = '1.11.0'
     okhttpVersion = '4.12.0'
+    // Telecom for the call layer's calls (`call/CallTelecom.kt`): the newest stable release, the
+    // first with `registerAppWithTelecom` and `CallAttributesCompat`'s log exclusion.
+    androidxCoreTelecomVersion = '1.1.0'
 }

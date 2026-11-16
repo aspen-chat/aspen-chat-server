@@ -106,9 +106,11 @@ dependencies {
     implementation "androidx.credentials:credentials-play-services-auth:$androidxCredentialsVersion"
     // Whether the user is old enough, where the law has Play say (`AspenAgePlugin`).
     implementation "com.google.android.play:age-signals:$playAgeSignalsVersion"
-    // The call layer (`call/`), over the engine's generated bindings and WebRTC.
+    // The call layer (`call/`), over the engine's generated bindings and WebRTC, with its calls
+    // held in Telecom (`CallTelecom.kt`); a build without the layer has no use for Telecom.
     if (callLayer) {
         implementation files(webrtcAar)
+        implementation "androidx.core:core-telecom:$androidxCoreTelecomVersion"
     }
     implementation "net.java.dev.jna:jna:$jnaVersion@aar"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinxCoroutinesVersion"

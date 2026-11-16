@@ -37,8 +37,9 @@ in About Aspen (`about.md`), and names the commit it was built from. A later run
 higher, so a build signed with the same key as the one installed updates it in place.
 
 The app runs on Android 8.0 and newer (`minSdkVersion` 26 in `variables.gradle`): a call the native
-engine holds will be a self-managed call through Telecom's `ConnectionService`, which Android has
-from 8.0, and WebRTC's audio output takes its low-latency mode from the same version.
+engine holds is the app's own call in Telecom (`androidx.core:core-telecom`, which needs 8.0, a
+self-managed `ConnectionService` beneath it there and Telecom's transactional calls from Android
+14), and WebRTC's audio output takes its low-latency mode from the same version.
 
 ## The call engine
 
@@ -47,18 +48,18 @@ Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's
 WebSockets through interfaces each platform implements. The Android implementation is
 `app/src/main/java/com/aspen_chat/client/call/`, Kotlin, compiled into the app with the engine's
 generated Kotlin package (`com.aspen_chat.client.voice`). Nothing in the web view uses it yet: the
-Capacitor plugin that will command it and show its state, the call's sounds, Telecom, the foreground
-service a call needs to go on behind other apps, the camera, and the choice of route are later
-pieces.
+Capacitor plugin that will command it and show its state, the call's sounds, the camera, and a DM
+call ringing the phone are later pieces.
 
 ### What the app packages, and where it comes from
 
-| Piece                                                                                                     | Where the Gradle build reads it                                                                                                                                                                                                   | Made by                                                                                                                                                            |
-| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Google's WebRTC, `libwebrtc.aar` (`org.webrtc`, its library for `arm64-v8a`, `armeabi-v7a`, and `x86_64`) | `target/webrtc/`, as a file dependency                                                                                                                                                                                            | `scripts/webrtc_build.py build` on Linux, once (`docs/development/webrtc-build.md`)                                                                                |
-| The engine, `libvoice_client.so`                                                                          | `target/x86_64-linux-android/release/` for the emulator, `target/aarch64-linux-android/release/` and `target/armv7-linux-androideabi/release/` for devices, laid out by ABI into the APK's `jniLibs` by the task `copyCallEngine` | `android/scripts/call_engine.py` (`cargo rustc --crate-type cdylib` for each target, linked with the NDK's clang)                                                  |
-| Its Kotlin package, `voice_client.kt`                                                                     | `app/src/main/java/com/aspen_chat/client/voice/`, gitignored                                                                                                                                                                      | `scripts/voice_client_bindings.py --language kotlin` (`voice_client/README.md`)                                                                                    |
-| JNA (`net.java.dev.jna:jna`, the `aar`), kotlinx-coroutines, OkHttp                                       | Maven Central; the versions are in `variables.gradle`                                                                                                                                                                             | The bindings load the engine's library through JNA and suspend through coroutines; the layer's HTTP and WebSockets are OkHttp's, which the app did not have before |
+| Piece                                                                                                     | Where the Gradle build reads it                                                                                                                                                                                                   | Made by                                                                                                                                                               |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google's WebRTC, `libwebrtc.aar` (`org.webrtc`, its library for `arm64-v8a`, `armeabi-v7a`, and `x86_64`) | `target/webrtc/`, as a file dependency                                                                                                                                                                                            | `scripts/webrtc_build.py build` on Linux, once (`docs/development/webrtc-build.md`)                                                                                   |
+| The engine, `libvoice_client.so`                                                                          | `target/x86_64-linux-android/release/` for the emulator, `target/aarch64-linux-android/release/` and `target/armv7-linux-androideabi/release/` for devices, laid out by ABI into the APK's `jniLibs` by the task `copyCallEngine` | `android/scripts/call_engine.py` (`cargo rustc --crate-type cdylib` for each target, linked with the NDK's clang)                                                     |
+| Its Kotlin package, `voice_client.kt`                                                                     | `app/src/main/java/com/aspen_chat/client/voice/`, gitignored                                                                                                                                                                      | `scripts/voice_client_bindings.py --language kotlin` (`voice_client/README.md`)                                                                                       |
+| JNA (`net.java.dev.jna:jna`, the `aar`), kotlinx-coroutines, OkHttp                                       | Maven Central; the versions are in `variables.gradle`                                                                                                                                                                             | The bindings load the engine's library through JNA and suspend through coroutines; the layer's HTTP and WebSockets are OkHttp's, which the app did not have before    |
+| `androidx.core:core-telecom` 1.1.0                                                                        | Google's Maven, only when the layer is built; the version is in `variables.gradle`                                                                                                                                                | The newest stable release, the first with `registerAppWithTelecom`; it holds the layer's calls in Telecom (`CallTelecom.kt`) and gives their routes (`CallRoutes.kt`) |
 
 `android/scripts/call_engine.py` builds the engine for the three targets (or `--emulator-only`) and
 writes the bindings, and says when the WebRTC library is missing. The app is Java with this Kotlin
@@ -82,13 +83,86 @@ engine) where Android allows:
 | `CallCredentials.kt`    | `Credentials`                                                                | The account at the deployment among those `PushStore` keeps (the state the web view writes on sign-in): its session token for each request, renewed through `SessionRefresh` (shared with the push handler) and written back when the API server refuses it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `CallTracks.kt`         | The track ids the engine passes around                                       | WebRTC tracks by their own `id()`: the microphone as an object, and each received track as the connection that receives it, which gives a live wrapper on demand                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallPeerConnection.kt` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `org.webrtc.PeerConnection`, unified plan, `max-bundle`, RTCP muxed; the factory with the device's hardware video codecs through one EGL context and `JavaAudioDeviceModule` with the device's echo canceller and noise suppressor where it has them. `getTransceivers()` makes new Java wrappers on every call and disposes the ones before, their senders, receivers, and the receivers' tracks with them, so no wrapper is kept: transceivers are told apart by their sender's id and numbered in the order first seen, and each use reads them afresh under a lock. A sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its `AudioTrack.setVolume`; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values; `close` disposes the connection, after which `connectionState` is `Closed` |
-| `CallAudio.kt`          | The audio mode and the microphone                                            | `AudioManager` in `MODE_IN_COMMUNICATION` for the call, set by the app until a self-managed Telecom connection owns it (`configureForCall` and `release` are the seams its state changes will drive), and the microphone as a track from WebRTC's audio device module                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `CallAudio.kt`          | The audio mode and the microphone                                            | `AudioManager` in `MODE_IN_COMMUNICATION` for the call (`configureForCall` and `release`, which `CallTelecom` drives; Telecom sets the same mode and holds the audio focus for the call itself), and the microphone as a track from WebRTC's audio device module                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `CallTelecom.kt`        | The system's side of the engine's call                                       | Follows the engine's snapshots: the call in Telecom, `CallService`, the audio mode, and `CallRoutes` attached for the call's length; Telecom's callbacks go to the engine. See The system's call below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `CallService.kt`        | The foreground service and the ongoing call's notification                   | A service of the kinds `phoneCall` and `microphone` for the call's length, posting a `CallStyle` notification (the call's name, In a call, the system's Hang up, a tap back into the app) as it starts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `CallRoutes.kt`         | Where the call plays                                                         | Telecom's endpoints for the call, each with a kind from its type; selection by kind through `requestEndpointChange`; the proximity sensor while the route is the earpiece                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Where it differs from iOS: the iOS layer keeps WebRTC's transceiver objects, whose lifetime is the
 connection's; Android's are read anew each time, as above. iOS's audio session is configured and
-activated in two steps for CallKit's sake; Android sets one mode, and Telecom will set it instead.
-WebRTC's Java encodings take a whole number of frames a second, so a fractional `maxFramerate` is
-rounded.
+activated in two steps for CallKit's sake; Android sets one mode, which Telecom sets for the call
+too. WebRTC's Java encodings take a whole number of frames a second, so a fractional `maxFramerate`
+is rounded.
+
+### The system's call
+
+A call the engine is in is the app's own call in Telecom, so the system knows a call is on: a phone
+call taken holds it, a watch or a car can end it, the microphone stays the app's behind other apps,
+the audio focus is held for it, and the sound goes where Telecom's endpoints say. `CallTelecom` is
+not commanded; it follows the engine's snapshots (`CallSnapshots`), so whoever joins through the
+engine, the interface or later a ring answered, has the system's call made for them, and whatever
+ends the engine's call (the user, a moderator, a failure) ends it. The process holds one
+`CallsManager`, registered once with Telecom as an app that can make video calls
+(`registerAppWithTelecom`, `CallTelecom.callsManager`).
+
+On the way in, as the first snapshot of a call (`joining`) arrives, in this order: the audio mode is
+set to `MODE_IN_COMMUNICATION`; `CallService` is started, which posts the ongoing call's `CallStyle`
+notification as it enters the foreground, so the notification is up within the five seconds Telecom
+allows; and the call is added to Telecom (`CallsManager.addCall`, held in a coroutine for the call's
+length) as an outgoing call, named `displayName` (what the interface that commands the engine sets
+before joining; the app's name until then), addressed `aspen://call/<channel>`, of the audio or the
+video kind as the engine's grants say, and able to be held (`SUPPORTS_SET_INACTIVE`). Once Telecom
+hands the control scope over, `CallRoutes` is attached to it, and when the engine connects the call
+is set active (`setActive`); a grant of the camera or the screen that arrives with the connection
+moves an audio call to the video kind (`requestCallType`). Telecom refusing the call (another call
+being set up, too many calls) leaves the engine's call: a call Telecom does not hold would have its
+microphone taken by any other call.
+
+The audio focus is Telecom's: it requests the focus for every call it holds, as a voice
+communication (`AudioFocus_For_Phone_Ring_And_Calls` in the system's log), and sets the audio mode
+with it. A request of the app's own beside it is displaced by Telecom's the moment the call is
+added, which the app would read as a transient loss and an interruption, so the app makes none; an
+interruption (a phone call's ring taken) reaches the call as Telecom's hold.
+
+On the way out, the engine's `idle` or `failed` snapshot disconnects Telecom's call with the cause
+its end says (`LOCAL` for the user's own leaving, `REMOTE` for a call ended from elsewhere, removed
+by a moderator, access lost, or the server's idle end, `ERROR` for a failure, which Telecom before
+SDK 38 reports as `LOCAL`), and once Telecom has done it (or when Telecom itself ends the call), in
+this order: the routes are detached (the proximity sensor released), the service stopped (its
+notification with it), and the audio mode given back. A call the engine joined after that end was
+asked, while Telecom was still letting the last one go, is then added. Nothing is launched in
+Telecom's control scope itself, and the collections of its endpoints and mute state run in scopes of
+the layer's own, cancelled at the end: a collection left running in the control scope keeps
+Telecom's session, and `addCall`, open after the call is disconnected.
+
+What Telecom asks goes to the engine: its disconnect (the notification's Hang up goes through the
+service to the engine's `leave` the same way) leaves; its hold (`onSetInactive`, a phone call taken
+or Telecom unable to make the call active beside another) mutes and deafens the user, remembering
+their own mute and deafen, which `onSetActive` puts back; a mute from the system (`isMuted`, a car's
+or a watch's button) is the engine's mute, the first value being the state the call started in and
+left alone. The engine has no held state of its own, so others see a held user muted and deafened,
+and a camera or screen they share goes on.
+
+`CallService` runs for the call's length with the types `phoneCall` and `microphone`
+(`FOREGROUND_SERVICE_PHONE_CALL` and `FOREGROUND_SERVICE_MICROPHONE` in the manifest, with
+`MANAGE_OWN_CALLS` for Telecom); where Android 14 refuses the microphone kind to a service started
+from the background it runs as a phone call alone, and where Android 12 and later refuse to start it
+at all the call goes on under Telecom, which from Android 14 keeps a process with a call and a
+`CallStyle` notification alive itself. The notification is posted only through `startForeground`,
+since Android 12 refuses a `CallStyle` notification that is neither a foreground service's nor
+full-screen. Its channel, Ongoing calls, makes no sound. `POST_NOTIFICATIONS`, which the app asks
+for when it signs up for pushes, lets it show.
+
+`CallRoutes` is the one list of places a call can play, each a `Route` with a `Kind` from the
+endpoint's type (earpiece, speaker, Bluetooth, wired headset, or other, for streaming and kinds this
+build does not know), the system's name for display alone, and whether it is current; `hasEarpiece`
+reads `AudioManager`'s devices, so it answers before a call too. Selection is by kind (`select`),
+through Telecom's `requestEndpointChange`, never `AudioManager.setCommunicationDevice` beside
+Telecom, which would fight it for the device. While the current route is the earpiece a
+`PROXIMITY_SCREEN_OFF_WAKE_LOCK` is held, so the screen turns off at the ear. Listeners hear of
+every change on the main thread; outside a call the list is empty. The endpoints Telecom offers
+before a call (`getAvailableStartingCallEndpoints`), for a Speaker button shown before joining, are
+not read yet.
 
 ### The proof
 
@@ -98,17 +172,50 @@ channel's call, has a second participant brought in from a browser, reads both s
 the other's sound (the browser's as the loudest sample off its received tracks, `loudness` in
 `calls/page.ts`, since Chromium's own level statistics read zero behind the muted element it plays
 each track in), cuts its socket and watches the engine take its place back with `resume`, and
-leaves. What the browser must hear is what the device's microphone carried, which the device's own
-`media-source` statistics tell: sound, when a tone is played to it, or silence, as on an emulator
-whose host audio never reaches it. `scripts/check_mobile_call.py --platform android` at the
-repository's root runs it end to end, with the same deployment and browser the iOS check uses: a
-deployment of its own serving the call page (`client/packages/protocol/calls/`), `adb reverse` so
-the emulator reaches the API server, the voice server, and the script's helper at its own loopback
-(plain HTTP there, as a development build allows; media goes to the voice server's announced address
-over the network), Chromium as the second participant with a tone WAV as its microphone
-(`calls/second.ts`), and `gradlew connectedDebugAndroidTest` on this test alone. With `--avd` it
-starts the emulator headless, recording the machine's microphone (`-allow-host-audio`, without which
-the emulator records silence); the emulator's PulseAudio backend does not start against PipeWire's
-server (`Could not init \`pa' audio
+leaves. Around that it checks the system's side: Telecom holds the call as outgoing (`dialing`) and
+then active, and `dumpsys telecom` (run through the instrumentation's shell) names the call by the
+id Telecom gave it; the call's service runs in the foreground with its `CallStyle` notification
+posted, and the audio mode is the communication mode; the routes are Telecom's endpoints, each with
+a kind, one current, and selecting the loudspeaker (and the earpiece again, where the device has
+one) moves the call there; and leaving ends Telecom's call, stops the service, takes the
+notification down, empties the routes, and gives the audio mode back. What the browser must hear is
+what the device's microphone carried, which the device's own `media-source` statistics tell: sound,
+when a tone is played to it, or silence, as on an emulator whose host audio never reaches it.
+`scripts/check_mobile_call.py --platform android` at the repository's root runs it end to end, with
+the same deployment and browser the iOS check uses: a deployment of its own serving the call page
+(`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the voice
+server, and the script's helper at its own loopback (plain HTTP there, as a development build
+allows; media goes to the voice server's announced address over the network), Chromium as the second
+participant with a tone WAV as its microphone (`calls/second.ts`), and
+`gradlew connectedDebugAndroidTest` on this test alone. With `--avd` it starts the emulator
+headless, recording the machine's microphone (`-allow-host-audio`, without which the emulator
+records silence); the emulator's PulseAudio backend does not start against PipeWire's server
+(`Could not init \`pa' audio
 driver`), so there its microphone is silent and the test checks the browser hears silence. The test reads its deployment, channel, user, refresh token, and the script's helper from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is skipped without them, so CI's `connectedDebugAndroidTest`
 runs it as a skip.
+
+### What only a phone can show
+
+The emulator offers one route, its loudspeaker (`hasEarpiece` is false there), and has no other
+call, so these are checked by hand on a device, with the call engine's test or with the app once the
+interface commands the engine:
+
+- [ ] The earpiece: the call plays at the ear, the screen turns off as the phone is raised to it and
+      comes back as it is lowered, and the Speaker route turns the screen back on.
+- [ ] A Bluetooth headset: it is listed as `BLUETOOTH` with its name, a call joined with it
+      connected starts on it, connecting it during a call moves the call to it, disconnecting it
+      moves the call back, and with `BLUETOOTH_CONNECT` granted Telecom names every headset.
+- [ ] A wired or USB headset: listed as `WIRED_HEADSET`, taken on connection, given up on removal.
+- [ ] A phone call interrupting ours: the ring holds the call (`onSetInactive`, the user shown muted
+      and deafened to the others), hanging the phone call up or declining it resumes ours
+      (`onSetActive`) with the user's own mute and deafen back, and ending ours from the phone's
+      call screen or a watch leaves the engine's call.
+- [ ] A navigation prompt or an alarm over the call: what Telecom's audio focus does with it, and
+      whether the call is held or plays on beside it.
+- [ ] The notification: Hang up leaves the call, a tap opens the app, and on Android 14 and later
+      the call outlives the app in the background and the screen off for an hour, with the battery
+      use the system attributes to it recorded.
+- [ ] Android 8 to 13 (the `ConnectionService` path): the call appears in the phone's call screen,
+      the same holds and resumes, and the foreground service alone keeps the process alive.
+- [ ] A phone without an earpiece (a tablet): `hasEarpiece` is false and the routes are the
+      loudspeaker and whatever is connected.

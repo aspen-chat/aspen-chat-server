@@ -14,12 +14,14 @@ import org.webrtc.PeerConnectionFactory
  * through WebRTC's audio device module as a track the engine sends.
  *
  * A call plays and records in `MODE_IN_COMMUNICATION`, where the system applies its voice
- * processing and the receiver and loudspeaker take a call's volume. The app sets the mode itself
- * here until Telecom owns the call: a self-managed `ConnectionService` sets it for the call it
- * holds, and `configureForCall` and `release` are the seams its connection's `onStateChanged`
- * and `onDisconnect` will drive. The route (receiver, loudspeaker, a headset) is chosen within
- * that mode by a later piece, as `AspenAudioRoutePlugin` chooses it for the web view's calls; so
- * is the camera.
+ * processing and the receiver and loudspeaker take a call's volume. `CallTelecom` sets the mode
+ * through `configureForCall` as it adds the call to Telecom and gives it back through `release`
+ * when the call ends; Telecom sets the same mode for a call it holds, so the two agree. The audio
+ * focus is Telecom's alone: it takes the focus for every call it holds, as a voice communication,
+ * and a request of the app's own beside it is displaced by Telecom's at once (a transient loss the
+ * app would mistake for an interruption), so an interruption reaches the call as Telecom's hold.
+ * The route within the mode (receiver, loudspeaker, a headset) is Telecom's to change too
+ * (`CallRoutes`), never `AudioManager`'s beside it. The camera is a later piece.
  */
 class CallAudio(context: Context, private val factory: PeerConnectionFactory, private val tracks: CallTracks) {
     private val audioManager = context.applicationContext.getSystemService(AudioManager::class.java)

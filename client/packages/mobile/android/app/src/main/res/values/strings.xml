@@ -18,4 +18,8 @@
          each also titles its notifications when the app gave no words of its own. -->
     <string name="aspen_uploads_channel_name">Sending files</string>
     <string name="aspen_upload_failures_channel_name">Files that could not be sent</string>
+    <!-- The notification channel of a call under way (call/CallService.kt), and what its
+         notification says beneath the call's name. -->
+    <string name="aspen_calls_channel_name">Ongoing calls</string>
+    <string name="aspen_call_in_progress">In a call</string>
 </resources>

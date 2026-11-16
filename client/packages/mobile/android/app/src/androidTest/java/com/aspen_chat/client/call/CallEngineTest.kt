@@ -1,7 +1,14 @@
 package com.aspen_chat.client.call
 
 import android.Manifest
+import android.app.ActivityManager
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioManager
+import android.os.ParcelFileDescriptor
+import android.os.ParcelUuid
+import android.service.notification.StatusBarNotification
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aspen_chat.client.push.PushStore
@@ -39,8 +46,10 @@ import org.junit.runner.RunWith
 
 /**
  * The call engine with this device's whole platform under it, against a real deployment: it joins
- * a voice channel's call, is heard by and hears a second participant in a browser, takes its
- * socket back after the socket is cut, and leaves. `scripts/check_mobile_call.py --platform android`
+ * a voice channel's call, which Telecom holds as the app's own call (dialing, then active) with the
+ * call's service and notification up and its routes listed and switched, is heard by and hears a
+ * second participant in a browser, takes its socket back after the socket is cut, and leaves,
+ * which ends the system's side too. `scripts/check_mobile_call.py --platform android`
  * at the repository's root runs the deployment, the browser, and this test, and gives it what it
  * reads from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.<name>`);
  * without them it is skipped.
@@ -131,8 +140,10 @@ class CallEngineTest {
     fun setUp() {
         context = InstrumentationRegistry.getInstrumentation().targetContext
         store = PushStore(context)
-        InstrumentationRegistry.getInstrumentation().uiAutomation
-            .grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
+        // The call's notification, which the app asks leave for when it signs up for pushes.
+        automation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
     }
 
     @After
@@ -171,14 +182,56 @@ class CallEngineTest {
         val call = CallEngine(context, api, loopbackPlainText = true, media = media, sockets = sockets, peerConnections = peerConnections)
         val seen = Seen()
         val listening = call.snapshots.listen(seen)
+        val audioManager = context.getSystemService(AudioManager::class.java)
+        val modeBefore = audioManager.mode
         try {
-            call.audio.configureForCall()
             val microphone = call.audio.openMicrophone()
             call.engine.setMicrophone(microphone)
+            assertEquals(CallTelecom.Phase.IDLE, call.telecom.phase)
+            assertTrue("no routes outside a call", call.routes.routes.isEmpty())
             call.engine.join(channel)
+
+            // The system's call follows the engine's: outgoing while the engine joins, and
+            // active once it connects, with the service and its notification up meanwhile.
+            val dialing = untilTelecom("the system call is dialing", 20, call) { it == CallTelecom.Phase.DIALING }
+            assertEquals(CallTelecom.Phase.DIALING, dialing)
 
             // Joined: the microphone is sent and the renewed session token is kept.
             val connected = until("the call connects", 40, call) { it.status == CallStatus.CONNECTED }
+            untilTelecom("the system call is active", 20, call) { it == CallTelecom.Phase.ACTIVE }
+            val callId = call.telecom.callId ?: throw AssertionError("Telecom gave the call no id")
+            val telecomActive = telecomLines(callId)
+            assertTrue("Telecom lists the call $callId:\n$telecomActive", telecomActive.isNotEmpty())
+            assertEquals("the call plays in the communication mode", AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+            val service = awaitValue("the call's service runs in the foreground", 10) { callService()?.takeIf { it.foreground } }
+            val notice = awaitValue("the call's notification is posted", 10) { callNotification() }
+            assertEquals(Notification.CATEGORY_CALL, notice.notification.category)
+            assertTrue("the notification is the service's", notice.notification.flags and Notification.FLAG_FOREGROUND_SERVICE != 0)
+            assertTrue("the notification stays", notice.notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+
+            // The routes are Telecom's endpoints, typed; the loudspeaker is among them on any
+            // phone, and asking for it makes it the current one.
+            val routes = awaitValue("Telecom lists the call's routes", 10) { call.routes.routes.takeIf { it.isNotEmpty() } }
+            assertTrue("every route has a kind: $routes", routes.all { it.kind != CallRoutes.Kind.OTHER })
+            assertEquals("one route is current: $routes", 1, routes.count { it.current })
+            assertTrue("the loudspeaker is a route: $routes", routes.any { it.kind == CallRoutes.Kind.SPEAKER })
+            assertTrue(call.routes.select(CallRoutes.Kind.SPEAKER))
+            awaitTrue("the call moves to the loudspeaker", 10) { call.routes.currentKind == CallRoutes.Kind.SPEAKER }
+            val speaking = call.routes.routes
+            assertTrue("the loudspeaker is current: $speaking", speaking.single { it.current }.kind == CallRoutes.Kind.SPEAKER)
+            val earpiece = routes.firstOrNull { it.kind == CallRoutes.Kind.EARPIECE }
+            if (earpiece != null) {
+                assertTrue(call.routes.hasEarpiece)
+                assertTrue(call.routes.select(CallRoutes.Kind.EARPIECE))
+                awaitTrue("the call moves back to the earpiece", 10) { call.routes.currentKind == CallRoutes.Kind.EARPIECE }
+            }
+            assertTrue("no route of a kind the phone lacks", !call.routes.select(CallRoutes.Kind.WIRED_HEADSET) || routes.any { it.kind == CallRoutes.Kind.WIRED_HEADSET })
+            println(
+                "call-engine-test: Telecom holds the call $callId (${telecomActive.first().trim()}); " +
+                    "${service.service.shortClassName} runs in the foreground with its notification; " +
+                    "routes ${routes.map { "${it.kind}(${it.name})" }}, earpiece ${call.routes.hasEarpiece}, " +
+                    "moved to ${speaking.single { it.current }.kind}${if (earpiece != null) " and back to EARPIECE" else ""}",
+            )
             assertEquals(channel, connected.channel)
             assertEquals(user, connected.user)
             assertNotNull(connected.session)
@@ -257,6 +310,17 @@ class CallEngineTest {
                 "revisions count up by one: $revisions",
                 revisions.zipWithNext().all { (before, after) -> after == before + 1uL },
             )
+            // And the system's side with it: Telecom's call is gone, the service and its
+            // notification are down, the routes empty, and the audio mode given back.
+            untilTelecom("the system call ends", 20, call) { it == CallTelecom.Phase.IDLE }
+            awaitTrue("the call's service stops", 10) { callService() == null }
+            awaitTrue("the call's notification is taken down", 10) { callNotification() == null }
+            awaitTrue("the audio mode is given back", 10) { audioManager.mode == modeBefore }
+            assertTrue("no routes after the call", call.routes.routes.isEmpty())
+            assertNull(call.routes.currentKind)
+            val telecomAfter = telecomLines(callId)
+            assertTrue("Telecom no longer holds the call $callId:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })
+            println("call-engine-test: left; Telecom's call ended, the service and its notification are down, routes empty, audio mode $modeBefore again")
             println(
                 "call-engine-test: joined, heard ${after.packets - before.packets} packets of the browser's tone in 4 s " +
                     "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone source " +
@@ -268,7 +332,6 @@ class CallEngineTest {
         } finally {
             listening.cancel()
             call.audio.closeMicrophone()
-            call.audio.release()
             call.close()
         }
     }
@@ -287,6 +350,53 @@ class CallEngineTest {
             state = call.engine.state()
         }
         return state
+    }
+
+    /** The system call's phase once `holds` of it, or a failure after `seconds`. */
+    private suspend fun untilTelecom(what: String, seconds: Long, call: CallEngine, holds: (CallTelecom.Phase) -> Boolean): CallTelecom.Phase {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        var phase = call.telecom.phase
+        while (!holds(phase)) {
+            if (System.nanoTime() > deadline) {
+                fail("$what did not happen within $seconds s: $phase")
+            }
+            delay(100)
+            phase = call.telecom.phase
+        }
+        return phase
+    }
+
+    /** What `read` answers once it is not `null`, or a failure after `seconds`. */
+    private suspend fun <T : Any> awaitValue(what: String, seconds: Long, read: () -> T?): T {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        while (true) {
+            read()?.let { return it }
+            if (System.nanoTime() > deadline) {
+                fail("$what did not happen within $seconds s")
+            }
+            delay(100)
+        }
+    }
+
+    /** Waits until `holds`, or fails after `seconds`. */
+    private suspend fun awaitTrue(what: String, seconds: Long, holds: () -> Boolean) {
+        awaitValue(what, seconds) { if (holds()) Unit else null }
+    }
+
+    /** The call's service among the app's running services, with whether it is in the foreground. */
+    @Suppress("DEPRECATION")
+    private fun callService(): ActivityManager.RunningServiceInfo? =
+        context.getSystemService(ActivityManager::class.java).getRunningServices(100)
+            .firstOrNull { it.service.className == CallService::class.java.name }
+
+    private fun callNotification(): StatusBarNotification? =
+        context.getSystemService(NotificationManager::class.java).activeNotifications.firstOrNull { it.id == CallService.NOTIFICATION_ID }
+
+    /** The lines of `dumpsys telecom` that name the call `id`, Telecom's own word on it. */
+    private fun telecomLines(id: ParcelUuid): List<String> {
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys telecom")
+        val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
+        return text.lines().filter { it.contains(id.toString()) }
     }
 
     /** The body of `url`'s answer, which must be `200`. */
