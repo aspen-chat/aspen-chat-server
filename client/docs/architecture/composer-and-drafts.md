@@ -19,6 +19,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Drafts          | `src/features/messages/drafts.ts`                                                           |
 | Picks           | `src/features/messages/picks.ts`; see [Picks](tagging.md#picks)                             |
 | Attaching files | `transferredContent.ts`, `DropZone`, `dropZoneContext.ts`, `src/api/keyboardContent.ts`     |
+| Photos, camera  | `src/api/mediaBridge.ts`, the `AspenMedia` plugin in each mobile app                        |
 | Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)                     |
 
 ## Layout
@@ -26,9 +27,11 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 - The box sits level with its buttons, all 42px tall.
 - Send is an icon (a paper plane), so the box keeps the room. Left of it, at every width, a smiley
   opens the emoji keyboard (below).
-- On a narrow screen, the other controls share one + button. Its menu offers attaching a file,
-  making a poll (`CreatePollModal`, which the wide screen's own poll button opens too), and choosing
-  when the message is sent (`ScheduleMessageModal`, as the wide screen's clock button does).
+- On a narrow screen, the other controls share one + button. Its menu offers, in the mobile apps,
+  taking a photo, recording a video, and attaching a photo (each where the device has the screen for
+  it; see Photos and the camera below), then attaching a file, making a poll (`CreatePollModal`,
+  which the wide screen's own poll button opens too), and choosing when the message is sent
+  (`ScheduleMessageModal`, as the wide screen's clock button does).
 - The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an
   empty box together (`composer-foot-height` in `styles.css`), at every message text size and
   spacing, so its top rule meets the typing line's in one line. The foot's rule, padding, box
@@ -245,9 +248,11 @@ For the server's side, see `docs/architecture/typing.md` at the repository's roo
 
 ## Attaching files
 
-A file reaches the box by any of four routes, and each uploads at once (`upload`):
+A file reaches the box by any of five routes, and each uploads at once (`upload`):
 
 - **The attach button**, or the + menu's Attach a file, through the system's file picker.
+- **Take a photo, Record a video, and Attach a photo**, in the mobile apps, through the system's
+  camera and photo picker (below).
 - **A paste.** `transferredContent` reads the clipboard: its files (a screenshot, a picture copied
   from a page, files copied in a file manager) are attached, and its text is written in where the
   user is writing, as the box writes any paste. The box leaves writing to the browser, so undo
@@ -280,6 +285,39 @@ the server, from storage, so a picture can be seen whole while it is still uploa
 covers none of them: they are the user's own, spoilers included. The dialog describing a picture for
 readers who cannot see it (`AttachmentDescriptionButton`) shows the picture above the description,
 in the box and in a message being edited.
+
+### Photos and the camera
+
+In the mobile apps, the box offers three of the system's own screens besides its file picker, each
+opened at once, in this order (`MEDIA_SOURCES`): Take a photo, Record a video, and Attach a photo.
+On a wide screen each is a button left of the attach button; on a narrow one, an item of the + menu
+above Attach a file. Each is offered only where the user may attach files and the device has the
+screen (`AspenMedia.sources`, asked once): the photo picker on Android where the system or Google
+Play services provides it (`PickVisualMedia.isPhotoPickerAvailable`), and the camera where the
+device has one and, on Android, a camera app answers the capture intent. A browser offers none of
+them, since a page cannot ask its file picker for the photo library or the camera alone on every
+browser, nor ask whether it has them.
+
+- **Attach a photo** opens the photo picker for photos and videos, as many as the message has room
+  for. The picker runs apart from the app and hands it only what was chosen, so the app holds no
+  permission to read the device's photos. On iOS it hands them over in their most compatible form
+  (JPEG and H.264), which every reader's device can show and the server can make previews of.
+- **Take a photo** and **Record a video** open the camera. Android's capture intents give the shot
+  to the device's camera app, which needs no permission of the app's own; Android refuses them to an
+  app that declares the camera permission without holding it, as this one does for calls, so the app
+  asks for it first. iOS lends no camera from another process, so the app's own camera access is
+  asked for the first time it is needed. Neither app says why before the system asks: pressing the
+  button is the reason. Where the camera is refused, the box says to allow it in the device's
+  settings (`captureCameraDenied`).
+- **Names.** What the camera takes has none, and Android's picker names what it hands over by its id
+  in the device's media, so each is named for when it was taken (`photo_YYYYMMDD_HHMMSS.jpg`,
+  `capturedPhotoStem` and `capturedVideoStem`): the moment it arrives for the camera's, and the time
+  the picker says for Android's. iOS's picker gives each its name in the library (`IMG_1234`), which
+  is kept.
+- Each thing chosen or taken is copied into the app's cache, where the box reads it through
+  Capacitor's file server and then releases the copy (`chooseMedia`); copies left behind are removed
+  when the app next starts. A box gone by the time the user comes back from the screen attaches
+  nothing.
 
 ### Keyboard content on Android
 

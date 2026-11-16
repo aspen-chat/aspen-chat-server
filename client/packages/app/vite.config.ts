@@ -69,13 +69,18 @@ const serverPaths = ["/api", "/auth/passkey", "/auth/oidc", "/.well-known", "/em
  * deployments over `https:` and `wss:` alone, as the app connects nowhere else
  * (`securelyReached`), and to plain `http:` and `ws:` on this machine only in a development
  * build (the dev server's, or one made with `VITE_ALLOW_LOOPBACK_HTTP=1`), which may reach a
- * deployment there.
+ * deployment there. A phone's page also reads the copies the app's native side makes of what
+ * the photo picker and the camera hand it (`mediaBridge.ts`) through Capacitor's file server,
+ * the `_capacitor_file_` path of the page's own origin: `https:` covers Android's
+ * (`https://localhost`), and iOS's (`capacitor://localhost`, Capacitor's default) is named,
+ * that path alone.
  *
  * Capacitor's bridge script on Android is injected ahead of the policy, where an old web view
  * cannot inject it otherwise, and a policy in the page governs only what follows it.
  */
 function shellPolicy(shell: "desktop" | "mobile", development: boolean): string {
   const own = shell === "mobile" ? "'self' " : "";
+  const nativeFiles = shell === "mobile" ? " capacitor://localhost/_capacitor_file_/" : "";
   const loopback = development ? " http://localhost:* http://127.0.0.1:* http://*.localhost:*" : "";
   const loopbackSockets = development
     ? " ws://localhost:* ws://127.0.0.1:* ws://*.localhost:*"
@@ -87,7 +92,7 @@ function shellPolicy(shell: "desktop" | "mobile", development: boolean): string 
     "font-src 'self' data:",
     `img-src ${own}data: blob: https:${loopback}`,
     `media-src ${own}data: blob: https:${loopback}`,
-    `connect-src https: wss:${loopback}${loopbackSockets}`,
+    `connect-src https: wss:${nativeFiles}${loopback}${loopbackSockets}`,
     `frame-src https:${loopback}`,
     "worker-src 'self' blob:",
     "object-src 'none'",

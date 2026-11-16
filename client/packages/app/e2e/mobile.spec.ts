@@ -1043,3 +1043,156 @@ test.describe("on a phone", () => {
     await expect.poll(lowest).toEqual(before);
   });
 });
+
+/**
+ * Stands in for the mobile apps' native side in the browser: Capacitor reports a native
+ * platform, and the `AspenMedia` plugin's calls are answered here and recorded in
+ * `window.mediaAsked`. The photo picker answers `beach.png`, the camera an unnamed picture, and
+ * the camera is refused while `window.cameraRefused` is set.
+ */
+async function inTheApp(page: Page) {
+  await page.addInitScript((pixelBytes) => {
+    const own = window as unknown as Record<string, unknown>;
+    localStorage.setItem("aspen.serverUrl", location.origin);
+    const asked: { method: string; options: Record<string, unknown> }[] = [];
+    own.mediaAsked = asked;
+    own.CapacitorCustomPlatform = { name: "android", plugins: {} };
+    own.Capacitor = {
+      PluginHeaders: [
+        {
+          name: "AspenMedia",
+          methods: ["sources", "choose", "release"].map((name) => ({ name, rtype: "promise" })),
+        },
+      ],
+      convertFileSrc: (url: string) =>
+        url.replace("file://", `${location.origin}/_capacitor_file_`),
+      nativePromise: (_plugin: string, method: string, options: Record<string, unknown>) => {
+        asked.push({ method, options });
+        if (method === "sources") {
+          return Promise.resolve({ photo: true, video: true, library: true });
+        }
+        if (method !== "choose") {
+          return Promise.resolve();
+        }
+        if (options.source === "library") {
+          return Promise.resolve({
+            items: [
+              {
+                url: "file:///media/a/beach.png",
+                name: "beach.png",
+                mimeType: "image/png",
+                byteSize: pixelBytes,
+              },
+            ],
+          });
+        }
+        if (own.cameraRefused === true) {
+          return Promise.reject(
+            Object.assign(new Error("the camera is not allowed"), { code: "cameraDenied" }),
+          );
+        }
+        return Promise.resolve({
+          items: [
+            {
+              url: "file:///media/b/capture.png",
+              name: "",
+              mimeType: "image/png",
+              byteSize: pixelBytes,
+            },
+          ],
+        });
+      },
+      nativeCallback: () => "",
+    };
+  }, PIXEL_PNG_BYTES.length);
+}
+
+test.describe("in the mobile apps", () => {
+  const reserved: string[] = [];
+
+  test.beforeEach(async ({ page }) => {
+    reserved.length = 0;
+    await inTheApp(page);
+    await signInToWorld(page, async (p) => {
+      await p.route(/\/_capacitor_file_\//, (route) =>
+        route.fulfill({ contentType: "image/png", body: PIXEL_PNG_BYTES }),
+      );
+      // Reservations are recorded and storage never answers, so each file stays in the box.
+      await p.route(/\/api\/v1\/(attachments|uploads)/, (route) => {
+        const request = route.request();
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname === "/api/v1/attachments"
+        ) {
+          const index =
+            reserved.push((request.postDataJSON() as { fileName: string }).fileName) - 1;
+          const id = `0190f0a0-0000-7000-8003-${String(index).padStart(12, "0")}`;
+          return route.fulfill({
+            status: 201,
+            json: {
+              id,
+              uploadUrl: `${new URL(request.url()).origin}/api/v1/uploads/${id}`,
+              expiresAt: new Date(Date.now() + 600_000).toISOString(),
+            },
+          });
+        }
+        return undefined;
+      });
+    });
+    await openChannel(page, "general");
+  });
+
+  const asked = (page: Page) =>
+    page.evaluate(
+      () =>
+        (window as unknown as { mediaAsked: { method: string; options: unknown }[] }).mediaAsked,
+    );
+
+  test("the + menu offers the camera and the photo picker above Attach a file, each at once", async ({
+    page,
+  }) => {
+    const more = page.getByRole("button", { name: "Add a file or a poll" });
+    await more.tap();
+    await expect(page.getByRole("menuitem")).toHaveText([
+      "Take a photo",
+      "Record a video",
+      "Attach a photo",
+      "Attach a file",
+      "Create a new poll",
+      "Schedule message",
+    ]);
+    await page.getByRole("menuitem", { name: "Attach a photo" }).tap();
+    await expect.poll(() => reserved).toEqual(["beach.png"]);
+
+    await more.tap();
+    await page.getByRole("menuitem", { name: "Take a photo" }).tap();
+    await expect.poll(() => reserved.length).toBe(2);
+    // What the camera takes is named for when it was taken.
+    expect(reserved[1]).toMatch(/^photo_\d{8}_\d{6}\.png$/);
+
+    const files = page.getByRole("list", { name: "Files to send" });
+    await expect(files.getByRole("listitem")).toHaveCount(2);
+    const calls = await asked(page);
+    // Each asks for as many as the message still has room for.
+    expect(calls.filter((c) => c.method === "choose").map((c) => c.options)).toEqual([
+      { source: "library", limit: 50 },
+      { source: "photo", limit: 49 },
+    ]);
+    expect(calls.filter((c) => c.method === "release").map((c) => c.options)).toEqual([
+      { url: "file:///media/a/beach.png" },
+      { url: "file:///media/b/capture.png" },
+    ]);
+  });
+
+  test("a refused camera says to allow it in the device's settings", async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).cameraRefused = true;
+    });
+    await page.getByRole("button", { name: "Add a file or a poll" }).tap();
+    await page.getByRole("menuitem", { name: "Record a video" }).tap();
+    await expect(
+      page.getByText("Aspen isn't allowed to use the camera. Allow it in this device's settings"),
+    ).toBeVisible();
+    expect(reserved).toEqual([]);
+  });
+});

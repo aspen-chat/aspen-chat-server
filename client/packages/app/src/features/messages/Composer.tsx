@@ -7,14 +7,18 @@ import {
   type ScheduledMessage,
 } from "@aspen/protocol";
 import {
+  CameraIcon,
   ChartBarIcon,
   ClockIcon,
   FileIcon,
+  ImageIcon,
   PaperclipIcon,
   PaperPlaneRightIcon,
   PlusIcon,
   SmileyIcon,
+  VideoCameraIcon,
   XIcon,
+  type Icon,
 } from "@phosphor-icons/react";
 import {
   useEffect,
@@ -50,7 +54,7 @@ import {
   useSystemDmPeer,
   useUser,
 } from "@/api/hooks";
-import { describable, isImageType } from "@/features/messages/images";
+import { describable, isImageType, isVideoType } from "@/features/messages/images";
 import {
   AttachmentDescriptionButton,
   pendingControlClass,
@@ -77,7 +81,7 @@ import { useOnKeyboardDismissed } from "@/features/layout/dismissKeyboard";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
-import { format } from "@/i18n/messages";
+import { format, type Messages } from "@/i18n/messages";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
@@ -92,6 +96,7 @@ import { ImageGallery } from "@/features/messages/ImageGallery";
 import { OnceOpen } from "@/features/layout/OnceOpen";
 import { timestampedName, transferredContent } from "@/features/messages/transferredContent";
 import { useKeyboardContent } from "@/api/keyboardContent";
+import { isCameraDenied, useMediaChooser, type MediaSource } from "@/api/mediaBridge";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -148,6 +153,17 @@ const MAX_ATTACHMENTS = 50;
  */
 const PASTED_TEXT_TYPE = "text/plain;charset=utf-8";
 
+/** The system's screens for photos and videos the box offers, in the order it offers them. */
+const MEDIA_SOURCES: readonly {
+  source: MediaSource;
+  Icon: Icon;
+  label: (m: Messages) => string;
+}[] = [
+  { source: "photo", Icon: CameraIcon, label: (m) => m.takePhoto },
+  { source: "video", Icon: VideoCameraIcon, label: (m) => m.recordVideo },
+  { source: "library", Icon: ImageIcon, label: (m) => m.attachPhoto },
+];
+
 /** How long typing pauses before the draft is kept. */
 const DRAFT_SAVE_DELAY_MS = 400;
 
@@ -164,6 +180,7 @@ const openToolButtonClass = toolButtonShape + " border-accent text-accent";
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button,
+ * chosen or taken with the system's photo picker or camera in the mobile apps (`MEDIA_SOURCES`),
  * pasted, dropped on the box's pane (`DropZone`), or inserted by an Android keyboard upload at once
  * and are sent with the next message; a message may be files alone. A file that came without a name
  * (a screenshot pasted) is named for the moment it came (`timestampedName`). Pressing a picture's
@@ -324,6 +341,34 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   useKeyboardContent(box, mayPost && permissions.has("attachFiles"), (file) => {
     upload([new File([file], nameFor(file), { type: file.type })]);
   });
+  const media = useMediaChooser(
+    (chosen) => {
+      upload(
+        chosen.map(({ file, named, takenAt }) =>
+          named
+            ? file
+            : new File(
+                [file],
+                timestampedName(
+                  isVideoType(file.type) ? m.capturedVideoStem : m.capturedPhotoStem,
+                  file.type,
+                  takenAt,
+                ),
+                { type: file.type },
+              ),
+        ),
+      );
+    },
+    (problem) => {
+      setError(isCameraDenied(problem) ? m.captureCameraDenied : m.mediaUnreadable);
+    },
+  );
+  const mediaOffered = MEDIA_SOURCES.filter(
+    (source) => permissions.has("attachFiles") && media.sources.has(source.source),
+  );
+  const chooseMedia = (source: MediaSource) => {
+    media.choose(source, Math.max(1, MAX_ATTACHMENTS - pending.length));
+  };
 
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
   // (another channel, a notification opened) or the page is hidden or left.
@@ -1198,6 +1243,19 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         />
         {wide ? (
           <>
+            {mediaOffered.map(({ source, Icon, label }) => (
+              <Tooltip key={source} text={label(m)}>
+                <Button
+                  aria-label={label(m)}
+                  onPress={() => {
+                    chooseMedia(source);
+                  }}
+                  className={toolButtonClass}
+                >
+                  <Icon size={20} aria-hidden="true" />
+                </Button>
+              </Tooltip>
+            ))}
             {permissions.has("attachFiles") && (
               <Tooltip text={m.attachFile}>
                 <Button
@@ -1237,7 +1295,10 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                 <Menu
                   className="min-w-44 outline-none"
                   onAction={(key) => {
-                    if (key === "attach") {
+                    const offered = mediaOffered.find(({ source }) => source === key);
+                    if (offered !== undefined) {
+                      chooseMedia(offered.source);
+                    } else if (key === "attach") {
                       fileInput.current?.click();
                     } else if (key === "poll") {
                       setPolling(true);
@@ -1246,6 +1307,17 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                     }
                   }}
                 >
+                  {mediaOffered.map(({ source, Icon, label }) => (
+                    <MenuItem
+                      key={source}
+                      id={source}
+                      textValue={label(m)}
+                      className={menuItemClass}
+                    >
+                      <Icon size={18} aria-hidden="true" />
+                      {label(m)}
+                    </MenuItem>
+                  ))}
                   {permissions.has("attachFiles") && (
                     <MenuItem id="attach" textValue={m.attachFile} className={menuItemClass}>
                       <PaperclipIcon size={18} aria-hidden="true" />
