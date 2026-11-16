@@ -1,7 +1,6 @@
 import type { Channel } from "@aspen/protocol";
 import { userMuted } from "@aspen/protocol";
 import {
-  HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
   PhoneDisconnectIcon,
@@ -28,6 +27,7 @@ import {
   useVoiceCall,
 } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
+import { HeadphonesSlashIcon } from "@/icons/HeadphonesSlashIcon";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { Avatar } from "@/features/communities/Avatar";
 import { displayNameOf } from "@/features/users/profile";
@@ -414,7 +414,7 @@ function ParticipantTile({
       <span className="flex gap-1 text-ink-faint">
         {held && <PhonePauseIcon size={14} aria-label={m.voice.heldMark} />}
         {muted && <MicrophoneSlashIcon size={14} aria-label={m.voice.mutedMark} />}
-        {deafened && <HeadphonesIcon size={14} aria-label={m.voice.deafenedMark} />}
+        {deafened && <HeadphonesSlashIcon size={14} aria-label={m.voice.deafenedMark} />}
         {sharingScreen && <MonitorIcon size={14} aria-label={m.voice.sharingMark} />}
         {blocked ? (
           <ProhibitIcon size={14} aria-label={m.blocking.blocked} />

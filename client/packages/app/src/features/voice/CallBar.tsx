@@ -3,7 +3,6 @@ import {
   MicrophoneIcon,
   MicrophoneSlashIcon,
   PhoneDisconnectIcon,
-  SpeakerSlashIcon,
   VideoCameraIcon,
   VideoCameraSlashIcon,
   WarningCircleIcon,
@@ -17,6 +16,7 @@ import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { channelLink, useDomain } from "@/features/messages/links";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { HeadphonesSlashIcon } from "@/icons/HeadphonesSlashIcon";
 import { callBarButtonClass, callBarLeaveClass } from "@/features/voice/callBarButton";
 import { useCallHasFiles } from "@/features/voice/callFiles";
 import {
@@ -147,7 +147,7 @@ export function CallBar() {
                   className={callBarButtonClass + (call.deafened ? " text-danger" : "")}
                 >
                   {call.deafened ? (
-                    <SpeakerSlashIcon size={24} aria-hidden="true" />
+                    <HeadphonesSlashIcon size={24} aria-hidden="true" />
                   ) : (
                     <HeadphonesIcon size={24} aria-hidden="true" />
                   )}

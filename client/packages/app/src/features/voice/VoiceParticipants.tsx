@@ -1,7 +1,6 @@
 import type { User } from "@aspen/protocol";
 import { userMuted } from "@aspen/protocol";
 import {
-  HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
   PhonePauseIcon,
@@ -19,6 +18,7 @@ import {
   useUser,
 } from "@/api/hooks";
 import { useNameColor } from "@/features/users/nameColor";
+import { HeadphonesSlashIcon } from "@/icons/HeadphonesSlashIcon";
 import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameIn } from "@/features/users/nameIn";
@@ -134,7 +134,7 @@ function ParticipantRow({
         />
       )}
       {deafened && (
-        <HeadphonesIcon
+        <HeadphonesSlashIcon
           size={14}
           aria-label={m.voice.deafenedMark}
           className="shrink-0 text-ink-faint"

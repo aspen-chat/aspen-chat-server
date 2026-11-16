@@ -372,9 +372,12 @@ same commit, as with comments.
   (`ChannelScreen`, and the thread panel's own where it is the whole screen); the root mounts a
   `fallback` region fixed to the top of the page, shown only while no channel's region is mounted,
   so a toast sent from the channel list or a dialog opened there still shows, once.
-- Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken).
-  Prefer an icon to an emoji glyph in controls. Emoji reactions use `emoji-picker-react` with native
-  glyphs, loaded lazily by `src/features/messages/Reactions.tsx`; it fetches nothing.
+- Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken). One
+  Phosphor lacks is drawn from Phosphor's own geometry, in all six weights, into `src/icons/` as a
+  Phosphor icon on its `IconBase`, by a script that first checks its drawing of the original against
+  Phosphor's: `HeadphonesSlashIcon` (a deafened call), by `scripts/headphones_slash.py`. Prefer an
+  icon to an emoji glyph in controls. Emoji reactions use `emoji-picker-react` with native glyphs,
+  loaded lazily by `src/features/messages/Reactions.tsx`; it fetches nothing.
 - Styling is Tailwind CSS 4 with `tailwindcss-react-aria-components`, so interaction states are the
   `pressed:`, `selected:`, `focus-visible:`, `invalid:` variants driven by React Aria's data
   attributes. Do not add `:hover`/`:active` CSS by hand for those states.
