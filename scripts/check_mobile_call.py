@@ -247,10 +247,12 @@ class Ios:
         self.worktree = args.worktree
         self.derived = args.derived
         self.runner = args.runner
-        project = f"{args.worktree}/client/packages/mobile/ios/App"
+        self.project = f"{args.worktree}/client/packages/mobile/ios/App"
         destination = (f"platform=iOS Simulator,name={args.simulator}" if args.runner == "xcodebuild"
                        else "generic/platform=iOS Simulator")
-        self.xcodebuild = (f"cd {project} && xcodebuild -project App.xcodeproj -scheme App -sdk iphonesimulator "
+        # Run from `self.project`; the environment the test reads is set on this command alone,
+        # so a `cd` cannot be part of it.
+        self.xcodebuild = (f"xcodebuild -project App.xcodeproj -scheme App -sdk iphonesimulator "
                            f"-destination '{destination}' -derivedDataPath {args.derived}")
         if ssh_output(self.mac, "pgrep -x xcodebuild || true"):
             raise Failed("an xcodebuild is running on the Mac; wait for it")
@@ -261,7 +263,7 @@ class Ios:
                log=WORK / "engine.log") != 0:
             raise Failed("the engine did not build on the Mac")
         say("building the app and its tests for the simulator")
-        if ssh(self.mac, f"{self.xcodebuild} build-for-testing 2>&1 | grep -E 'error|warning: ld|BUILD' ; exit ${{pipestatus[1]}}",
+        if ssh(self.mac, f"cd {self.project} && {self.xcodebuild} build-for-testing 2>&1 | grep -E 'error|warning: ld|BUILD' ; exit ${{pipestatus[1]}}",
                log=WORK / "build.log") != 0:
             raise Failed(f"the app did not build; see {WORK / 'build.log'}")
 
@@ -274,7 +276,7 @@ class Ios:
             if self.runner == "xcodebuild":
                 environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in variables.items())
                 code = ssh(self.mac,
-                           f"{environment} {self.xcodebuild} test-without-building -only-testing:AppTests/CallEngineTests 2>&1 "
+                           f"cd {self.project} && {environment} {self.xcodebuild} test-without-building -only-testing:AppTests/CallEngineTests 2>&1 "
                            "| grep -E 'Test Case|Test Suite|call-engine-test|call-routes-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
                            timeout=900, log=log)
                 passed = code == 0 and "** TEST EXECUTE SUCCEEDED **" in log.read_text()
