@@ -11,5 +11,10 @@
     }
   },
   "colrv1": "noto-color-emoji.colrv1.woff2",
-  "sbix": "noto-color-emoji.sbix.woff2"
+  "sbix": "noto-color-emoji.sbix.woff2",
+  "metrics": {
+    "ascent": 0.927734375,
+    "descent": 0.244140625,
+    "lineGap": 0.0
+  }
 }

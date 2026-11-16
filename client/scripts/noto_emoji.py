@@ -140,6 +140,24 @@ class Source:
     committed: str
 
 
+def vertical_metrics(font: TTFont) -> dict[str, float]:
+    """The face's ascent, descent, and line gap as fractions of its em, which the web client's
+    `@font-face` overrides are built from (`fallbackFonts.ts`). Every table a browser may read
+    them from must agree, or no one override holds a line's height the same in every browser."""
+    em = font["head"].unitsPerEm
+    hhea = font["hhea"]
+    os2 = font["OS/2"]
+    readings = {
+        "hhea": (hhea.ascent, -hhea.descent, hhea.lineGap),
+        "OS/2 typographic": (os2.sTypoAscender, -os2.sTypoDescender, os2.sTypoLineGap),
+        "OS/2 Windows": (os2.usWinAscent, os2.usWinDescent, 0),
+    }
+    if len(set(readings.values())) != 1:
+        raise SystemExit(f"the emoji font's vertical metrics disagree between tables: {readings}")
+    ascent, descent, line_gap = readings["hhea"]
+    return {"ascent": ascent / em, "descent": descent / em, "lineGap": line_gap / em}
+
+
 def build(source: Source, expected: dict[str, str] | None) -> None:
     files = {path: upstream(source.commit, path) for path in (COLRV1, BITMAP, LICENSE)}
     hashes = {path: sha256(data) for path, data in files.items()}
@@ -151,10 +169,15 @@ def build(source: Source, expected: dict[str, str] | None) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for stale in OUT.iterdir():
         stale.unlink()
+    metrics: dict[str, float] | None = None
     for name, font in (
         (COLRV1_FILE, load(files[COLRV1])),
         (SBIX_FILE, bitmap_to_sbix(load(files[BITMAP]))),
     ):
+        own = vertical_metrics(font)
+        if metrics is not None and own != metrics:
+            raise SystemExit(f"the two emoji fonts' vertical metrics differ: {metrics}, {own}")
+        metrics = own
         data = woff2(font)
         (OUT / name).write_bytes(data)
         print(f"{name}: {len(data) / 1_000_000:.1f} MB", file=sys.stderr)
@@ -169,6 +192,7 @@ def build(source: Source, expected: dict[str, str] | None) -> None:
         },
         "colrv1": COLRV1_FILE,
         "sbix": SBIX_FILE,
+        "metrics": metrics,
     }
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n")
 

@@ -389,13 +389,18 @@ function ReactionTab({
   );
 }
 
-/** A reaction's emoji as drawn: the glyph, or a custom emoji's picture. */
+/**
+ * A reaction's emoji as drawn: the glyph, or a custom emoji's picture, at its own size rather
+ * than the scale emoji are drawn at among words (`emoji-unscaled`), since a chip is sized for it.
+ */
 export function EmojiKey({ emoji, communityId }: { emoji: string; communityId: string | null }) {
   const id = emojiIdOf(emoji);
   return id === null ? (
-    <span className="text-[1.5em] leading-none">{emoji}</span>
+    <span className="emoji-unscaled text-[1.5em] leading-none">{emoji}</span>
   ) : (
-    <CustomEmojiGlyph id={id} communityId={communityId} size="large" />
+    <span className="emoji-unscaled contents">
+      <CustomEmojiGlyph id={id} communityId={communityId} size="large" />
+    </span>
   );
 }
 

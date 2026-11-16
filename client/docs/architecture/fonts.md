@@ -78,8 +78,21 @@ Noto Color Emoji is bundled twice, from Google's own releases (`googlefonts/noto
 - The one `@font-face` lists both with `tech()`, so each browser fetches only the one it draws.
 - Each is one whole file, not `unicode-range` slices.
 - The family is `Aspen Noto Color Emoji`, a name no system font has.
-- The emoji picker names system emoji fonts of its own with `!important`. `styles.css` overrides it
-  with `--font-emoji`, so an emoji looks the same picked as sent.
+- Emoji are drawn at 120% of the text around them (`EMOJI_SCALE` in `fallbackFonts.ts`). The face's
+  `size-adjust` scales them, and its `ascent-override` and `descent-override` are its own metrics
+  divided by the scale, so they grow into the room above and below the line and a line holding one
+  is no taller. `noto_emoji.py` records the metrics in the manifest, and refuses fonts whose tables
+  disagree on them.
+- A community's own emoji (`CustomEmojiGlyph`) grow by the same scale, read from `--emoji-scale`.
+  The `custom-emoji` utility gives the growth back as a negative top margin, so the picture rises
+  into the room above the line rather than making it taller.
+- `--font-emoji-unscaled` is the same files under a second family,
+  `Aspen Noto Color Emoji Unscaled`, without the scale, for what is sized for the glyph at its font
+  size:
+  - The emoji picker, which names system emoji fonts of its own with `!important`. `styles.css`
+    overrides it with this family, since the picker's cells are sized for the glyph.
+  - A reaction's emoji (`EmojiKey`: chips, the reactions dialog's tabs, a phone's quick reacts),
+    through the `emoji-unscaled` utility, which also sets `--emoji-scale` to 1 for custom emoji.
 
 See the [design notes](fonts-design-notes.md#emoji) for why each of these holds.
 
@@ -103,6 +116,7 @@ has changed them.
 
 - the pixels are coloured
 - a family of four takes one advance
+- emoji and custom emoji are drawn at the scale, in lines as tall as the unscaled face's
 
 **Why:** a colour font can load and still draw nothing.
 

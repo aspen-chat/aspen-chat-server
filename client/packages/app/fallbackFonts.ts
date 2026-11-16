@@ -16,14 +16,13 @@ import type { Plugin } from "vite";
  * slices too, which Inclusive Sans and Noto Sans already draw, and its static packages name a
  * WOFF beside every WOFF2. So this plugin writes two stylesheets from them when Vite starts:
  * `src/generated/fontFaces.css`, each family's own script slices (named, or numbered where a
- * large family is cut by Unicode range) in WOFF2 alone and the emoji face, some 600 kB of rules
- * that `main.tsx`
- * loads without holding up the first paint; and `src/generated/fontStacks.css`, the custom
- * properties `styles.css` builds its font stacks on, loaded with the page: `--font-emoji`,
- * `--font-scripts` (in the order below), and `--font-han`, whose regional face comes first for
- * the page's language (`<html lang>`), since one Han character is drawn differently in
- * Japanese, Korean, and Simplified, Traditional, and Hong Kong Chinese, and a message does not
- * say which it is in.
+ * large family is cut by Unicode range) in WOFF2 alone and the emoji faces, some 600 kB of
+ * rules that `main.tsx` loads without holding up the first paint; and
+ * `src/generated/fontStacks.css`, the custom properties `styles.css` builds its font stacks on,
+ * loaded with the page: `--font-emoji`, `--font-emoji-unscaled`, `--emoji-scale`, `--font-scripts`
+ * (in the order below), and `--font-han`, whose regional face comes first for the page's
+ * language (`<html lang>`), since one Han character is drawn differently in Japanese, Korean,
+ * and Simplified, Traditional, and Hong Kong Chinese, and a message does not say which it is in.
  *
  * Left out: scripts now written only for history or liturgy (Kaithi, Modi, Sharada, Takri,
  * Grantha, Rejang, Osmanya, and the like), those of dead languages, those whose languages have
@@ -192,6 +191,8 @@ function faces(family: Family): { css: string; fontFamily: string } {
 interface EmojiManifest {
   colrv1: string;
   sbix: string;
+  /** Both builds' ascent, descent, and line gap, as fractions of the em. */
+  metrics: { ascent: number; descent: number; lineGap: number };
 }
 
 /**
@@ -202,26 +203,61 @@ interface EmojiManifest {
 const EMOJI_FAMILY = "Aspen Noto Color Emoji";
 
 /**
+ * The same face at its own size, for what is sized for the glyph as drawn at its font size: the
+ * emoji picker's 40px cells (`EmojiPicker.tsx`) and a reaction's emoji (`emoji-unscaled` in
+ * `styles.css`).
+ */
+const EMOJI_UNSCALED_FAMILY = "Aspen Noto Color Emoji Unscaled";
+
+/**
+ * How much larger than the text around them emoji are drawn (`size-adjust`), and custom emoji's
+ * pictures with them (`--emoji-scale`, read by `CustomEmojiGlyph`).
+ */
+const EMOJI_SCALE = 1.2;
+
+/** A fraction as a CSS percentage, to the precision a browser lays text out at. */
+function percent(fraction: number): string {
+  return `${String(Number((fraction * 100).toFixed(4)))}%`;
+}
+
+/**
  * The emoji face: Google's COLRv1 build for the browsers that draw COLRv1 (Chromium and Firefox),
  * and its bitmaps as `sbix` for the rest (WebKit), which `tech()` lets each browser choose
  * between without fetching the other. Each is one whole file: WebKit draws a sequence (a family,
  * a skin tone, a flag) apart when its characters come from different `unicode-range` slices.
+ *
+ * `size-adjust` scales the glyphs and every metric of the face, the overrides among them, so the
+ * overrides are the face's own metrics (from the manifest) divided by the scale: the glyphs grow
+ * into the room above and below them, and a line holding one is as tall as it is at the face's
+ * own size.
  */
-function emojiFace(): { css: string; fontFamily: string } {
+function emojiFaces(): { css: string; fontFamily: string; unscaledFamily: string } {
   const manifest = JSON.parse(
     readFileSync(join(emojiDirectory, "manifest.json"), "utf8"),
   ) as EmojiManifest;
+  const { metrics } = manifest;
   const directory = relative(generated, emojiDirectory).split("\\").join("/");
-  const css = `@font-face {
-  font-family: ${quoted(EMOJI_FAMILY)};
+  const rule = (family: string, adjustments: string) => `@font-face {
+  font-family: ${quoted(family)};
   font-style: normal;
   font-display: swap;
-  font-weight: 400;
+  font-weight: 400;${adjustments}
   src:
     url("${directory}/${manifest.colrv1}") format("woff2") tech(color-COLRv1),
     url("${directory}/${manifest.sbix}") format("woff2") tech(color-sbix);
 }`;
-  return { css, fontFamily: EMOJI_FAMILY };
+  const css = [
+    rule(
+      EMOJI_FAMILY,
+      `
+  size-adjust: ${percent(EMOJI_SCALE)};
+  ascent-override: ${percent(metrics.ascent / EMOJI_SCALE)};
+  descent-override: ${percent(metrics.descent / EMOJI_SCALE)};
+  line-gap-override: ${percent(metrics.lineGap / EMOJI_SCALE)};`,
+    ),
+    rule(EMOJI_UNSCALED_FAMILY, ""),
+  ].join("\n");
+  return { css, fontFamily: EMOJI_FAMILY, unscaledFamily: EMOJI_UNSCALED_FAMILY };
 }
 
 function quoted(name: string): string {
@@ -236,7 +272,7 @@ function generate(): { faces: string; stacks: string } {
     Han,
     ReturnType<typeof faces>
   >;
-  const emojiFaces = emojiFace();
+  const emoji = emojiFaces();
   const hanStack = (first?: Han) =>
     [...(first === undefined ? [] : [first]), ...HAN.filter((id) => id !== first)]
       .map((id) => quoted(hanFaces[id].fontFamily))
@@ -244,7 +280,7 @@ function generate(): { faces: string; stacks: string } {
   return {
     faces: [
       HEADER,
-      emojiFaces.css,
+      emoji.css,
       ...scriptFaces.map((face) => face.css),
       ...HAN.map((id) => hanFaces[id].css),
       "",
@@ -252,7 +288,9 @@ function generate(): { faces: string; stacks: string } {
     stacks: [
       HEADER,
       `:root {
-  --font-emoji: ${quoted(emojiFaces.fontFamily)};
+  --font-emoji: ${quoted(emoji.fontFamily)};
+  --font-emoji-unscaled: ${quoted(emoji.unscaledFamily)};
+  --emoji-scale: ${String(EMOJI_SCALE)};
   --font-scripts: ${scriptFaces.map((face) => quoted(face.fontFamily)).join(", ")};
   --font-han: ${hanStack()};
 }`,

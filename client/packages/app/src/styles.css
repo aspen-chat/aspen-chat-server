@@ -979,11 +979,29 @@ body {
   font-weight: 600;
 }
 
+/* A custom emoji's picture (`CustomEmojiGlyph`): a square of `--custom-emoji-box` (1.375em among
+   words), grown by the scale the emoji face is drawn at (`fallbackFonts.ts`), so the two stand the
+   same size. It grows upward from the text's foot into the room above it, which the negative top
+   margin gives back, so a line holding one is as tall as it would be at the unscaled size. */
+@utility custom-emoji {
+  width: calc(var(--custom-emoji-box, 1.375em) * var(--emoji-scale, 1));
+  height: calc(var(--custom-emoji-box, 1.375em) * var(--emoji-scale, 1));
+  margin-top: calc(var(--custom-emoji-box, 1.375em) * (1 - var(--emoji-scale, 1)));
+}
+
+/* A reaction's emoji (`EmojiKey`), glyph or custom emoji's picture, at the size it is given,
+   unscaled: a reaction chip is sized for it. */
+@utility emoji-unscaled {
+  --emoji-scale: 1;
+  font-family: var(--font-emoji-unscaled), var(--font-sans);
+}
+
 /* The emoji picker (`emoji-picker-react`) styles itself through these variables. */
-/* The picker names system emoji fonts of its own, `!important`; it draws in the one messages
-   and reactions are drawn in instead, so an emoji looks the same picked as sent. */
+/* The picker names system emoji fonts of its own, `!important`; it draws in the face messages
+   and reactions are drawn in instead, so an emoji looks the same picked as sent, at the face's own
+   size (`fallbackFonts.ts`), which its cells are sized for. */
 .emoji-picker .epr-emoji-native {
-  font-family: var(--font-emoji) !important;
+  font-family: var(--font-emoji-unscaled) !important;
 }
 .emoji-picker.epr-main {
   --epr-bg-color: var(--color-surface-raised);

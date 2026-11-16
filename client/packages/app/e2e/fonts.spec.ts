@@ -160,6 +160,74 @@ test("emoji are drawn in colour, sequences whole", async ({ page }) => {
   expect(drawn.sequenceInAdvances).toBeCloseTo(1, 1);
 });
 
+// Emoji are drawn larger than the text around them (`size-adjust` in `fallbackFonts.ts`), and a
+// community's own emoji with them, into the room above and below the line: a line holding either
+// is as tall as one holding an emoji at the face's own size, the size the picker and reactions
+// draw it at.
+test("emoji are drawn larger than the text, in lines no taller", async ({ page }) => {
+  await signInToWorld(page);
+  const measured = await page.evaluate(async () => {
+    const root = getComputedStyle(document.documentElement);
+    const scaled = root.getPropertyValue("--font-emoji").trim();
+    const own = root.getPropertyValue("--font-emoji-unscaled").trim();
+    await Promise.all([
+      document.fonts.load(`20px ${scaled}`, "\u{1F600}"),
+      document.fonts.load(`20px ${own}`, "\u{1F600}"),
+    ]);
+    const host = document.createElement("div");
+    host.style.cssText = "position: absolute; top: 0; left: 0; font-size: 20px; width: 40em";
+    document.body.append(host);
+    const line = (lineHeight: string, family: string, html: string) => {
+      const block = document.createElement("div");
+      block.style.lineHeight = lineHeight;
+      block.style.fontFamily = `"Inclusive Sans Variable", ${family}`;
+      block.innerHTML = html;
+      host.append(block);
+      return block;
+    };
+    const width = (block: HTMLElement) =>
+      block.firstElementChild?.getBoundingClientRect().width ?? Number.NaN;
+    const glyph = (family: string) => width(line("normal", family, "<span>\u{1F600}</span>"));
+    // A custom emoji's box, as `CustomEmojiGlyph` draws its picture and its placeholders.
+    const custom = '<span class="custom-emoji inline-block align-text-bottom"></span>';
+    const atOwnSize = (html: string) => `<span style="--emoji-scale: 1">${html}</span>`;
+    const heights = (lineHeight: string) => ({
+      own: line(lineHeight, own, "Ag \u{1F600}").offsetHeight,
+      scaled: line(lineHeight, scaled, "Ag \u{1F600}").offsetHeight,
+      custom: line(lineHeight, scaled, `Ag ${custom}`).offsetHeight,
+      customAtOwnSize: line(lineHeight, scaled, `Ag ${atOwnSize(custom)}`).offsetHeight,
+    });
+    const pictures =
+      width(line("normal", scaled, custom)) / width(line("normal", scaled, atOwnSize(custom)));
+    // A reaction's emoji (`EmojiKey`) stays at its own size, glyph and picture alike.
+    const unscaled = (html: string) => `<span class="emoji-unscaled">${html}</span>`;
+    const reactionGlyphs = width(line("normal", scaled, unscaled("\u{1F600}"))) / glyph(own);
+    const reactionPictures =
+      width(line("normal", scaled, unscaled(custom))) /
+      width(line("normal", scaled, atOwnSize(custom)));
+    const result = {
+      scale: Number(root.getPropertyValue("--emoji-scale")),
+      glyphs: glyph(scaled) / glyph(own),
+      pictures,
+      reactionGlyphs,
+      reactionPictures,
+      normal: heights("normal"),
+      fixed: heights("1.375"),
+    };
+    host.remove();
+    return result;
+  });
+  expect(measured.scale).toBeGreaterThan(1);
+  expect(measured.glyphs).toBeCloseTo(measured.scale, 2);
+  expect(measured.pictures).toBeCloseTo(measured.scale, 2);
+  expect(measured.reactionGlyphs).toBeCloseTo(1, 2);
+  expect(measured.reactionPictures).toBeCloseTo(1, 2);
+  for (const heights of [measured.normal, measured.fixed]) {
+    expect(heights.scaled).toBe(heights.own);
+    expect(heights.custom).toBe(heights.customAtOwnSize);
+  }
+});
+
 test("the regional Han face comes first for the page's language", async ({ page }) => {
   await signInToWorld(page);
   const first = () =>

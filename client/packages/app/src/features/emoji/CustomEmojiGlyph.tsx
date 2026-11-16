@@ -4,8 +4,9 @@ import { mediaUrl } from "@/features/layout/safeUrl";
 
 /**
  * One of a community's own emoji, drawn where a glyph would be: its picture at the text's
- * size, named for assistive technology and on hover by `:name:`. An id the community's list
- * does not hold (an emoji since removed, or another community's) is a marked placeholder.
+ * size, grown with the emoji glyphs around it (`custom-emoji` in `styles.css`), named for
+ * assistive technology and on hover by `:name:`. An id the community's list does not hold (an
+ * emoji since removed, or another community's) is a marked placeholder.
  */
 export function CustomEmojiGlyph({
   id,
@@ -21,7 +22,8 @@ export function CustomEmojiGlyph({
   const m = useMessages();
   const emoji = useCustomEmoji(communityId ?? "").find((e) => e.id === id);
   const icon = useIcon(emoji?.icon);
-  const box = size === "large" ? "h-[1.5em] w-[1.5em]" : "h-[1.375em] w-[1.375em]";
+  // `large` stands beside an emoji glyph drawn at 1.5em (a reaction's, a completion's).
+  const box = size === "large" ? "custom-emoji [--custom-emoji-box:1.5em]" : "custom-emoji";
   if (emoji === undefined) {
     return (
       <span
