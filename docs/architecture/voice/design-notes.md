@@ -267,7 +267,11 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 - **A slot changes occupant by offer, into the occupant's stream.** Their voice must play in sync
   with their camera (see [Sync and silencing](#sync-and-silencing)), which a browser does only for
   tracks of one stream; the cost is a renegotiation per change of speaker, which happens only once
-  more microphones are in the call than slots.
+  more microphones are in the call than slots. In a call of forty
+  (`voice_media/tests/slot_churn.rs`), three speaking at once with a new one every two seconds cost
+  each listener 22 offers a minute of 16 KB each, about 48 kbit/s of signalling; twenty speaking at
+  once, four changing each second, cost 66 a minute, the most one outstanding offer at a time
+  allows, about 140 kbit/s. An offer deflates to about a ninth of its size.
 - **A muted microphone gives up its slot at once.** It sends nothing, so holding a slot would keep
   someone who speaks out of the slots.
 - **Video only as watched, up to 25.** A client says what it shows, and the server sends only that,

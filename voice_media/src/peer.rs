@@ -157,7 +157,8 @@ impl Peer {
             .map_err(|_| "the peer has stopped".to_string())?
     }
 
-    /// Sends `media` on the section `mid` until stopped.
+    /// Sends `media` on the section `mid` until stopped. Sending on a section that sends already
+    /// changes what it sends, its numbering running on.
     pub fn send(&self, mid: &str, media: Synthetic) {
         let _ = self.commands.send(ToPeer::Send {
             mid: mid.into(),
@@ -379,13 +380,19 @@ async fn run(
                         let _ = reply.send(answer);
                     }
                     ToPeer::Send { mid, media } => {
+                        // What a section already sends goes on in its numbering: the server's
+                        // SRTP drops numbers it has had on an SSRC as replays.
+                        let (seq, timestamp, frame) = sending
+                            .iter()
+                            .find(|s| s.mid.to_string() == mid)
+                            .map_or((1, 0, 0), |s| (s.seq, s.timestamp, s.frame));
                         sending.retain(|s| s.mid.to_string() != mid);
                         sending.push(Sending {
                             mid: mid.as_str().into(),
                             media,
-                            seq: 1,
-                            timestamp: 0,
-                            frame: 0,
+                            seq,
+                            timestamp,
+                            frame,
                             due: Instant::now(),
                         });
                     }
