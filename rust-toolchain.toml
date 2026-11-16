@@ -3,11 +3,12 @@ channel = "1.99.1"
 profile = "default"
 # The example plugins (`plugins/`) are WebAssembly components, which the permissions check builds;
 # the call engine (`voice_client/`) is built for the iOS app, its simulator, the Android app, and
-# its emulator.
+# its emulator, on every ABI the app ships.
 targets = [
   "wasm32-wasip2",
   "aarch64-apple-ios",
   "aarch64-apple-ios-sim",
   "aarch64-linux-android",
+  "armv7-linux-androideabi",
   "x86_64-linux-android",
 ]

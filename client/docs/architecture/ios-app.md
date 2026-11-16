@@ -162,13 +162,16 @@ process on the simulator, WebRTC on a microphone and speaker in software (`ToneA
 `RTCAudioDevice` recording a warble of 440 and 660 Hz and dropping what it plays out), since the
 simulator's own audio unit aborts the process when a test initializes it: it joins a voice channel's
 call, has a second participant brought in from a browser, reads both sides' statistics for the
-other's sound, cuts its socket and watches the engine take its place back with `resume`, and leaves.
-`scripts/check_ios_call.py` at the repository's root runs it end to end from Linux: a deployment of
-its own serving the call page (`client/packages/protocol/calls/`), SSH reverse tunnels so the
-simulator reaches the API server and the voice server at the Mac's own loopback (plain HTTP there,
-as a development build allows; media goes to the voice server's announced address over the network),
-Chromium as the second participant with a tone WAV as its microphone (`calls/second.ts`), and
-`xcodebuild test-without-building` on the Mac, with `--build` first building the engine, the
-bindings, and the app for the simulator there. The test reads its deployment, channel, user, refresh
-token, and the script's helper from the environment (`TEST_RUNNER_ASPEN_CALL_*`; the test's comment
-lists them) and skips without them.
+other's sound (the browser's as the loudest sample off its received tracks, `loudness` in
+`calls/page.ts`, since Chromium's own level statistics read zero behind the muted element it plays
+each track in), cuts its socket and watches the engine take its place back with `resume`, and
+leaves. `scripts/check_mobile_call.py --platform ios` at the repository's root runs it end to end
+from Linux, with the same deployment and browser the Android check uses (`android-builds.md`, The
+call engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`), SSH
+reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
+loopback (plain HTTP there, as a development build allows; media goes to the voice server's
+announced address over the network), Chromium as the second participant with a tone WAV as its
+microphone (`calls/second.ts`), and `xcodebuild test-without-building` on the Mac, with `--build`
+first building the engine, the bindings, and the app for the simulator there. The test reads its
+deployment, channel, user, refresh token, and the script's helper from the environment
+(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them.

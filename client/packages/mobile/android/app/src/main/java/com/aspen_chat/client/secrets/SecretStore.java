@@ -97,6 +97,11 @@ public final class SecretStore {
         return read(name).text;
     }
 
+    /** Forgets the entry {@code name}, as before it was written. */
+    public synchronized void remove(String name) {
+        preferences.edit().remove(name).apply();
+    }
+
     /** Whether {@code text} is on disk, sealed; nothing is written unsealed. */
     public synchronized boolean write(String name, String text) {
         try {

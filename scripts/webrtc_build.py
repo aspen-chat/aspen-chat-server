@@ -6,6 +6,7 @@ media from the network on a phone is source we chose, at a milestone we move on 
 
     scripts/webrtc_build.py checkout        fetch the source, or move a checkout to the pinned branch
     scripts/webrtc_build.py build           build this machine's platform (checks out first if needed)
+    scripts/webrtc_build.py package         pack the Android archive again from the last build's output
     scripts/webrtc_build.py status          what is checked out, and the last build's result
 
 The checkout is large (30 GB and more) and lives outside the repository, in `~/webrtc-build` unless
@@ -25,10 +26,14 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 # The WebRTC milestone the apps build against: a `branch-heads/N` branch of Google's repository,
@@ -131,20 +136,16 @@ class Build:
         if not self.on_pinned_branch():
             self.do_checkout()
         started = time.monotonic()
+        self.out.mkdir(parents=True, exist_ok=True)
         if self.platform == "ios":
             artifact = self.build_ios(jobs)
-        else:
-            artifact = self.build_android(jobs)
-        self.out.mkdir(parents=True, exist_ok=True)
-        target = self.out / artifact.name
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
-        if artifact.is_dir():
+            target = self.out / artifact.name
+            if target.is_dir():
+                shutil.rmtree(target)
             shutil.copytree(artifact, target, symlinks=True)
         else:
-            shutil.copy2(artifact, target)
+            self.build_android(jobs)
+            target = self.package_android()
         minutes = (time.monotonic() - started) / 60
         print(f"built {WEBRTC_MILESTONE} ({WEBRTC_BRANCH}) in {minutes:.1f} min: {target}")
 
@@ -192,10 +193,13 @@ class Build:
                 self.run(["git", "checkout", "--quiet", "--", str(script)], self.src)
         return self.src / "out_ios_libs" / "WebRTC.xcframework"
 
-    def build_android(self, jobs: int | None) -> Path:
+    @property
+    def android_build_dir(self) -> Path:
         # Google's script insists on building inside the source tree.
-        build_dir = self.src / "out_aar"
-        archive = build_dir / "libwebrtc.aar"
+        return self.src / "out_aar"
+
+    def build_android(self, jobs: int | None) -> None:
+        build_dir = self.android_build_dir
         # From nothing, as on iOS.
         shutil.rmtree(build_dir, ignore_errors=True)
         command = [
@@ -204,7 +208,7 @@ class Build:
             "--build-dir",
             str(build_dir),
             "--output",
-            str(archive),
+            str(build_dir / "libwebrtc.aar"),
             "--arch",
             *ANDROID_ARCHS,
         ]
@@ -212,7 +216,100 @@ class Build:
             # One argument, since the switch itself begins with a dash.
             command.append(f"--extra-ninja-switches=-local_jobs={jobs}")
         self.run(command, self.src)
-        return archive
+
+    def package_android(self) -> Path:
+        """Writes `libwebrtc.aar` to `out` from the last Android build, with the Java classes
+        Google's archive leaves out.
+
+        The Java API's native methods are declared on classes jni_zero generates (`org.webrtc.*Jni`
+        for each class with natives, and `J.N`, the one class whose natives the library exports,
+        under hashed names). Google's `build_aar.py` packs the `libwebrtc` jar alone, whose
+        `dist_jar` takes its direct dependencies only, so the `*Jni` classes are left out, and
+        `J.N` is generated for each application that links the library (`generate-final` of
+        `jni_zero.py`, which the build runs for Google's own example apps and no one else), so
+        an app linking the archive as it comes fails on the first native method with
+        `NoClassDefFoundError`. The `*Jni` classes are taken from the jars the build compiled
+        them into, and `J.N` is generated here with the command the build would run for an
+        app, compiled against the archive's classes, and both are added to its `classes.jar`."""
+        build_dir = self.android_build_dir
+        built = build_dir / "libwebrtc.aar"
+        if not built.exists():
+            sys.exit(f"no archive at {built}; build first")
+        # The Java side is the same for every architecture; `build_aar.py` takes it from the first.
+        out = build_dir / ANDROID_ARCHS[0]
+        scratch = self.out / "android-jni"
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
+        # The generator's command line, as the build wrote it for the library's own registration
+        # target, with the outputs moved here: its flags (hashed names, safe pointers) must be the
+        # build's own, since the library exports what they say.
+        rules = (out / "toolchain.ninja").read_text()
+        found = re.search(
+            r"^  command = (python3 \.\./\.\./third_party/jni_zero/jni_zero\.py generate-final .*"
+            r"libjingle_peerconnection_so__jni_registration\.srcjar.*)$",
+            rules,
+            re.MULTILINE,
+        )
+        if found is None:
+            sys.exit(f"{out / 'toolchain.ninja'} has no registration rule for libjingle_peerconnection_so; see package_android")
+        command = shlex.split(found.group(1))
+        srcjar = scratch / "registration.srcjar"
+        # The generator writes its outputs' paths into the depfile and takes them relative to the
+        # build directory alone.
+        for flag, value in (("--srcjar-path", srcjar), ("--depfile", scratch / "registration.d")):
+            command[command.index(flag) + 1] = os.path.relpath(value, out)
+        self.run(command, out)
+        sources = scratch / "sources"
+        with zipfile.ZipFile(srcjar) as generated:
+            generated.extractall(sources)
+        classes = scratch / "classes"
+        classes.mkdir()
+        android_jar = sorted((self.src / "third_party" / "android_sdk" / "public" / "platforms").glob("android-*/android.jar"))
+        if not android_jar:
+            sys.exit(f"no android.jar under {self.src / 'third_party/android_sdk/public/platforms'}")
+        classpath = [
+            out / "lib.java" / "sdk" / "android" / "libwebrtc.jar",
+            out / "obj" / "third_party" / "jni_zero" / "jni_zero_java.javac.jar",
+            android_jar[-1],
+        ]
+        javac = self.src / "third_party" / "jdk" / "current" / "bin" / "javac"
+        self.run(
+            [str(javac), "-d", str(classes), "-cp", os.pathsep.join(map(str, classpath)), "-proc:none",
+             "--release", "17", "-nowarn", *map(str, sources.rglob("*.java"))],
+            out,
+        )
+        added: dict[str, bytes] = {}
+        for path in sorted(classes.rglob("*.class")):
+            added[path.relative_to(classes).as_posix()] = path.read_bytes()
+        # The generated `*Jni` classes, from the jar of each `generate_jni` target's Java.
+        for jar in sorted(out.glob("obj/**/*_jni_java.javac.jar")):
+            with zipfile.ZipFile(jar) as compiled:
+                for name in compiled.namelist():
+                    if re.search(r"Jni(\$[^/]*)?\.class$", name):
+                        added.setdefault(name, compiled.read(name))
+        target = self.out / "libwebrtc.aar"
+        with zipfile.ZipFile(built) as archive, tempfile.NamedTemporaryFile(
+            dir=self.out, suffix=".aar", delete=False
+        ) as temporary:
+            with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as packed:
+                for entry in archive.infolist():
+                    if entry.filename != "classes.jar":
+                        packed.writestr(entry, archive.read(entry))
+                        continue
+                    with zipfile.ZipFile(archive.open(entry)) as before, tempfile.TemporaryFile() as jar:
+                        with zipfile.ZipFile(jar, "w", zipfile.ZIP_DEFLATED) as after:
+                            for member in before.infolist():
+                                after.writestr(member, before.read(member))
+                                added.pop(member.filename, None)
+                            for name, data in sorted(added.items()):
+                                after.writestr(name, data)
+                        jar.seek(0)
+                        packed.writestr("classes.jar", jar.read())
+        # A temporary file is made private; the archive is read by the app's build like any file.
+        os.chmod(temporary.name, 0o644)
+        Path(temporary.name).replace(target)
+        print(f"packaged {target} with {len(added)} JNI classes added to classes.jar")
+        return target
 
     def status(self) -> None:
         print(f"platform: {self.platform}")
@@ -249,6 +346,7 @@ def main() -> None:
     commands.add_parser("checkout")
     build = commands.add_parser("build")
     build.add_argument("--jobs", type=int, help="compile jobs at once; the machine's cores otherwise")
+    commands.add_parser("package")
     commands.add_parser("status")
     args = parser.parse_args()
     build = Build(args.root, args.out)
@@ -257,6 +355,10 @@ def main() -> None:
             build.do_checkout()
         elif args.command == "build":
             build.do_build(args.jobs)
+        elif args.command == "package":
+            if build.platform != "android":
+                sys.exit("package: the iOS framework is packed by Google's build; only the Android archive needs it")
+            build.package_android()
         else:
             build.status()
     except subprocess.CalledProcessError as error:

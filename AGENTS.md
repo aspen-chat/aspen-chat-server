@@ -438,15 +438,19 @@ or what an operator must open, route, or back up updates it in the same commit.
    (`pnpm --filter @aspen/app exec playwright install chromium firefox`), and a sound server
    (PulseAudio, or PipeWire's), without which Firefox plays and records only silence.
 
-   Check the mobile call engine (`voice_client/`) with its iOS layer on a Mac's simulator:
+   Check the mobile call engine (`voice_client/`) with its iOS layer on a Mac's simulator, or its
+   Android layer on the emulator here:
 
    ```
-   scripts/check_ios_call.py --bin target/debug --build
+   scripts/check_mobile_call.py --platform ios --bin target/debug --build
+   scripts/check_mobile_call.py --platform android --bin target/debug --build --avd aspen-test
    ```
 
-   It runs a deployment here, reaches it from the Mac's loopback through SSH tunnels, and runs the
-   app's `CallEngineTests` on the simulator against it, with a browser here as the second
-   participant (`client/docs/architecture/ios-app.md`, The call engine).
+   It runs a deployment here, reaches it from the phone's loopback (SSH tunnels to the Mac,
+   `adb reverse` to the emulator), and runs the app's test of the engine (`CallEngineTests` on the
+   simulator, `CallEngineTest` on the emulator) against it, with a browser here as the second
+   participant; with `--avd` it starts the emulator headless (`client/docs/architecture/ios-app.md`
+   and `android-builds.md`, The call engine).
 
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,

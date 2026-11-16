@@ -32,11 +32,28 @@ public final class PushStore {
         store.write(KEY, state);
     }
 
+    /** Forgets the state, as before the app wrote one. */
+    public synchronized void remove() {
+        store.remove(KEY);
+    }
+
     /**
      * The account a push's subscription names; {@code null} when none does, or when the state is
      * of a version this code does not know, whose fields may mean something else.
      */
     public synchronized JSONObject account(String subscription) {
+        return find("subscription", subscription);
+    }
+
+    /**
+     * The account at the deployment whose {@code public_url} is {@code origin}, with or without a
+     * trailing slash; {@code null} as {@link #account} is.
+     */
+    public synchronized JSONObject accountAt(String origin) {
+        return find("origin", trimSlashes(origin));
+    }
+
+    private JSONObject find(String field, String value) {
         String state = load();
         if (state == null) {
             return null;
@@ -49,7 +66,8 @@ public final class PushStore {
             JSONArray accounts = parsed.getJSONArray("accounts");
             for (int i = 0; i < accounts.length(); i++) {
                 JSONObject account = accounts.getJSONObject(i);
-                if (subscription.equals(account.optString("subscription"))) {
+                String held = account.optString(field);
+                if (value.equals("origin".equals(field) ? trimSlashes(held) : held)) {
                     return account;
                 }
             }
@@ -57,6 +75,14 @@ public final class PushStore {
             return null;
         }
         return null;
+    }
+
+    private static String trimSlashes(String origin) {
+        int end = origin.length();
+        while (end > 0 && origin.charAt(end - 1) == '/') {
+            end--;
+        }
+        return origin.substring(0, end);
     }
 
     /** Keeps a session token the notification code got, so the next push need not get another. */

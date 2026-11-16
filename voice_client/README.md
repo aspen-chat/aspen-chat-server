@@ -29,9 +29,12 @@ changes. `--language swift|kotlin` writes one, `--swift-dir` and `--kotlin-dir` 
 The apps link the crate built for their targets, which `rust-toolchain.toml` lists: the iOS app and
 its simulator the `staticlib` (`aarch64-apple-ios`, `aarch64-apple-ios-sim`, each built against its
 SDK by `client/packages/mobile/ios/scripts/call_engine.py`), the Android app and its emulator the
-`cdylib` (`aarch64-linux-android`, `x86_64-linux-android`, each built with the NDK's clang as
-`CARGO_TARGET_<TARGET>_LINKER` and `CC_<target>`). The Kotlin package needs JNA and
-kotlinx-coroutines on the app's classpath; the Swift module needs only Foundation.
+`cdylib` (`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`, each built
+with the NDK's clang as `CARGO_TARGET_<TARGET>_LINKER` and `CC_<target>` by
+`client/packages/mobile/android/scripts/call_engine.py`, which writes the Kotlin package too). The
+Kotlin package needs JNA and kotlinx-coroutines on the app's classpath; the Swift module needs only
+Foundation. Each app's platform layer and how it is checked against a real deployment are
+`client/docs/architecture/ios-app.md` and `android-builds.md`, The call engine.
 
 ## Checking the bindings
 

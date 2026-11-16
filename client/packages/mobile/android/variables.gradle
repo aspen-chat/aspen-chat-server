@@ -1,5 +1,7 @@
 ext {
-    minSdkVersion = 24
+    // Android 8.0: self-managed calls through Telecom, which the native call engine's calls will
+    // be, and WebRTC's low-latency audio output (client/docs/architecture/android-builds.md).
+    minSdkVersion = 26
     compileSdkVersion = 36
     targetSdkVersion = 36
     androidxActivityVersion = '1.11.0'
@@ -18,4 +20,9 @@ ext {
     firebaseMessagingVersion = '25.0.1'
     androidxCredentialsVersion = '1.6.0'
     playAgeSignalsVersion = '0.0.4'
+    // The call layer (`call/`): the engine's generated Kotlin bindings load its library through
+    // JNA and suspend through kotlinx-coroutines, and the layer's HTTP and WebSockets are OkHttp's.
+    jnaVersion = '5.19.1'
+    kotlinxCoroutinesVersion = '1.11.0'
+    okhttpVersion = '4.12.0'
 }

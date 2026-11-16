@@ -1,9 +1,10 @@
 /**
  * One person in a call from Chromium through `page.ts`, driven over standard input, for a check
- * whose other participant is elsewhere (`scripts/check_ios_call.py`, where it is the iOS
- * simulator). Joins the call with a WAV played as the microphone, prints `connected` once the
+ * whose other participant is elsewhere (`scripts/check_mobile_call.py`, where it is a phone's
+ * simulator or emulator). Joins the call with a WAV played as the microphone, prints `connected` once the
  * call is on, then answers each line read: `report` prints the page's `CallReport` as one line
- * of JSON, and `leave` leaves and exits.
+ * of JSON, `loudness` the loudest sample its audio slots carried over a second (the page's
+ * `loudness`, since the browser's own level statistics read zero), and `leave` leaves and exits.
  *
  * ASPEN_CALL_SECOND='{"base": …, "channel": …, "session": <session>, "tone": "tone.wav"}' tsx calls/second.ts
  */
@@ -72,6 +73,8 @@ const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   if (line.trim() === "report") {
     console.log(JSON.stringify(await report()));
+  } else if (line.trim() === "loudness") {
+    console.log(JSON.stringify(await page.evaluate(() => window.aspenCall?.loudness() ?? 0)));
   } else if (line.trim() === "leave") {
     break;
   }

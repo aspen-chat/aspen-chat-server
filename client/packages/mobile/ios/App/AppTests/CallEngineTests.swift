@@ -3,7 +3,7 @@ import XCTest
 
 /// The call engine with this device's whole platform under it, against a real deployment: it
 /// joins a voice channel's call, is heard by and hears a second participant in a browser, takes
-/// its socket back after the socket is cut, and leaves. `scripts/check_ios_call.py` at the
+/// its socket back after the socket is cut, and leaves. `scripts/check_mobile_call.py` at the
 /// repository's root runs the deployment, the browser, and this test, and gives it what it reads
 /// from the environment (passed on by `xcodebuild test` with a `TEST_RUNNER_` prefix); without
 /// them it skips.
@@ -175,12 +175,15 @@ final class CallEngineTests: XCTestCase {
         XCTAssertGreaterThan(after.energy, before.energy, "the tone's energy rises: \(before) then \(after)")
         XCTAssertGreaterThan(after.level, 0, "the tone has a level: \(after)")
 
-        // And the browser hears the simulator's microphone, the tone the audio device records.
+        // And the browser hears the simulator's microphone, the tone the audio device records:
+        // packets arrive and decode, and the sound off its track is well above silence.
         let browserBefore = try await browserInbound()
         try await Task.sleep(nanoseconds: 4_000_000_000)
         let browserAfter = try await browserInbound()
         XCTAssertGreaterThan(browserAfter.packets, browserBefore.packets, "the browser receives audio: \(browserBefore) then \(browserAfter)")
         XCTAssertGreaterThan(browserAfter.samples, browserBefore.samples, "and decodes it: \(browserBefore) then \(browserAfter)")
+        let browserPeak = try await browserLoudness()
+        XCTAssertGreaterThan(browserPeak, 0.01, "and hears sound in it")
         let source = try await sourceAudio(connection)
 
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
@@ -209,7 +212,7 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        print("call-engine-test: joined, heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s (energy \(browserBefore.energy) → \(browserAfter.energy), level \(browserAfter.level)); resumed on socket 2 with session \(session ?? "?"); left")
+        print("call-engine-test: joined, heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); resumed on socket 2 with session \(session ?? "?"); left")
     }
 
     // MARK: Helpers
@@ -306,20 +309,24 @@ final class CallEngineTests: XCTestCase {
     }
 
     /// What the browser's connection received of audio, from the helper's report of it.
-    private func browserInbound() async throws -> (packets: Int, samples: Int, energy: Double, level: Double) {
+    private func browserInbound() async throws -> (packets: Int, samples: Int) {
         let report = try await get(helper.appendingPathComponent("second-participant/report"))
         let streams = try XCTUnwrap(report["streams"] as? [[String: Any]])
         var packets = 0
         var samples = 0
-        var energy = 0.0
-        var level = 0.0
         for stream in streams where stream["direction"] as? String == "inbound" && stream["kind"] as? String == "audio" {
             packets += (stream["packets"] as? NSNumber)?.intValue ?? 0
             samples += (stream["samples"] as? NSNumber)?.intValue ?? 0
-            energy += (stream["energy"] as? NSNumber)?.doubleValue ?? 0
-            level = max(level, (stream["level"] as? NSNumber)?.doubleValue ?? 0)
         }
-        return (packets, samples, energy, level)
+        return (packets, samples)
+    }
+
+    /// The loudest sample the browser's audio slots carried over a second, off their tracks (the
+    /// page's `loudness`): its own level statistics read zero behind the muted element it plays
+    /// each track in.
+    private func browserLoudness() async throws -> Double {
+        let answer = try await get(helper.appendingPathComponent("second-participant/loudness"))
+        return (answer["peak"] as? NSNumber)?.doubleValue ?? 0
     }
 }
 

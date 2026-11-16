@@ -1,12 +1,35 @@
 import groovy.json.JsonSlurper
 
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 // versionName is the mobile package's version, with the commit as build metadata when CI names
 // one; versionCode is CI's run number, so each artifact installs over the one before it.
 def packageVersion = new JsonSlurper().parse(rootProject.file('../package.json')).version
 def buildCommit = System.getenv('ASPEN_BUILD_COMMIT')
 def buildNumber = System.getenv('ASPEN_BUILD_NUMBER')
+
+// The call engine (`voice_client/` at the repository's root) and the WebRTC it drives, built
+// outside Gradle and read from the repository's `target/` (client/docs/architecture/android-builds.md,
+// The call engine): `scripts/call_engine.py` beside this project builds the engine for each ABI
+// and writes its Kotlin bindings, and `scripts/webrtc_build.py build` at the root builds WebRTC
+// once. A checkout without them (CI's android job) builds the app without the call layer, which
+// nothing in the web view uses yet.
+def repositoryRoot = rootProject.file('../../../..')
+def webrtcAar = new File(repositoryRoot, 'target/webrtc/libwebrtc.aar')
+def engineBindings = file('src/main/java/com/aspen_chat/client/voice/voice_client.kt')
+def callLayer = webrtcAar.exists() && engineBindings.exists()
+// The engine's library for each ABI the app ships it for: the cargo target beside the ABI name.
+def engineLibraries = ['x86_64-linux-android': 'x86_64', 'aarch64-linux-android': 'arm64-v8a', 'armv7-linux-androideabi': 'armeabi-v7a']
+
+tasks.register('copyCallEngine', Copy) {
+    description = "Lays the call engine's libraries out by ABI for the APK."
+    onlyIf { callLayer }
+    engineLibraries.each { triple, abi ->
+        from(new File(repositoryRoot, "target/${triple}/release/libvoice_client.so")) { into abi }
+    }
+    into layout.buildDirectory.dir('callEngine/jniLibs')
+}
 
 android {
     namespace = "com.aspen_chat.client"
@@ -30,6 +53,36 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    sourceSets {
+        main {
+            jniLibs.srcDirs += layout.buildDirectory.dir('callEngine/jniLibs')
+        }
+    }
+}
+
+if (!callLayer) {
+    // The Kotlin compile tasks take their sources from the source sets themselves, where a
+    // source set's `exclude` does not reach them, so the layer is left out at the tasks.
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**'
+    }
+    tasks.withType(JavaCompile).configureEach {
+        exclude 'com/aspen_chat/client/call/**', 'com/aspen_chat/client/voice/**'
+    }
+}
+
+kotlin {
+    compilerOptions {
+        // What `capacitor.build.gradle` compiles the Java to.
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
+    }
+}
+
+preBuild.dependsOn copyCallEngine
+
+if (!callLayer) {
+    logger.warn("The call layer is left out: ${webrtcAar} or ${engineBindings} is missing. " +
+        "Build them with scripts/webrtc_build.py build and client/packages/mobile/android/scripts/call_engine.py.")
 }
 
 repositories {
@@ -53,6 +106,13 @@ dependencies {
     implementation "androidx.credentials:credentials-play-services-auth:$androidxCredentialsVersion"
     // Whether the user is old enough, where the law has Play say (`AspenAgePlugin`).
     implementation "com.google.android.play:age-signals:$playAgeSignalsVersion"
+    // The call layer (`call/`), over the engine's generated bindings and WebRTC.
+    if (callLayer) {
+        implementation files(webrtcAar)
+    }
+    implementation "net.java.dev.jna:jna:$jnaVersion@aar"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinxCoroutinesVersion"
+    implementation "com.squareup.okhttp3:okhttp:$okhttpVersion"
     testImplementation "junit:junit:$junitVersion"
     // The uploads' logic reads and writes JSON with `org.json`, which the Android jar that JVM
     // tests run against only stubs.

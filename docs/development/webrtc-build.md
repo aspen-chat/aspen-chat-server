@@ -16,6 +16,7 @@ chose, moved to a newer milestone on our own schedule.
 ```
 scripts/webrtc_build.py checkout          fetch, or move the checkout to the pinned branch
 scripts/webrtc_build.py build --jobs 3    build this machine's platform
+scripts/webrtc_build.py package           pack the Android archive again from the last build
 scripts/webrtc_build.py status
 ```
 
@@ -37,6 +38,19 @@ the two constants, read Google's release notes for every milestone crossed, run 
 artifacts.
 
 ## What the script does to Google's tools
+
+- On Android, it packs the archive again after Google's `build_aar.py` (`package` does this step
+  alone), adding the Java classes that archive leaves out. The Java API's native methods are
+  declared on classes jni_zero generates: `org.webrtc.*Jni`, one per class with natives, and `J.N`,
+  the one class whose natives the library exports under hashed names. Google's `dist_jar` takes its
+  direct dependencies alone, so the `*Jni` classes are left out of `classes.jar`, and `J.N` is
+  generated for each application that links the library (`jni_zero.py generate-final`, which the
+  build runs for Google's own example apps and no one else), so an app linking the archive as it
+  comes fails on its first native method with `NoClassDefFoundError`. The script takes the `*Jni`
+  classes from the jars the build compiled them into, runs the generator for `J.N` with the command
+  the build wrote for the library's own registration target (whose flags must be the build's, since
+  the library exports what they say), compiles it against the archive's classes with the checkout's
+  JDK, and adds both to `classes.jar`. Its scratch files are `target/webrtc/android-jni/`.
 
 - It puts `depot_tools`' own Python first on the path. macOS's `/usr/bin/python3` is a shim that
   resolves through Xcode's developer directory, and the Chromium toolchain's linker driver runs
