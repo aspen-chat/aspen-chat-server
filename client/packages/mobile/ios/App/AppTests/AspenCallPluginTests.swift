@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import WebKit
 import XCTest
 @testable import App
@@ -17,10 +18,11 @@ import XCTest
 /// hole for the preview and hears its shape back, moves to the other camera, watches a second
 /// participant's camera from a browser and hears its shape, has the system's picture in picture
 /// started on it and hears `pip`, has malformed video commands refused by name, turns the camera
-/// off, shares the screen (in software, `SyntheticScreenCapturer`, with a tone as its app audio)
-/// and sees its sources go on the capture connection, hears the preview's shape, has the browser
-/// decode the share and receive its sound, stops it, and has a declined picker come back as a
-/// `share` event. `scripts/check_mobile_call.py` runs it with `CallEngineTests` and gives it the
+/// off, accepts a file the browser offers into a place `FileRegistry` holds and sees the transfer
+/// complete in the snapshot's `files` with the bytes offered, shares the screen (in software,
+/// `SyntheticScreenCapturer`, with a tone as its app audio) and sees its sources go on the capture
+/// connection, hears the preview's shape, has the browser decode the share and receive its sound,
+/// stops it, and has a declined picker come back as a `share` event. `scripts/check_mobile_call.py` runs it with `CallEngineTests` and gives it the
 /// same environment; without it, the join is skipped.
 final class AspenCallPluginTests: XCTestCase {
     private var keptPushState: String?
@@ -348,6 +350,37 @@ final class AspenCallPluginTests: XCTestCase {
         XCTAssertFalse(CallEngine.camera.isOn)
         _ = try await run("setTiles", ["tiles": []])
 
+        // A file from the page: the browser offers one, which reaches the page in the snapshot's
+        // `files`; the page accepts it through the plugin into a place `FileRegistry` holds, as
+        // the app's save picker would have it hold one, and the snapshot shows the transfer
+        // complete, the bytes written being the bytes offered. An acceptance naming no place is
+        // refused by name.
+        XCTAssertEqual((connected["grants"] as? [String: Any])?["transferFiles"] as? Bool, true, "the channel lets the user transfer files")
+        let browserOffer = try await post(
+            helper.appendingPathComponent("second-participant/offer"),
+            body: ["name": "from-browser.bin", "size": 300_000, "allowDirect": true]
+        )
+        let browserOfferId = try XCTUnwrap(browserOffer["offer"] as? String)
+        let offeredHash = try XCTUnwrap(browserOffer["sha256"] as? String)
+        _ = try await untilState("the browser's offer reaches the page", seconds: 15) { snapshot in
+            Self.files(of: snapshot, "offers").contains { $0["id"] as? String == browserOfferId }
+        }
+        let badAccept = try await run("acceptOffer", ["origin": origin, "offer": browserOfferId, "mode": "directPreferred"], expectingError: true)
+        XCTAssertTrue(badAccept.contains("destination"), badAccept)
+        let receivedURL = FileManager.default.temporaryDirectory.appendingPathComponent("received-\(browserOfferId).bin")
+        try Data().write(to: receivedURL)
+        let destination = try FileRegistry.shared.addReceived(receivedURL)
+        _ = try await run("acceptOffer", ["origin": origin, "offer": browserOfferId, "mode": "directPreferred", "destination": destination])
+        let received = try await untilState("the browser's file arrives", seconds: 60) { snapshot in
+            Self.files(of: snapshot, "transfers").contains { $0["offer"] as? String == browserOfferId && $0["status"] as? String == "completed" }
+        }
+        let receivedTransfer = try XCTUnwrap(Self.files(of: received, "transfers").first { $0["offer"] as? String == browserOfferId })
+        XCTAssertEqual(receivedTransfer["role"] as? String, "receiver")
+        XCTAssertEqual(receivedTransfer["bytes"] as? Int, 300_000)
+        XCTAssertEqual(receivedTransfer["route"] as? String, "direct")
+        XCTAssertEqual(try sha256(of: receivedURL), offeredHash, "the bytes written are the bytes offered")
+        XCTAssertTrue((received["files"] as? [String: Any])?["failure"] is NSNull, "the files' commands failed nowhere: \(received["files"] ?? "?")")
+
         // The share from the page: the system's picker, here a capturer in software that consents
         // at once, starts the capture, whose picture and tone the engine sends as external sources
         // on a capture connection of their own (a second peer connection, from the share's
@@ -427,7 +460,7 @@ final class AspenCallPluginTests: XCTestCase {
         }
         let direct = try await states().dropFirst(directFrom).compactMap { $0["revision"] as? Int }
         XCTAssertEqual(direct, direct.sorted(), "snapshots arrive in revision order: \(direct)")
-        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off; shared the screen (\(shareShape["width"] ?? 0)×\(shareShape["height"] ?? 0), the browser decoding it at brightness \(shareSample?["brightness"] ?? 0) and receiving \(shareAudioPackets) packets of its sound), stopped it, had a declined picker reported, and left")
+        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off; received \(receivedTransfer["bytes"] ?? 0) bytes of the browser's file \(receivedTransfer["route"] ?? "?") through the page (hash matched); shared the screen (\(shareShape["width"] ?? 0)×\(shareShape["height"] ?? 0), the browser decoding it at brightness \(shareSample?["brightness"] ?? 0) and receiving \(shareAudioPackets) packets of its sound), stopped it, had a declined picker reported, and left")
     }
 
     /// How far the native picture trails the page while a hole moves, for judging by eye: the page
@@ -648,13 +681,27 @@ final class AspenCallPluginTests: XCTestCase {
         }
     }
 
-    private func post(_ url: URL) async throws -> [String: Any] {
+    /// The answer to a `POST` of `body` as JSON (nothing without one), which must be `200`.
+    private func post(_ url: URL, body: [String: Any]? = nil) async throws -> [String: Any] {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 60
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200, String(decoding: data, as: UTF8.self))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    /// The snapshot's `files.<list>`: its offers or its transfers.
+    private static func files(of snapshot: [String: Any], _ list: String) -> [[String: Any]] {
+        ((snapshot["files"] as? [String: Any])?[list] as? [[String: Any]]) ?? []
+    }
+
+    private func sha256(of url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The browser's page's report (`CallReport` in `calls/page.ts`), from the helper.

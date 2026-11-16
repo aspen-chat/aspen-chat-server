@@ -400,7 +400,10 @@ shape and draws too, the activity enters the picture-in-picture mode on it (`ent
 standing for the user's leaving) and the page hears `pip` while `isInPictureInPictureMode` holds,
 starting the activity again leaves the mode and the page hears that too, the browser decodes the
 camera, malformed `setWatched` and `setTiles` are refused by name, and `stopCamera` takes the source
-out of the snapshot and the capture off; then it shares the screen: `startScreenShare` opens the
+out of the snapshot and the capture off; then it accepts a file the browser offers through the
+plugin (`acceptOffer`, into a document held by `FileRegistry` as the create picker's would be, an
+acceptance naming none refused by name) and watches the snapshot's `files` show the transfer
+complete, direct, with the bytes offered; then it shares the screen: `startScreenShare` opens the
 system's media projection dialog, which the test accepts through UI Automator (the whole screen,
 then Start, whichever words this Android gives them), the snapshot shows `screen` and `screenAudio`
 live as external sources while the service runs with the `mediaProjection` kind, the preview's hole

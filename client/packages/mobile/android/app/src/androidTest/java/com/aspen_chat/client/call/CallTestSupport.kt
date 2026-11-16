@@ -20,7 +20,9 @@ import com.aspen_chat.client.voice.StatsOf
 import java.math.BigInteger
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.SecureRandom
@@ -193,6 +195,10 @@ object CallTestSupport {
         assertEquals("$method $url: $body", 200, status)
         return body
     }
+
+    /** The SHA-256 of `file`'s bytes, in lowercase hex, as `calls/page.ts` hashes what it offers and receives. */
+    fun sha256(file: File): String =
+        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
 
     suspend fun entries(connection: PeerConnection): List<JSONObject> {
         val array = JSONArray(connection.stats(StatsOf.Connection))

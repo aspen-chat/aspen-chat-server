@@ -643,7 +643,10 @@ with `setTiles` for its track has its shape come back as a `shape` event (240 by
 laid out in the rectangle given, `switchCamera` moves to the back one, a second participant from the
 browser turns its camera on and `setWatched` has the snapshot show its track, whose hole hears its
 shape too, malformed `setWatched` and `setTiles` are refused by name, and `stopCamera` takes the
-source out of the snapshot and the capture off; then it shares the screen: `startScreenShare` with a
+source out of the snapshot and the capture off; then it accepts a file the browser offers through
+the plugin (`acceptOffer`, into a place held by `FileRegistry` as the save picker's would be, an
+acceptance naming none refused by name) and watches the snapshot's `files` show the transfer
+complete, direct, with the bytes offered; then it shares the screen: `startScreenShare` with a
 capturer in software (`AppTests/SyntheticScreenCapturer.swift`, 640 by 360 frames of a moving
 checkerboard and a 660 Hz tone as 16-bit stereo 44.1 kHz app audio, which `ShareAudioDevice`
 converts), since the simulator's SDK has no ScreenCaptureKit and its ReplayKit cannot run the

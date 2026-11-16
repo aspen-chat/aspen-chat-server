@@ -320,6 +320,8 @@ rings are in place:
 - `voice_client/tests/sounds.rs` drives the engine's cues through the fakes, one scenario per cue,
   the transfer cues' from the links and transfers the server's frames put in the snapshot.
 - `AppTests/AspenCallPluginTests` (iOS) and `androidTest`'s `AspenCallPluginTest` (Android) drive
-  the real bridge from the app's own page, as `scripts/check_mobile_call.py` runs them beside the
-  engine's tests against a deployment of its own (`ios-app.md` and `android-builds.md`, The proof);
-  the engine's tests there also watch the sounds play on the call's audio path.
+  the real bridge from the app's own page, the files' commands (a file the browser offers, accepted
+  through the plugin into a place the registry holds, and complete in the snapshot's `files`) and
+  the share's among the rest, as `scripts/check_mobile_call.py` runs them beside the engine's tests
+  against a deployment of its own (`ios-app.md` and `android-builds.md`, The proof); the engine's
+  tests there also watch the sounds play on the call's audio path.

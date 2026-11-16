@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.graphics.Rect
+import android.net.Uri
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,7 +15,11 @@ import com.aspen_chat.client.MainActivity
 import com.aspen_chat.client.call.CallTestSupport.argument
 import com.aspen_chat.client.call.CallTestSupport.browserVideoFrames
 import com.aspen_chat.client.call.CallTestSupport.http
+import com.aspen_chat.client.call.CallTestSupport.sha256
+import com.aspen_chat.client.files.DocumentSink
+import com.aspen_chat.client.files.FileRegistry
 import com.aspen_chat.client.push.PushStore
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
@@ -43,8 +48,10 @@ import org.junit.runner.RunWith
  * preview and hears its shape back while the surface view behind the page draws it in that hole,
  * moves to the other camera, watches a second participant's camera from a browser and hears its
  * shape, enters the picture-in-picture mode on it and hears `pip`, has malformed video commands
- * refused by name, turns the camera off, shares the screen (accepting the system's media
- * projection dialog, another app's window, through UI Automator) and sees its sources go on the
+ * refused by name, turns the camera off, accepts a file the browser offers into a document
+ * `FileRegistry` holds and sees the transfer complete in the snapshot's `files` with the bytes
+ * offered, shares the screen (accepting the system's media projection dialog, another app's
+ * window, through UI Automator) and sees its sources go on the
  * capture connection with the service of the projection's kind, hears the preview's shape, has
  * the browser decode the share and receive its sound, stops it, has a declined dialog rejected as
  * `denied`, and leaves. `scripts/check_mobile_call.py --platform android` runs it with
@@ -236,6 +243,35 @@ class AspenCallPluginTest {
         assertTrue(!CallEngine.camera(context).isOn)
         run("setTiles", JSONObject().put("tiles", JSONArray()))
 
+        // A file from the page: the browser offers one, which reaches the page in the snapshot's
+        // `files`; the page accepts it through the plugin into a document `FileRegistry` holds,
+        // as the app's create picker would have it hold one, and the snapshot shows the transfer
+        // complete, the bytes written being the bytes offered. An acceptance naming no document
+        // is refused by name.
+        assertTrue("the channel lets the user transfer files", connected.getJSONObject("grants").getBoolean("transferFiles"))
+        val browserOffer = JSONObject(
+            http("POST", "$helper/second-participant/offer", """{"name":"from-browser.bin","size":300000,"allowDirect":true}"""),
+        )
+        val browserOfferId = browserOffer.getString("offer")
+        val offeredHash = browserOffer.getString("sha256")
+        untilState("the browser's offer reaches the page", 15) { snapshot ->
+            filesOf(snapshot, "offers").any { it.getString("id") == browserOfferId }
+        }
+        val badAccept = refusal("acceptOffer", JSONObject().put("origin", api).put("offer", browserOfferId).put("mode", "directPreferred"))
+        assertTrue(badAccept, badAccept.contains("destination"))
+        val receivedFile = File(context.cacheDir, "received-$browserOfferId.bin")
+        val destination = FileRegistry.shared().addReceived(DocumentSink.open(context.contentResolver, Uri.fromFile(receivedFile)))
+        run("acceptOffer", JSONObject().put("origin", api).put("offer", browserOfferId).put("mode", "directPreferred").put("destination", destination))
+        val received = untilState("the browser's file arrives", 60) { snapshot ->
+            filesOf(snapshot, "transfers").any { it.getString("offer") == browserOfferId && it.getString("status") == "completed" }
+        }
+        val receivedTransfer = filesOf(received, "transfers").single { it.getString("offer") == browserOfferId }
+        assertEquals("receiver", receivedTransfer.getString("role"))
+        assertEquals(300000, receivedTransfer.getInt("bytes"))
+        assertEquals("direct", receivedTransfer.getString("route"))
+        assertEquals("the bytes written are the bytes offered", offeredHash, sha256(receivedFile))
+        assertTrue("the files' commands failed nowhere: ${received.getJSONObject("files")}", received.getJSONObject("files").isNull("failure"))
+
         // The share from the page: the system's media projection dialog is accepted (it is the
         // system's own window, reached through UI Automator), the capture starts, and the engine
         // sends its picture and sound as external sources on a capture connection of their own (a
@@ -323,7 +359,8 @@ class AspenCallPluginTest {
                 "routes $kinds, moved to $moved as the routes events said; listed $facings cameras, turned the camera on (${opened.getString("device")}, " +
                 "facing ${opened.getString("facing")}), heard its preview's shape ${selfShape.getInt("width")}×${selfShape.getInt("height")} at ${selfShape.getInt("rotation")}° " +
                 "for a hole laid out at $expectedBounds and drawn, $cameraMoved; watched $bob's camera (shape ${remoteShape.getInt("width")}×${remoteShape.getInt("height")}), " +
-                "entered the picture in picture on it and left it, had bad video commands refused, turned the camera off; shared the screen " +
+                "entered the picture in picture on it and left it, had bad video commands refused, turned the camera off; received " +
+                "${receivedTransfer.getInt("bytes")} bytes of the browser's file ${receivedTransfer.getString("route")} through the page (hash matched); shared the screen " +
                 "(${shareShape.getInt("width")}×${shareShape.getInt("height")}, the browser decoding it at brightness ${shareSample?.optDouble("brightness")} " +
                 "and receiving $shareAudioPackets packets of its sound, silence here) with the service of the projection's kind, stopped it, " +
                 "had a declined dialog rejected; a fresh read matched the latest",
@@ -427,6 +464,12 @@ class AspenCallPluginTest {
     }
 
     private fun states(): JSONArray = JSONArray(evaluate("window.__aspenCallTest.states"))
+
+    /** The snapshot's `files.<list>`: its offers or its transfers. */
+    private fun filesOf(snapshot: JSONObject, list: String): List<JSONObject> {
+        val items = snapshot.getJSONObject("files").getJSONArray(list)
+        return (0 until items.length()).map { items.getJSONObject(it) }
+    }
 
     private fun sourcesOf(snapshot: JSONObject): List<JSONObject> {
         val sources = snapshot.optJSONArray("sources") ?: JSONArray()

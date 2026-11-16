@@ -22,6 +22,7 @@ import com.aspen_chat.client.call.CallTestSupport.callNotification
 import com.aspen_chat.client.call.CallTestSupport.callService
 import com.aspen_chat.client.call.CallTestSupport.http
 import com.aspen_chat.client.call.CallTestSupport.inboundAudio
+import com.aspen_chat.client.call.CallTestSupport.sha256
 import com.aspen_chat.client.call.CallTestSupport.shell
 import com.aspen_chat.client.call.CallTestSupport.sourceAudio
 import com.aspen_chat.client.call.CallTestSupport.telecomLines
@@ -49,7 +50,6 @@ import com.aspen_chat.client.voice.TransferRoute
 import com.aspen_chat.client.voice.TransferStatus
 import com.aspen_chat.client.voice.WatchedVideo
 import java.io.File
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -708,7 +708,4 @@ class CallEngineTest {
         val transfers = JSONObject(http("GET", "$helper/second-participant/files")).getJSONArray("transfers")
         return (0 until transfers.length()).map { transfers.getJSONObject(it) }
     }
-
-    private fun sha256(file: File): String =
-        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
 }
