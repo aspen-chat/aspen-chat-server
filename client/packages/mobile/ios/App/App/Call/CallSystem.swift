@@ -299,15 +299,15 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
     /// as is one the system refuses (another app's call, Do Not Disturb). Call on the main queue.
     func reportIncoming(_ ring: CallRings.IncomingRing) {
         let made = Incoming(uuid: UUID(), ring: ring)
-        let update = Self.update(channel: ring.channel, name: ring.callerName)
+        let shown = Self.update(channel: ring.channel, name: ring.callerName)
         guard incoming == nil else {
-            provider.reportNewIncomingCall(with: made.uuid, update: update) { [weak self] _ in
+            provider.reportNewIncomingCall(with: made.uuid, update: shown) { [weak self] _ in
                 self?.provider.reportCall(with: made.uuid, endedAt: nil, reason: .unanswered)
             }
             return
         }
         incoming = made
-        provider.reportNewIncomingCall(with: made.uuid, update: update) { [weak self] error in
+        provider.reportNewIncomingCall(with: made.uuid, update: shown) { [weak self] error in
             guard let self, let error else {
                 return
             }
@@ -339,10 +339,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
     /// requires of every VoIP push that must be reported.
     func reportUnreadable() {
         let uuid = UUID()
-        let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: "aspen")
-        update.hasVideo = false
-        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
+        let shown = CXCallUpdate()
+        shown.remoteHandle = CXHandle(type: .generic, value: "aspen")
+        shown.hasVideo = false
+        provider.reportNewIncomingCall(with: uuid, update: shown) { [weak self] _ in
             self?.provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
         }
     }

@@ -5,13 +5,16 @@
 //! reads it until one of these ends the ring, each reported once to the `RingObserver` and the
 //! watch over:
 //!
-//! - a `voiceParticipant` `create` in the ring's channel for the account's own user: answered on
-//!   another device;
+//! - a `voiceParticipant` `create` for the ring's session and the account's own user: answered on
+//!   another device (the session, not the channel, since a first connection replays the stream's
+//!   last minute, which may hold the user joining an earlier call of the same DM);
 //! - a `voiceRing` `delete` for the ring's session and user: declined elsewhere (joining
 //!   publishes the participant's `create` before it, so an answer is seen as one);
 //! - a `voiceSession` `delete` for the session, or `voiceSessionEnded` naming it: the call ended;
-//! - the ring's `until`, judged on the deployment's clock from `ready`'s `serverTime` (the device's
-//!   own until then): unanswered, as every client judges a ring's end;
+//! - the ring's `until`, judged on the deployment's clock from `ready`'s `serverTime`:
+//!   unanswered, as every client judges a ring's end. Until `ready` the device's own clock stands
+//!   in, given at least `READY_TIMEOUT`, so a device whose clock runs ahead still asks the
+//!   deployment before giving a ring up;
 //! - no session to identify with, and none to be renewed: signed out.
 //!
 //! A socket that drops is opened again with `resumeAfter` the last sequence read, after a short
@@ -96,14 +99,49 @@ pub fn events_url(api_url: &str, loopback_plain_text: bool) -> Result<String, In
     Ok(format!("{base}{API_PREFIX}/events"))
 }
 
-/// The milliseconds since the Unix epoch an RFC 3339 time names; `None` for text that is not one.
+/// The milliseconds since the Unix epoch an RFC 3339 time names, written with `Z` or with a
+/// numeric offset (`+01:00`); `None` for text that is not one. The deployment writes `Z`; the
+/// offset form is RFC 3339's too, and read so that a server that wrote it is not taken for one
+/// that wrote nothing.
 pub fn unix_millis(rfc3339: &str) -> Option<i64> {
-    let at = humantime::parse_rfc3339_weak(rfc3339).ok()?;
+    let (without_offset, offset_millis) = split_offset(rfc3339)?;
+    let at = humantime::parse_rfc3339_weak(without_offset).ok()?;
     let millis = match at.duration_since(SystemTime::UNIX_EPOCH) {
         Ok(after) => i64::try_from(after.as_millis()).ok()?,
         Err(before) => -i64::try_from(before.duration().as_millis()).ok()?,
     };
-    Some(millis)
+    millis.checked_sub(offset_millis)
+}
+
+/// `rfc3339` with its numeric offset taken off, and that offset in milliseconds (`Z` and no
+/// offset are zero); `None` for an offset that is not `[+-]HH:MM`.
+fn split_offset(rfc3339: &str) -> Option<(&str, i64)> {
+    let time_starts = rfc3339.find(['T', 't', ' '])?;
+    let time = &rfc3339[time_starts..];
+    let Some(sign_at) = time.rfind(['+', '-']) else {
+        return Some((rfc3339, 0));
+    };
+    if time[..sign_at].ends_with(['Z', 'z']) {
+        // `Z` and an offset both: not RFC 3339.
+        return None;
+    }
+    let offset = &time[sign_at + 1..];
+    let (hours, minutes) = offset.split_once(':')?;
+    if hours.len() != 2 || minutes.len() != 2 {
+        return None;
+    }
+    let hours: i64 = hours.parse().ok()?;
+    let minutes: i64 = minutes.parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    let sign = if time.as_bytes()[sign_at] == b'-' {
+        -1
+    } else {
+        1
+    };
+    let offset_millis = sign * (hours * 60 + minutes) * 60 * 1000;
+    Some((&rfc3339[..time_starts + sign_at], offset_millis))
 }
 
 fn device_now_millis() -> i64 {
@@ -163,7 +201,8 @@ enum Connection {
     Again {
         pause: Duration,
     },
-    /// A token the server refused; `renew` says whether a renewal is still to be tried.
+    /// The server refused the token; `Watch::renewed` says whether a renewal is still to be
+    /// tried.
     Refused,
     Ended(RingEnd),
 }
@@ -173,7 +212,8 @@ struct Watch {
     options: Options,
     ring: Ring,
     observer: Arc<dyn RingObserver>,
-    /// The ring's end on this device's monotonic clock, moved when `ready` tells the server's.
+    /// The ring's end on this device's monotonic clock: from the device's own clock, and at least
+    /// `READY_TIMEOUT` away, until `ready` tells the server's, which it then follows exactly.
     deadline: Instant,
     /// The ring's end as the deployment stamped it.
     until_millis: i64,
@@ -199,6 +239,9 @@ pub async fn watch(
         observer.ended(RingEnd::TimedOut);
         return;
     };
+    // By the device's clock, which may run ahead of the deployment's: a ring it says is over is
+    // still given one connection's worth of time to hear the deployment's own clock, since the
+    // push reached the phone only while the ring stood by that one.
     let remaining = Duration::from_millis(
         u64::try_from(until_millis - device_now_millis()).unwrap_or_default(),
     );
@@ -207,7 +250,7 @@ pub async fn watch(
         options,
         ring,
         observer,
-        deadline: Instant::now() + remaining,
+        deadline: Instant::now() + remaining.max(READY_TIMEOUT),
         until_millis,
         last_sequence: None,
         user: None,
@@ -365,17 +408,30 @@ impl Watch {
                     retry_after_seconds,
                 } => {
                     socket.close();
+                    // A refusal that may pass is tried again after what the server asked, or the
+                    // usual pause; the ring's end bounds the trying.
+                    let again = Connection::Again {
+                        pause: retry_after_seconds
+                            .map_or(RECONNECT_PAUSE, Duration::from_secs)
+                            .max(RECONNECT_PAUSE),
+                    };
+                    // The API server's `EventStreamErrorCode`s, each by name.
                     return match code.as_str() {
                         "unauthorized" => Connection::Refused,
                         // The account may not hold a stream at all; no renewal would change it.
                         "banned" | "twoFactorEnrollmentRequired" | "emailVerificationRequired" => {
                             Connection::Ended(RingEnd::SignedOut)
                         }
-                        _ => Connection::Again {
-                            pause: retry_after_seconds
-                                .map_or(RECONNECT_PAUSE, Duration::from_secs)
-                                .max(RECONNECT_PAUSE),
-                        },
+                        "badRequest"
+                        | "identifyTimeout"
+                        | "tooManyStreams"
+                        | "tooManyStreamsFromAddress"
+                        | "serverBusy"
+                        | "rateLimited"
+                        | "internal" => again,
+                        // A code this build does not know: the safe answer is the one for a
+                        // refusal that may pass, since the ring ends the trying either way.
+                        _ => again,
                     };
                 }
                 Frame::Other => {}
@@ -400,7 +456,7 @@ impl Watch {
         let change = event.get("type").and_then(Value::as_str);
         match event.get("serverEvent").and_then(Value::as_str)? {
             "voiceParticipant" if change == Some("create") => {
-                (field("channel") == Some(self.ring.channel) && field("user") == self.user)
+                (field("session") == Some(self.ring.session) && field("user") == self.user)
                     .then_some(RingEnd::AnsweredElsewhere)
             }
             "voiceRing" if change == Some("delete") => {
@@ -553,7 +609,31 @@ mod tests {
             unix_millis("2026-11-15T12:00:30.123456789Z"),
             Some(1_794_744_030_123)
         );
-        for bad in ["", "soon", "2026-11-15", "2026-11-15T12:00:30+01:00"] {
+        for bad in ["", "soon", "2026-11-15", "12:00:30Z"] {
+            assert_eq!(unix_millis(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_offset_names_the_same_instant_as_its_z_form() {
+        let noon = unix_millis("2026-11-15T12:00:30Z").unwrap();
+        assert_eq!(unix_millis("2026-11-15T13:00:30+01:00"), Some(noon));
+        assert_eq!(
+            unix_millis("2026-11-15T06:30:30.250-05:30"),
+            Some(noon + 250)
+        );
+        assert_eq!(unix_millis("2026-11-15T12:00:30+00:00"), Some(noon));
+        assert_eq!(unix_millis("2026-11-16T11:59:30+23:59"), Some(noon));
+        // The date's own hyphens are not an offset.
+        assert_eq!(unix_millis("2026-11-15T12:00:30Z"), Some(noon));
+        for bad in [
+            "2026-11-15T12:00:30+1:00",
+            "2026-11-15T12:00:30+01",
+            "2026-11-15T12:00:30+24:00",
+            "2026-11-15T12:00:30+01:60",
+            "2026-11-15T12:00:30+0a:00",
+            "2026-11-15T12:00:30Z+01:00",
+        ] {
             assert_eq!(unix_millis(bad), None, "{bad}");
         }
     }

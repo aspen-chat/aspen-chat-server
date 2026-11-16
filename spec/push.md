@@ -311,13 +311,17 @@ it ends anywhere, and answering must join the call. The app, having shown the ca
 1. Opens the deployment's event stream with the account's session (`GET /api/v1/events`, identifying
    as any client does; on `401`, with a token renewed from the refresh token) and watches it for the
    ring's end, resuming the stream from the last sequence it saw if it drops, until the ring ends:
-   - a `voiceParticipant` `create` in `channel` for the account's own user: answered on another
-     device;
+   - a `voiceParticipant` `create` for `session` and the account's own user: answered on another
+     device (matched by the session, not the channel: a first connection replays the stream's last
+     minute, which may hold the user joining an earlier call of the same DM);
    - a `voiceRing` `delete` for `session` and the user: declined elsewhere (or answered, when the
      participant's `create` was not seen first);
    - a `voiceSession` `delete` for `session`, or `voiceSessionEnded` naming it: the call ended;
-   - `until`, judged against the deployment's clock from `ready`'s `serverTime`: unanswered. Nothing
-     is pushed to say any of this.
+   - `until`, judged against the deployment's clock from `ready`'s `serverTime`: unanswered. Until
+     `ready` the phone's own clock stands in, but a ring it says is over is still given one
+     connection's worth of time (ten seconds) to hear the deployment's clock, since the push could
+     only have reached the phone while the ring stood by that clock. Nothing is pushed to say any
+     of this.
 2. On **answer**, joins the call as the account (`POST /api/v1/channels/{channel}/voice/join`, then
    the voice server), which ends the ring at the deployment. On **decline**, ends the ring
    (`DELETE /api/v1/channels/{channel}/voice/rings/@me`), so the person's other devices stop too.

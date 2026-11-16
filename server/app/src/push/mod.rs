@@ -883,9 +883,9 @@ async fn ring_made(
     user: UserId,
 ) -> crate::Result<()> {
     use aspen_schema::user as user_table;
-    // The ring, with its channel and its caller's shown name, once the transaction that rang
-    // has committed; a ring declined or answered before then is read all the same, and the phone
-    // hears of its end through the event stream.
+    // The ring, with its channel and its caller's shown name, once the transaction that rang has
+    // committed. A ring already ended (`end_ring` deletes its row) is not found, and wakes no
+    // one: there is nothing left to answer. Waiting for it costs `COMMIT_WAIT` at most.
     let found = once_committed(|| async move {
         let mut conn = state.connection_pool.get().await?;
         Ok(voice_ring::table

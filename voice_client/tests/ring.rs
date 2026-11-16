@@ -342,10 +342,10 @@ impl World {
         settle().await;
     }
 
-    fn participant_joined(&self, user: Uuid, channel: Uuid) -> serde_json::Value {
+    fn participant_joined(&self, user: Uuid, session: Uuid) -> serde_json::Value {
         serde_json::json!({
             "serverEvent": "voiceParticipant", "type": "create",
-            "session": self.ring.session, "user": user, "channel": channel,
+            "session": session, "user": user, "channel": self.ring.channel,
             "joinedAt": "2026-11-15T12:00:00Z", "muted": false, "deafened": false,
             "sharingScreen": false, "held": false,
         })
@@ -387,22 +387,23 @@ async fn the_stream_is_opened_beside_the_api_and_identified_with_the_session() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_participant_create_for_the_user_in_the_channel_is_answered_elsewhere() {
+async fn a_participant_create_for_the_user_in_the_session_is_answered_elsewhere() {
     let w = World::new(ring_for(30));
     w.admitted().await;
-    // Someone else joining, the user joining another channel's call, and a participant record
-    // of the user's that is no joining end nothing.
+    // Someone else joining, the user joining another call of the same DM (an earlier one, which
+    // a first connection's replay of the last minute may hold), and a participant record of the
+    // user's that is no joining end nothing.
     w.stream
-        .event(1, w.participant_joined(Uuid::now_v7(), w.ring.channel));
+        .event(1, w.participant_joined(Uuid::now_v7(), w.ring.session));
     w.stream
         .event(2, w.participant_joined(w.user, Uuid::now_v7()));
-    let mut left = w.participant_joined(w.user, w.ring.channel);
+    let mut left = w.participant_joined(w.user, w.ring.session);
     left["type"] = serde_json::json!("delete");
     w.stream.event(3, left);
     settle().await;
     assert!(w.ends().is_empty());
     w.stream
-        .event(4, w.participant_joined(w.user, w.ring.channel));
+        .event(4, w.participant_joined(w.user, w.ring.session));
     settle().await;
     assert_eq!(w.ends(), [RingEnd::AnsweredElsewhere]);
     assert!(w.stream.is_closed(), "the watch lets the stream go");
@@ -469,12 +470,63 @@ async fn the_ring_times_out_by_the_servers_clock_not_the_devices() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn before_ready_the_ring_times_out_by_the_devices_clock() {
-    let w = World::new(ring_for(5));
+async fn before_ready_the_devices_clock_stands_in_given_at_least_the_ready_timeout() {
+    // A ring of twenty seconds by the device, never answered: it ends by that clock.
+    let w = World::new(ring_for(20));
+    w.stream.next_connection(Behaviour::Hang);
     settle().await;
-    advance(Duration::from_millis(4900)).await;
+    advance(Duration::from_millis(19900)).await;
     assert!(w.ends().is_empty());
     advance(Duration::from_millis(200)).await;
+    assert_eq!(w.ends(), [RingEnd::TimedOut]);
+
+    // A ring of five by the device is given the ready timeout's ten before it is given up: the
+    // device's clock may run ahead of the deployment's.
+    let w = World::new(ring_for(5));
+    w.stream.next_connection(Behaviour::Hang);
+    settle().await;
+    advance(Duration::from_millis(9900)).await;
+    assert!(w.ends().is_empty());
+    advance(Duration::from_millis(200)).await;
+    assert_eq!(w.ends(), [RingEnd::TimedOut]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_ring_over_by_the_devices_clock_still_asks_the_deployment_and_rings_by_its_clock() {
+    // The device's clock runs a minute ahead: the ring, thirty seconds off by the server, is
+    // thirty seconds gone by the device.
+    let w = World::new(Ring {
+        channel: Uuid::now_v7(),
+        session: Uuid::now_v7(),
+        until: rfc3339(SystemTime::now() - Duration::from_secs(30)),
+    });
+    settle().await;
+    assert_eq!(
+        w.stream.connections(),
+        1,
+        "the stream is opened all the same"
+    );
+    assert!(w.ends().is_empty());
+    w.stream.ready(
+        w.user,
+        false,
+        Some(SystemTime::now() - Duration::from_secs(60)),
+    );
+    settle().await;
+    advance(Duration::from_secs(29)).await;
+    assert!(w.ends().is_empty(), "the ring rings by the server's clock");
+    advance(Duration::from_millis(1100)).await;
+    assert_eq!(w.ends(), [RingEnd::TimedOut]);
+
+    // One the server too says is over ends as soon as `ready` says so.
+    let w = World::new(Ring {
+        channel: Uuid::now_v7(),
+        session: Uuid::now_v7(),
+        until: rfc3339(SystemTime::now() - Duration::from_secs(30)),
+    });
+    settle().await;
+    w.stream.ready(w.user, false, Some(SystemTime::now()));
+    settle().await;
     assert_eq!(w.ends(), [RingEnd::TimedOut]);
 }
 
@@ -512,50 +564,42 @@ async fn a_dropped_stream_is_resumed_after_the_pause_from_the_last_sequence() {
 
 #[tokio::test(start_paused = true)]
 async fn a_connection_refused_is_tried_again_until_the_ring_ends() {
-    let w = World::new(ring_for(2));
-    w.stream.next_connection(Behaviour::Refuse);
-    w.stream.next_connection(Behaviour::Refuse);
-    w.stream.next_connection(Behaviour::Refuse);
+    // A ring of twelve seconds by the device (past the ready timeout's floor), refused every
+    // time: tried every half second, twenty-four times.
+    let w = World::new(ring_for(12));
+    for _ in 0..40 {
+        w.stream.next_connection(Behaviour::Refuse);
+    }
     settle().await;
     assert_eq!(w.stream.urls.lock().unwrap().len(), 1);
     advance(RECONNECT_PAUSE).await;
     assert_eq!(w.stream.urls.lock().unwrap().len(), 2);
     advance(RECONNECT_PAUSE).await;
     assert_eq!(w.stream.urls.lock().unwrap().len(), 3);
-    advance(RECONNECT_PAUSE).await;
-    assert_eq!(w.stream.urls.lock().unwrap().len(), 4);
+    for _ in 0..20 {
+        advance(RECONNECT_PAUSE).await;
+    }
+    assert_eq!(w.stream.urls.lock().unwrap().len(), 23);
     assert!(w.ends().is_empty());
-    advance(Duration::from_millis(600)).await;
+    advance(RECONNECT_PAUSE).await;
+    // The twenty-fourth refusal, half a second before the ring's end: the ring is over as far
+    // as this phone is concerned, with no half-second wait for nothing.
+    assert_eq!(w.stream.urls.lock().unwrap().len(), 24);
     assert_eq!(w.ends(), [RingEnd::TimedOut]);
+    advance(Duration::from_secs(2)).await;
     assert_eq!(
         w.stream.urls.lock().unwrap().len(),
-        4,
+        24,
         "nothing more is tried"
     );
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_pause_that_would_outlast_the_ring_is_not_taken() {
-    let w = World::new(ring_for(2));
-    for _ in 0..5 {
-        w.stream.next_connection(Behaviour::Refuse);
-    }
-    settle().await;
-    advance(RECONNECT_PAUSE).await;
-    advance(RECONNECT_PAUSE).await;
-    advance(RECONNECT_PAUSE).await;
-    // The fourth refusal, half a second before the ring's end: the ring is over as far as this
-    // phone is concerned, with no half-second wait for nothing.
-    assert_eq!(w.stream.urls.lock().unwrap().len(), 4);
-    assert_eq!(w.ends(), [RingEnd::TimedOut]);
-}
-
-#[tokio::test(start_paused = true)]
 async fn an_upgrade_that_hangs_ends_with_the_ring() {
-    let w = World::new(ring_for(3));
+    let w = World::new(ring_for(12));
     w.stream.next_connection(Behaviour::Hang);
     settle().await;
-    advance(Duration::from_millis(2900)).await;
+    advance(Duration::from_millis(11900)).await;
     assert!(w.ends().is_empty());
     advance(Duration::from_millis(200)).await;
     assert_eq!(w.ends(), [RingEnd::TimedOut]);
@@ -631,6 +675,35 @@ async fn a_banned_account_is_signed_out_and_a_busy_server_is_waited_for() {
         .send(serde_json::json!({ "type": "error", "code": "banned", "detail": "Banned." }));
     settle().await;
     assert_eq!(w.ends(), [RingEnd::SignedOut]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_refusal_that_may_pass_is_tried_again_by_name_and_so_is_one_unknown() {
+    for code in [
+        "badRequest",
+        "identifyTimeout",
+        "tooManyStreams",
+        "tooManyStreamsFromAddress",
+        "serverBusy",
+        "rateLimited",
+        "internal",
+        "someCodeOfALaterServer",
+    ] {
+        let w = World::new(ring_for(30));
+        settle().await;
+        w.stream
+            .send(serde_json::json!({ "type": "error", "code": code, "detail": "No." }));
+        settle().await;
+        assert_eq!(w.stream.connections(), 1, "{code}: not before the pause");
+        assert!(w.stream.is_closed(), "{code}");
+        advance(RECONNECT_PAUSE).await;
+        assert_eq!(w.stream.connections(), 2, "{code}: opened again");
+        assert!(w.ends().is_empty(), "{code}");
+        w.stream.ready(w.user, false, None);
+        w.stream.event(1, w.ring_deleted(w.ring.session, w.user));
+        settle().await;
+        assert_eq!(w.ends(), [RingEnd::Declined], "{code}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
