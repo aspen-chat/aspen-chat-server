@@ -13,7 +13,7 @@ import {
 import { useRef, useState } from "react";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, type Source } from "@/api/everywhere";
-import { useIsAdmin, useOpenReports, usePreference, useSync, useSyncStatus } from "@/api/hooks";
+import { useFirstBootstrap, useIsAdmin, useOpenReports, usePreference, useSync } from "@/api/hooks";
 import { communityLink } from "@/features/messages/links";
 import {
   arrangeRail,
@@ -199,7 +199,7 @@ export function CommunityRail() {
   const inActivity = matchRoute({ to: "/activity" }) !== false;
   const inSaved = matchRoute({ to: "/saved" }) !== false;
   const admin = useIsAdmin();
-  const bootstrapping = useSyncStatus() === "bootstrapping";
+  const bootstrapping = useFirstBootstrap();
   /** The row being dragged, which decides what it may be dropped on. */
   const dragging = useRef<string | null>(null);
   const menuAnchor = useRef<HTMLElement | null>(null);

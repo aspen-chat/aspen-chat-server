@@ -488,6 +488,8 @@ export class AspenSync {
   readonly #listeners = new Set<SyncListener>();
   #status: SyncStatus = "stopped";
   #lastError: Problem | null = null;
+  /** Whether the bootstrap under way, or the last one, began after one that failed. */
+  #retrying = false;
   #webClientBuild: string | null = null;
   /** Events received while a bootstrap is in flight, applied once it lands. `null` when live. */
   #held: ServerEvent[] | null = null;
@@ -780,6 +782,15 @@ export class AspenSync {
   }
 
   /**
+   * Whether a `bootstrapping` status is a retry of one that failed rather than the first read
+   * since `start()` from `stopped`. While retrying, what the failure left on screen stays: a
+   * loading skeleton in its place would unmount it, and any dialog open there, on every retry.
+   */
+  get retrying(): boolean {
+    return this.#retrying;
+  }
+
+  /**
    * This server's clock, set by each `ready` of the stream: what the server stamped (a ring's
    * `until`, a poll's `closesAt`) is compared with `clock.at(now)`, never with the device's `now`.
    */
@@ -895,6 +906,7 @@ export class AspenSync {
     this.#generation += 1;
     const generation = this.#generation;
     this.#lastError = null;
+    this.#retrying = this.#status === "failed";
     this.#setStatus("bootstrapping");
     void this.uploads.restore();
     void this.#bootstrap(generation).then((ok) => {

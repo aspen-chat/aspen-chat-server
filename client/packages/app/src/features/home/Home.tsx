@@ -3,7 +3,7 @@ import { Navigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useSignOut } from "@/api/deploymentsContext";
-import { useCommunities, useSyncStatus } from "@/api/hooks";
+import { useCommunities, useFirstBootstrap, useSyncStatus } from "@/api/hooks";
 import { useAuthMethods } from "@/features/auth/authMethods";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
@@ -25,7 +25,7 @@ import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
 export function Home() {
   const m = useMessages();
   const communities = useCommunities();
-  const status = useSyncStatus();
+  const loading = useFirstBootstrap();
   const federating = useAuthMethods()?.federationDomain != null;
   const signOut = useSignOut();
   // The registration invite the join form was handed. It is kept when the dialog closes, so
@@ -36,7 +36,7 @@ export function Home() {
   if (first !== undefined) {
     return <Navigate to="/communities/$communityId" params={{ communityId: first.id }} replace />;
   }
-  if (status === "bootstrapping") {
+  if (loading) {
     return <ChannelSkeleton />;
   }
   return (

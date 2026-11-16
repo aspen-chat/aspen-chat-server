@@ -744,6 +744,44 @@ describe("AspenSync", () => {
     await goLive(sync);
   });
 
+  it("tells a bootstrap that retries a failed one from the first", async () => {
+    let attempts = 0;
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me": () => {
+          attempts += 1;
+          return attempts <= 2 ? busy(1) : json(me);
+        },
+      },
+      undefined,
+      { setTimeout: timers.setTimeout },
+    );
+    sync.start();
+    expect(sync.status).toBe("bootstrapping");
+    expect(sync.retrying).toBe(false);
+    await settle();
+    expect(sync.status).toBe("failed");
+    // Tried again by itself, and failing again: each retry follows a failure.
+    expect(timers.held).toHaveLength(1);
+    timers.held.shift()?.handler();
+    expect(sync.status).toBe("bootstrapping");
+    expect(sync.retrying).toBe(true);
+    await settle();
+    expect(sync.status).toBe("failed");
+    expect(timers.held).toHaveLength(1);
+    timers.held.shift()?.handler();
+    expect(sync.retrying).toBe(true);
+    await settle();
+    expect(attempts).toBe(3);
+    // Stopped and started afresh, nothing is known: the first read again.
+    sync.stop();
+    sync.start();
+    expect(sync.status).toBe("bootstrapping");
+    expect(sync.retrying).toBe(false);
+  });
+
   it("fails the bootstrap when a read a deployment may lack fails, and takes only a 404 as none", async () => {
     const save = { id: id(700), message: id(1001) };
     let answer = (): Response => listed([save]);

@@ -12,10 +12,10 @@ import { useEverywhere, useSources, type Source } from "@/api/everywhere";
 import {
   useChannelVoice,
   useDms,
+  useFirstBootstrap,
   useMe,
   useMentions,
   useMute,
-  useSyncStatus,
   useUnread,
   useUser,
 } from "@/api/hooks";
@@ -90,7 +90,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
     sources.find((s) => s.domain === chosen) ??
     sources.find((s) => s.domain === domain) ??
     sources[0];
-  const bootstrapping = useSyncStatus() === "bootstrapping";
+  const bootstrapping = useFirstBootstrap();
   const dms = useEverywhere(["dms"], (sources) =>
     mergeDms<DmEntry>(
       sources.map((source) => ({
@@ -388,7 +388,7 @@ const HOME = "";
 export function DmIndex() {
   const m = useMessages();
   const dms = useDms();
-  const bootstrapping = useSyncStatus() === "bootstrapping";
+  const bootstrapping = useFirstBootstrap();
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-1 p-6 text-center text-ink-muted">
       {dms.length === 0 && !bootstrapping && <p className="font-medium text-ink">{m.dms.empty}</p>}

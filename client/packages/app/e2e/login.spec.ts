@@ -175,6 +175,35 @@ test.describe("login", () => {
     expect(logouts).toEqual([{ refreshToken: "r" }]);
   });
 
+  test("keeps a dialog open on the home while a failed first read is retried", async ({ page }) => {
+    await page.route("**/api/v1/auth/login", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: signedIn(),
+      }),
+    );
+    // Only the profile is answered, so every bootstrap fails and is tried again by itself.
+    await stubSignedInBackend(page, "kate");
+    let reads = 0;
+    page.on("request", (request) => {
+      if (/\/api\/v1\/users\/(%40|@)me\/communities$/.test(new URL(request.url()).pathname)) {
+        reads += 1;
+      }
+    });
+    await page.goto("/");
+    await page.getByLabel("Username").fill("kate");
+    await page.getByLabel("Password").fill("hunter22");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+    await page.getByRole("button", { name: "Create a community" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    const opened = reads;
+    await expect.poll(() => reads, { timeout: 15_000 }).toBeGreaterThan(opened + 1);
+    await expect(dialog).toBeVisible();
+  });
+
   test("finishes a two-factor sign-in with an authenticator code", async ({ page }) => {
     await page.route("**/api/v1/auth/login", (route) =>
       route.fulfill({

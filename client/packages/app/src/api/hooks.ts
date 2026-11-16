@@ -80,6 +80,19 @@ export function useSyncStatus(): SyncStatus {
   return useSyncExternalStore(sync.subscribe, () => sync.status);
 }
 
+/**
+ * Whether the first read since the sync started is under way, so nothing is known yet and a
+ * loading skeleton belongs where the data will be. A retry after a failure is not one: what the
+ * failure showed stays (`AspenSync.retrying`).
+ */
+export function useFirstBootstrap(): boolean {
+  const sync = useSync();
+  return useSyncExternalStore(
+    sync.subscribe,
+    () => sync.status === "bootstrapping" && !sync.retrying,
+  );
+}
+
 /** Subscribes to one topic; `read` must return a stable reference until the topic changes. */
 function useTopic<T>(topic: Topic, read: (store: RecordStore) => T): T {
   const store = useStore();
