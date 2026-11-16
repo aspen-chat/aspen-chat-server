@@ -14,6 +14,7 @@ import com.aspen_chat.client.voice.MediaKind
 import com.aspen_chat.client.voice.PeerConnection
 import com.aspen_chat.client.voice.PeerConnectionException
 import com.aspen_chat.client.voice.PeerConnectionFactory
+import com.aspen_chat.client.voice.PeerConnectionKind
 import com.aspen_chat.client.voice.PeerConnectionObserver
 import com.aspen_chat.client.voice.SendEncoding
 import com.aspen_chat.client.voice.SenderParameters
@@ -60,6 +61,11 @@ import org.webrtc.SessionDescription as WebRtcSessionDescription
  * own echo canceller and noise suppressor where it has them; `eglContext` is that context, which
  * the camera's texture and the video renderers share. A test may give an audio device module of
  * its own instead.
+ *
+ * A WebRTC factory has one audio capture for every connection it makes, so the call's capture
+ * connection, which carries a share and its sound, is made from a factory of its own
+ * (`captureFactory`), which `CallScreen` makes for each share with an audio device module that
+ * records what other apps play, on the same EGL context, and takes down with it.
  */
 class CallPeerConnections(
     context: Context,
@@ -68,6 +74,9 @@ class CallPeerConnections(
 ) : PeerConnectionFactory {
     val factory: WebRtcPeerConnectionFactory
     private val egl: EglBase
+    /** The share's factory while a share is on; `create` for `CAPTURE` needs one. */
+    @Volatile
+    var captureFactory: WebRtcPeerConnectionFactory? = null
 
     /** The context the codecs share; the camera's texture and the renderers draw on it too. */
     val eglContext: EglBase.Context
@@ -87,13 +96,25 @@ class CallPeerConnections(
             .createPeerConnectionFactory()
     }
 
-    override suspend fun create(configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection {
-        val connection = factory.createPeerConnection(
+    override suspend fun create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection {
+        val from = when (kind) {
+            PeerConnectionKind.CALL, PeerConnectionKind.TRANSFER -> factory
+            PeerConnectionKind.CAPTURE -> captureFactory ?: throw PeerConnectionException.Failed("no share is being captured")
+        }
+        val made = from.createPeerConnection(
             CallPeerConnection.configuration(configuration),
             CallPeerConnectionObserver(observer),
         ) ?: throw PeerConnectionException.Failed("WebRTC made no peer connection")
-        return CreatedPeerConnection(CallPeerConnection(connection, tracks))
+        return CreatedPeerConnection(CallPeerConnection(made, tracks))
     }
+
+    /** A factory on the same codecs and EGL context as the call's, recording from `audioDevice`. */
+    fun makeCaptureFactory(audioDevice: AudioDeviceModule): WebRtcPeerConnectionFactory =
+        WebRtcPeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDevice)
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
+            .createPeerConnectionFactory()
 
     private companion object {
         private var initialized = false
@@ -436,7 +457,12 @@ class CallPeerConnection(
     private fun <T> withTransceiver(id: TransceiverId, body: (RtpTransceiver) -> T): T = withTransceivers { all ->
         val sender = senders.getOrNull(id.toInt()) ?: throw PeerConnectionException.Failed("no transceiver $id")
         val transceiver = all.firstOrNull { it.sender.id() == sender }
-            ?: throw PeerConnectionException.Failed("transceiver $id is gone")
+            // A transceiver goes when an answer rejects its section (a codec nothing here
+            // encodes, say); the states say where the negotiation stood.
+            ?: throw PeerConnectionException.Failed(
+                "transceiver $id is gone: the senders now are ${all.map { it.sender.id() }} with mids ${all.map { it.mid }}, " +
+                    "signalling ${connection.signalingState()}, connection ${connection.connectionState()}",
+            )
         body(transceiver)
     }
 

@@ -812,7 +812,7 @@ jobs:
         id: cache
         with:
           path: target/webrtc/libwebrtc.aar
-          key: webrtc-android-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py') }}
+          key: webrtc-android-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py', 'scripts/webrtc_patches/**') }}
       - name: Build it, with the checkout on the temp disk
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -844,7 +844,7 @@ jobs:
         id: cache
         with:
           path: target/webrtc/WebRTC.xcframework
-          key: webrtc-ios-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py') }}
+          key: webrtc-ios-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py', 'scripts/webrtc_patches/**') }}
       - name: Build it
         if: steps.cache.outputs.cache-hit != 'true'
         run: |

@@ -48,13 +48,28 @@ checkout is never cached, and never fits the 10 GB a repository's caches share:
 A pull request that moves the pin builds on its own runners and its cache stays with its branch; the
 first run on `main` after it merges builds once more and every run after takes the cache.
 
+## What we change in Google's source
+
+`scripts/webrtc_patches/` holds our changes to the source, each a unified diff against the pinned
+milestone with the reason at its head, applied to the checkout after every sync and before every
+build (`PATCHES` in the script; one already applied is left alone). CI's cache keys hash them with
+the script, so a change rebuilds both artifacts.
+
+- `android-audio-record-factory.patch`: `JavaAudioDeviceModule.Builder.setAudioRecordFactory`, which
+  makes the `AudioRecord` the module records from in place of one of its own audio source. A WebRTC
+  factory has one audio capture for every connection it makes, so a share's sound on Android is the
+  capture of a second factory, and what it records is what other apps play
+  (`AudioPlaybackCaptureConfiguration`), which only an `AudioRecord.Builder` can be configured for
+  and the module's own `AudioRecord` never is (`client/docs/architecture/android-builds.md`, Sharing
+  the screen).
+
 ## Moving the pin
 
 A milestone is a `branch-heads/N` branch of Google's repository, N being the Chromium branch of that
 milestone: `webrtc_branch` in `https://chromiumdash.appspot.com/fetch_milestones?mstone=M`. Change
 the two constants, read Google's release notes for every milestone crossed, run `checkout` and
-`build` on both platforms, and run the call engine's device checks before the apps take the new
-artifacts.
+`build` on both platforms (rewriting any patch that no longer applies), and run the call engine's
+device checks before the apps take the new artifacts.
 
 ## What the script does to Google's tools
 

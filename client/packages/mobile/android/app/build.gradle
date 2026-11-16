@@ -139,6 +139,9 @@ dependencies {
     testImplementation "org.json:json:$orgJsonVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    // The call layer's proof accepts the system's media projection dialog, which is another
+    // app's window (`AspenCallPluginTest`).
+    androidTestImplementation "androidx.test.uiautomator:uiautomator:$androidxUiAutomatorVersion"
     implementation project(':capacitor-cordova-android-plugins')
 }
 

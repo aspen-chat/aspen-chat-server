@@ -2,14 +2,17 @@ package com.aspen_chat.client.call
 
 import android.Manifest
 import android.app.PictureInPictureParams
+import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Rational
 import android.widget.FrameLayout
+import androidx.activity.result.ActivityResult
 import com.aspen_chat.client.CallPictureInPictureHost
 import com.aspen_chat.client.R
 import com.aspen_chat.client.voice.CallState
@@ -24,6 +27,7 @@ import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
@@ -48,8 +52,14 @@ import org.json.JSONObject
  * engine is given none and fails the join itself where the channel lets the user speak
  * (`errorKind` `microphone`), as the web's call does when the browser refuses it. `startCamera`
  * asks for `CAMERA` the same way and rejects with the code `denied`, `none`, or `failed`
- * (`CallCameraFailure`) when none opens. The system's side of each call (`CallTelecom`) follows
- * the engine's snapshots on its own. Everything touching an engine runs on the main thread, where
+ * (`CallCameraFailure`) when none opens. `startScreenShare` asks for the screen through the
+ * system's media projection dialog (`createScreenCaptureIntent`, the consent, which is the choice
+ * of what to share) and resolves once the user has answered: consented, the capture starts
+ * (`CallScreen`) and its tracks go to the engine as its external `screen` and `screenAudio` once
+ * the first frame arrives, which the snapshots then show; declined, it rejects with the code
+ * `denied` (`CallScreenFailure`); and a share that ends afterwards is a `share` event with why,
+ * or none for the user's own stop. The system's side of each call (`CallTelecom`) follows the
+ * engine's snapshots on its own. Everything touching an engine runs on the main thread, where
  * `CallTelecom` reads its state.
  *
  * `MainActivity` registers this plugin by its class name, since a build without the call layer
@@ -119,7 +129,10 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
             val following = Followed()
             following.snapshots = engine.snapshots.listenJson { json -> notifyListeners("state", published(json, origin)) }
             following.routes = engine.routes.listen { notifyListeners("routes", routesData()) }
-            following.camera = engine.snapshots.listen { state -> cameraFollows(state, origin) }
+            following.camera = engine.snapshots.listen { state ->
+                cameraFollows(state, origin)
+                shareFollows(state, origin)
+            }
             followed[origin] = following
         }
         return engine
@@ -140,6 +153,25 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
         if (ended || refused) {
             camera.stop()
             CallService.setCamera(context, false)
+        }
+    }
+
+    /**
+     * The share is on only while its engine sends it: the call ending, or the voice server
+     * refusing the share, stops the capture, and the page hears why as a `share` event.
+     */
+    private fun shareFollows(state: CallState, origin: String) {
+        val screen = CallEngine.screen(context)
+        if (!screen.isActive || screen.origin != origin) {
+            return
+        }
+        val ended = state.status == CallStatus.IDLE || state.status == CallStatus.FAILED
+        val refused = state.sourceRefused?.source == MediaSource.SCREEN || state.sourceRefused?.source == MediaSource.SCREEN_AUDIO
+        if (ended || refused) {
+            screen.stop()
+            if (refused) {
+                notifyListeners("share", shareData(origin, null))
+            }
         }
     }
 
@@ -447,6 +479,73 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
         withEngine(call) { engine -> engine.engine.clearSourceRefusal() }
     }
 
+    // --- Sharing ----------------------------------------------------------------------------------
+
+    /**
+     * Asks the system for the screen through its media projection dialog, and once consented
+     * starts the capture (`CallScreen`), with other apps' sound when `audio`; resolves on the
+     * consent, rejects with `denied` when it is declined. A share already asked for is left as it
+     * is.
+     */
+    @PluginMethod
+    fun startScreenShare(call: PluginCall) {
+        if (originOf(call) == null) {
+            return
+        }
+        val screen = CallEngine.screen(context)
+        if (screen.isActive) {
+            return call.resolve()
+        }
+        val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+            ?: return call.reject("the device cannot capture its screen", CallScreenFailure.UNSUPPORTED.code)
+        startActivityForResult(call, manager.createScreenCaptureIntent(), "projectionAnswered")
+    }
+
+    /** The user has answered the media projection dialog. */
+    @ActivityCallback
+    fun projectionAnswered(call: PluginCall, result: ActivityResult) {
+        val origin = originOf(call) ?: return
+        val data = result.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || data == null) {
+            return call.reject("sharing the screen is not allowed", CallScreenFailure.DENIED.code)
+        }
+        val audio = call.getBoolean("audio") ?: true
+        main.post {
+            val engine = engineAt(origin)
+            CallEngine.screen(context).start(
+                origin, data, audio,
+                onStarted = { video, sound ->
+                    engine.engine.startExternalSource(MediaSource.SCREEN, video)
+                    if (sound != null) {
+                        engine.engine.startExternalSource(MediaSource.SCREEN_AUDIO, sound)
+                    }
+                },
+                onEnded = { failure ->
+                    engine.engine.stopSource(MediaSource.SCREEN)
+                    engine.engine.stopSource(MediaSource.SCREEN_AUDIO)
+                    notifyListeners("share", shareData(origin, failure))
+                },
+            )
+            call.resolve()
+        }
+    }
+
+    /** Ends the share, asked for or on. */
+    @PluginMethod
+    fun stopScreenShare(call: PluginCall) {
+        withEngine(call) { engine ->
+            engine.engine.stopSource(MediaSource.SCREEN)
+            engine.engine.stopSource(MediaSource.SCREEN_AUDIO)
+            CallEngine.screen(context).stop()
+        }
+    }
+
+    /** Dismisses the voice server's refusal of a source. */
+    @PluginMethod
+    fun clearShareError(call: PluginCall) {
+        withEngine(call) { engine -> engine.engine.clearSourceRefusal() }
+    }
+
     /** Asks the engine to watch `video`, each a user's screen or camera. */
     @PluginMethod
     fun setWatched(call: PluginCall) {
@@ -649,6 +748,11 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
         fun openedData(device: CallCameraDevice): JSObject = JSObject()
             .put("device", device.id)
             .put("facing", device.facing?.wire ?: JSONObject.NULL)
+
+        /** A share's end as the page reads it (`ShareEnded` in `nativeCall.ts`). */
+        fun shareData(origin: String, failure: CallScreenFailure?): JSObject = JSObject()
+            .put("origin", origin)
+            .put("failure", failure?.code ?: JSONObject.NULL)
 
         /** `CallVideoShape` as the page reads it (`PictureShape` in `nativeCall.ts`). */
         fun shapeData(shape: CallVideoShape): JSObject = JSObject()

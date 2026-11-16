@@ -17,7 +17,7 @@ import com.aspen_chat.client.voice.SocketFactory
  * service that keeps the process alive, and `routes`, where it plays), which follows the
  * engine's snapshots. The engine's methods are the call's commands and `snapshots` is what it
  * reports; `AspenCallPlugin` commands it for the web view, and the process's `video` draws its
- * video tracks and `camera` captures the camera it sends.
+ * video tracks, `camera` captures the camera it sends, and `screen` the screen it shares.
  *
  * Starts an engine for the deployment at `origin` (its `public_url`), which the device's account
  * there, kept by the web view on sign-in, is the session of. `loopbackPlainText` lets a
@@ -62,6 +62,7 @@ class CallEngine(
         val video = CallVideo(tracks)
         private var shared: CallPeerConnections? = null
         private var sharedCamera: CallCamera? = null
+        private var sharedScreen: CallScreen? = null
 
         /** One WebRTC factory for the process. */
         @Synchronized
@@ -73,6 +74,12 @@ class CallEngine(
         fun camera(context: Context): CallCamera = sharedCamera ?: run {
             val media = peerConnections(context)
             CallCamera(context.applicationContext, media.factory, media.eglContext, tracks).also { sharedCamera = it }
+        }
+
+        /** One share for the process, captured by the media projection the user consents to. */
+        @Synchronized
+        fun screen(context: Context): CallScreen = sharedScreen ?: run {
+            CallScreen(context.applicationContext, peerConnections(context), tracks).also { sharedScreen = it }
         }
     }
 }

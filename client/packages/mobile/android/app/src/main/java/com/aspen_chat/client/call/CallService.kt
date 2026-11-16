@@ -25,11 +25,15 @@ import com.aspen_chat.client.R
  * is up within the five seconds Telecom allows, after which (from Android 14) Telecom itself keeps
  * the process alive for a call it holds, and this service's type says what the process is doing;
  * `setCamera` adds the camera's kind as the camera turns on and takes it off as it turns off, so
- * the camera may go on while the app is not in front.
+ * the camera may go on while the app is not in front, and `setProjection` the media projection's
+ * kind the same way for a share of the screen, which the system refuses to start without it
+ * (from Android 14) and which, under it, goes on while the app is not in front.
  *
  * The microphone and camera kinds may be refused where the app is not in front when the service
  * takes them (Android 14 lets a service start recording only from the foreground); the service
- * then runs without them, and the call's microphone is Telecom's to grant.
+ * then runs without them, and the call's microphone is Telecom's to grant. `setProjection` is
+ * called from the consent's answer, with the app in front, and its listener hears once the
+ * service runs with the kind, which is when a projection may be made.
  *
  * A DM's call ringing the phone is shown by `showIncoming`: a `CallStyle` incoming call
  * notification with the system's Answer and Decline, posted directly rather than by a service
@@ -70,22 +74,28 @@ class CallService : Service() {
         val name = intent?.getCharSequenceExtra(EXTRA_NAME) ?: getString(R.string.app_name)
         val video = intent?.getBooleanExtra(EXTRA_VIDEO, false) ?: false
         val camera = intent?.getBooleanExtra(EXTRA_CAMERA, false) ?: false
-        enterForeground(notification(this, name, video), camera)
+        val projection = intent?.getBooleanExtra(EXTRA_PROJECTION, false) ?: false
+        enterForeground(notification(this, name, video), camera, projection)
         return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun enterForeground(notification: Notification, camera: Boolean) {
+    private fun enterForeground(notification: Notification, camera: Boolean, projection: Boolean) {
         val call = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         val microphone = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         val cameraType = if (camera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0
+        val projectionType = if (projection) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0
+        var projecting = false
         try {
             try {
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call or microphone or cameraType)
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call or microphone or cameraType or projectionType)
+                synchronized(CallService) { types = call or microphone or cameraType or projectionType }
+                projecting = projection
             } catch (refused: SecurityException) {
                 Log.w(TAG, "the call's service may not record or capture; it runs as a phone call alone", refused)
                 ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, call)
+                synchronized(CallService) { types = call }
             }
         } catch (e: RuntimeException) {
             // From Android 12 a service started in the background may not enter the foreground
@@ -93,11 +103,21 @@ class CallService : Service() {
             Log.w(TAG, "the call goes on without a foreground service", e)
             finish()
         }
+        if (projection) {
+            val listener = synchronized(CallService) { projectionListener.also { projectionListener = null } }
+            listener?.invoke(projecting)
+        }
     }
 
     private fun finish() {
+        synchronized(CallService) { types = 0 }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    override fun onDestroy() {
+        synchronized(CallService) { types = 0 }
+        super.onDestroy()
     }
 
     /** What the incoming call's notification does; `answer` and `decline` run on the caller's thread. */
@@ -115,7 +135,19 @@ class CallService : Service() {
         private const val EXTRA_NAME = "name"
         private const val EXTRA_VIDEO = "video"
         private const val EXTRA_CAMERA = "camera"
+        private const val EXTRA_PROJECTION = "projection"
         private var hangUp: (() -> Unit)? = null
+        /** Told whether the service runs with the media projection's kind, once it has been asked for. */
+        private var projectionListener: ((Boolean) -> Unit)? = null
+        private var camera = false
+        private var projection = false
+
+        /**
+         * The foreground service types the service runs with now (`ServiceInfo
+         * .FOREGROUND_SERVICE_TYPE_*`), 0 while it is not in the foreground, for the proof.
+         */
+        var types = 0
+            private set
         /** What the service was last started with, so the camera's kind can be added to the same call. */
         private var shown: Pair<CharSequence, Boolean>? = null
         private var ring: Ringing? = null
@@ -213,8 +245,10 @@ class CallService : Service() {
             synchronized(this) {
                 this.hangUp = hangUp
                 shown = name to video
+                camera = false
+                projection = false
             }
-            send(context, name, video, camera = false)
+            send(context, name, video, camera = false, projection = false)
         }
 
         /**
@@ -222,15 +256,41 @@ class CallService : Service() {
          * it off as it turns off; nothing where no call's service runs.
          */
         fun setCamera(context: Context, on: Boolean) {
-            val (name, video) = synchronized(this) { shown } ?: return
-            send(context, name, video, on)
+            val (name, video, projecting) = synchronized(this) {
+                camera = on
+                val (name, video) = shown ?: return
+                Triple(name, video, projection)
+            }
+            send(context, name, video, on, projecting)
         }
 
-        private fun send(context: Context, name: CharSequence, video: Boolean, camera: Boolean) {
+        /**
+         * Adds the media projection's kind as a share of the screen is consented to, telling
+         * `listener` whether the service then runs with it (so a projection may be made), and
+         * takes it off as the share ends; `listener` hears `false` where no call's service runs.
+         */
+        fun setProjection(context: Context, on: Boolean, listener: ((Boolean) -> Unit)? = null) {
+            val (name, video, cameraOn) = synchronized(this) {
+                projection = on
+                val (name, video) = shown ?: run {
+                    projectionListener = null
+                    return@synchronized null
+                }
+                projectionListener = if (on) listener else null
+                Triple(name, video, camera)
+            } ?: run {
+                listener?.invoke(false)
+                return
+            }
+            send(context, name, video, cameraOn, on)
+        }
+
+        private fun send(context: Context, name: CharSequence, video: Boolean, camera: Boolean, projection: Boolean) {
             val intent = Intent(context, CallService::class.java)
                 .putExtra(EXTRA_NAME, name)
                 .putExtra(EXTRA_VIDEO, video)
                 .putExtra(EXTRA_CAMERA, camera)
+                .putExtra(EXTRA_PROJECTION, projection)
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: IllegalStateException) {
@@ -242,6 +302,9 @@ class CallService : Service() {
             synchronized(this) {
                 hangUp = null
                 shown = null
+                camera = false
+                projection = false
+                projectionListener = null
             }
             context.stopService(Intent(context, CallService::class.java))
         }

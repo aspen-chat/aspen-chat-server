@@ -9,6 +9,9 @@ media from the network on a phone is source we chose, at a milestone we move on 
     scripts/webrtc_build.py package         pack the Android archive again from the last build's output
     scripts/webrtc_build.py status          what is checked out, and the last build's result
 
+The patches in `scripts/webrtc_patches/` are applied to the checkout after each sync and before
+each build (`PATCHES`); the Android audio device module's AudioRecord factory is one.
+
 The checkout is large (30 GB and more) and lives outside the repository, in `~/webrtc-build` unless
 `--root` says otherwise, beside Google's `depot_tools`, which the script fetches too. Keep it: a
 milestone bump is a `checkout` and a `build`, not another fetch.
@@ -43,6 +46,11 @@ from pathlib import Path
 WEBRTC_BRANCH = "8103"
 WEBRTC_MILESTONE = "M157"
 
+# Our changes to Google's source, applied to the checkout after its sync: each is a unified diff
+# against the pinned milestone, with the reason at its head, in `scripts/webrtc_patches/`. A
+# patch that no longer applies after a milestone bump is rewritten for the new source.
+PATCHES = sorted((Path(__file__).resolve().parent / "webrtc_patches").glob("*.patch"))
+
 # The lowest iOS the app runs on, as its Xcode project says.
 IOS_DEPLOYMENT_TARGET = "15.0"
 # The device, and the simulator on the Macs that build and test the app. Intel simulators are
@@ -65,8 +73,10 @@ def platform_name() -> str:
 
 class Build:
     def __init__(self, root: Path, out: Path) -> None:
-        self.root = root
-        self.out = out
+        # Both are used from other working directories (the build's own), so neither may stay
+        # relative to this one.
+        self.root = root.resolve()
+        self.out = out.resolve()
         self.platform = platform_name()
         self.depot_tools = root / "depot_tools"
         self.checkout = root / self.platform
@@ -131,10 +141,24 @@ class Build:
         self.run(["git", "fetch", "--quiet", "--depth", "1", "origin", f"{ref}:{ref}"], self.src)
         self.run(["git", "checkout", "--quiet", ref], self.src)
         self.run(["gclient", "sync", "--with_branch_heads", "-D"], self.src)
+        self.apply_patches()
+
+    def patch_applied(self, patch: Path) -> bool:
+        return subprocess.run(
+            ["git", "apply", "--reverse", "--check", str(patch)], cwd=self.src, capture_output=True
+        ).returncode == 0
+
+    def apply_patches(self) -> None:
+        """Applies each patch in `PATCHES` the checkout does not already carry."""
+        for patch in PATCHES:
+            if self.patch_applied(patch):
+                continue
+            self.run(["git", "apply", str(patch)], self.src)
 
     def do_build(self, jobs: int | None) -> None:
         if not self.on_pinned_branch():
             self.do_checkout()
+        self.apply_patches()
         started = time.monotonic()
         self.out.mkdir(parents=True, exist_ok=True)
         if self.platform == "ios":

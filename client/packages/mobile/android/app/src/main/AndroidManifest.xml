@@ -88,12 +88,13 @@
         </service>
         <!-- Keeps the process alive for the length of a call the call engine holds, with the
              ongoing call's notification (call/CallService.kt), of the camera's kind too while the
-             call's camera is on. A build without the call layer
-             (client/docs/architecture/android-builds.md) has no such class and never starts it. -->
+             call's camera is on, and of the media projection's while the screen is shared. A
+             build without the call layer (client/docs/architecture/android-builds.md) has no such
+             class and never starts it. -->
         <service
             android:name=".call.CallService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall|microphone|camera" />
+            android:foregroundServiceType="phoneCall|microphone|camera|mediaProjection" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -140,4 +141,7 @@
     <!-- A DM call ringing the phone shows its call notification over the lock screen
          (call/CallService.kt, the incoming call's full-screen intent). -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Sharing the screen in a call (call/CallScreen.kt): the service's kind while a media
+         projection captures it, which the system requires from Android 14. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 </manifest>

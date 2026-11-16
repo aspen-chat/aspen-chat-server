@@ -1,0 +1,136 @@
+The Java audio device module records from an AudioRecord it makes itself, of the audio source
+given to its builder. A share's sound on Android is what other apps play, captured through
+AudioPlaybackCaptureConfiguration, which only an AudioRecord.Builder can be configured for, so
+the builder takes an AudioRecordFactory that makes the AudioRecord instead, with the format and
+buffer size the module would have given its own (client/packages/mobile/android/app/src/main/java/
+com/aspen_chat/client/call/CallScreen.kt makes one for each share). Applied to the checkout by
+scripts/webrtc_build.py; docs/development/webrtc-build.md says why.
+
+--- a/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java
++++ b/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java
+@@ -14,6 +14,7 @@
+ import android.media.AudioAttributes;
+ import android.media.AudioDeviceInfo;
+ import android.media.AudioManager;
++import android.media.AudioRecord;
+ import android.os.Build;
+ import androidx.annotation.RequiresApi;
+ import java.util.concurrent.ScheduledExecutorService;
+@@ -52,6 +53,7 @@
+     private AudioAttributes audioAttributes;
+     private boolean useLowLatency;
+     private boolean enableVolumeLogger;
++    private AudioRecordFactory audioRecordFactory;
+ 
+     private Builder(Context context) {
+       this.context = context;
+@@ -223,6 +225,16 @@
+     }
+ 
+     /**
++     * Makes the AudioRecord this module records from, in place of one of the audio source given
++     * to setAudioSource: for recording what other apps play (AudioPlaybackCaptureConfiguration),
++     * which only an AudioRecord.Builder can be configured for.
++     */
++    public Builder setAudioRecordFactory(AudioRecordFactory audioRecordFactory) {
++      this.audioRecordFactory = audioRecordFactory;
++      return this;
++    }
++
++    /**
+      * Construct an AudioDeviceModule based on the supplied arguments. The caller takes ownership
+      * and is responsible for calling release().
+      */
+@@ -256,7 +268,8 @@
+       }
+       final WebRtcAudioRecord audioInput = new WebRtcAudioRecord(context, executor, audioManager,
+           audioSource, audioFormat, audioRecordErrorCallback, audioRecordStateCallback,
+-          samplesReadyCallback, useHardwareAcousticEchoCanceler, useHardwareNoiseSuppressor);
++          samplesReadyCallback, useHardwareAcousticEchoCanceler, useHardwareNoiseSuppressor,
++          audioRecordFactory);
+       final WebRtcAudioTrack audioOutput =
+           new WebRtcAudioTrack(context, audioManager, audioAttributes, audioTrackErrorCallback,
+               audioTrackStateCallback, useLowLatency, enableVolumeLogger);
+@@ -266,6 +279,15 @@
+   }
+ 
+   /* AudioRecord */
++  /**
++   * Makes the AudioRecord the module records from, with the format and buffer size it would
++   * have given its own; the audio source is the factory's to choose.
++   */
++  public static interface AudioRecordFactory {
++    AudioRecord createAudioRecord(
++        int sampleRate, int channelConfig, int audioFormat, int bufferSizeInBytes);
++  }
++
+   // Audio recording error handler functions.
+   public enum AudioRecordStartErrorCode {
+     AUDIO_RECORD_START_EXCEPTION,
+--- a/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java
++++ b/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java
+@@ -40,6 +40,7 @@
+ import org.webrtc.Logging;
+ import org.webrtc.ThreadUtils;
+ import org.webrtc.audio.JavaAudioDeviceModule.AudioRecordErrorCallback;
++import org.webrtc.audio.JavaAudioDeviceModule.AudioRecordFactory;
+ import org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStartErrorCode;
+ import org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStateCallback;
+ import org.webrtc.audio.JavaAudioDeviceModule.SamplesReadyCallback;
+@@ -83,6 +84,7 @@
+   private final AudioManager audioManager;
+   private final int audioSource;
+   private final int audioFormat;
++  private final @Nullable AudioRecordFactory audioRecordFactory;
+ 
+   private long nativeAudioRecord;
+ 
+@@ -199,7 +201,7 @@
+     this(context, newDefaultScheduler() /* scheduler */, audioManager, DEFAULT_AUDIO_SOURCE,
+         DEFAULT_AUDIO_FORMAT, null /* errorCallback */, null /* stateCallback */,
+         null /* audioSamplesReadyCallback */, WebRtcAudioEffects.isAcousticEchoCancelerSupported(),
+-        WebRtcAudioEffects.isNoiseSuppressorSupported());
++        WebRtcAudioEffects.isNoiseSuppressorSupported(), null /* audioRecordFactory */);
+   }
+ 
+   public WebRtcAudioRecord(Context context, ScheduledExecutorService scheduler,
+@@ -208,6 +210,18 @@
+       @Nullable AudioRecordStateCallback stateCallback,
+       @Nullable SamplesReadyCallback audioSamplesReadyCallback,
+       boolean isAcousticEchoCancelerSupported, boolean isNoiseSuppressorSupported) {
++    this(context, scheduler, audioManager, audioSource, audioFormat, errorCallback, stateCallback,
++        audioSamplesReadyCallback, isAcousticEchoCancelerSupported, isNoiseSuppressorSupported,
++        null /* audioRecordFactory */);
++  }
++
++  public WebRtcAudioRecord(Context context, ScheduledExecutorService scheduler,
++      AudioManager audioManager, int audioSource, int audioFormat,
++      @Nullable AudioRecordErrorCallback errorCallback,
++      @Nullable AudioRecordStateCallback stateCallback,
++      @Nullable SamplesReadyCallback audioSamplesReadyCallback,
++      boolean isAcousticEchoCancelerSupported, boolean isNoiseSuppressorSupported,
++      @Nullable AudioRecordFactory audioRecordFactory) {
+     threadChecker.detachThread();
+     if (isAcousticEchoCancelerSupported && !WebRtcAudioEffects.isAcousticEchoCancelerSupported()) {
+       throw new IllegalArgumentException("HW AEC not supported");
+@@ -225,6 +239,7 @@
+     this.audioSamplesReadyCallback = audioSamplesReadyCallback;
+     this.isAcousticEchoCancelerSupported = isAcousticEchoCancelerSupported;
+     this.isNoiseSuppressorSupported = isNoiseSuppressorSupported;
++    this.audioRecordFactory = audioRecordFactory;
+     Logging.d(TAG, "ctor" + WebRtcAudioUtils.getThreadInfo());
+   }
+ 
+@@ -328,7 +343,11 @@
+     int bufferSizeInBytes = Math.max(BUFFER_SIZE_FACTOR * minBufferSize, byteBuffer.capacity());
+     Logging.d(TAG, "bufferSizeInBytes: " + bufferSizeInBytes);
+     try {
+-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++      if (audioRecordFactory != null) {
++        audioRecord = audioRecordFactory.createAudioRecord(
++            sampleRate, channelConfig, audioFormat, bufferSizeInBytes);
++        audioSourceMatchesRecordingSessionRef.set(null);
++      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+         // Use the AudioRecord.Builder class on Android M (23) and above.
+         // Throws IllegalArgumentException.
+         audioRecord = createAudioRecordOnMOrHigher(

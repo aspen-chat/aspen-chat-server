@@ -36,6 +36,7 @@ import com.aspen_chat.client.voice.CreatedPeerConnection
 import com.aspen_chat.client.voice.MediaSource
 import com.aspen_chat.client.voice.PeerConnection
 import com.aspen_chat.client.voice.PeerConnectionFactory
+import com.aspen_chat.client.voice.PeerConnectionKind
 import com.aspen_chat.client.voice.PeerConnectionObserver
 import com.aspen_chat.client.voice.Received
 import com.aspen_chat.client.voice.Socket
@@ -166,8 +167,8 @@ class CallEngineTest {
     class RecordingPeerConnections(private val real: CallPeerConnections) : PeerConnectionFactory {
         private val created = ArrayList<PeerConnection>()
 
-        override suspend fun create(configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection {
-            val made = real.create(configuration, observer)
+        override suspend fun create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection {
+            val made = real.create(kind, configuration, observer)
             synchronized(created) { created.add(made.connection) }
             return made
         }
