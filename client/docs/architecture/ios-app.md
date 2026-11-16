@@ -121,8 +121,9 @@ WebSockets through interfaces each platform implements. The iOS implementation i
 `ios/App/App/Call`, compiled into the App target with the engine's generated Swift module: the
 engine's platform, the system's call integration (CallKit), the audio routes, and the Capacitor
 plugin the web view commands it through and reads its state from (`AspenCallPlugin`;
-`voice/native-calls.md` is the page's side). The call's sounds, rings (PushKit), and the camera are
-later pieces.
+`voice/native-calls.md` is the page's side), and the call's video: the camera, the pictures drawn
+beneath the web view, and the picture in picture (Video below). The call's sounds and rings
+(PushKit) are later pieces.
 
 ### What the App target links, and where it comes from
 
@@ -146,19 +147,21 @@ AppTests links the framework for the same reason and loads the engine's symbols 
 Each file under `Call/` implements one of the engine's interfaces over the platform, as
 `voice_client/src/bindings.rs` declares them:
 
-| File                       | Implements                                                                   | Over                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CallEngine.swift`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                 |
-| `CallSnapshots.swift`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main queue                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `CallHttp.swift`           | `Http`                                                                       | URLSession: no cookies, no redirects followed, every status answered as a response                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `CallSockets.swift`        | `SocketFactory`, `Socket`                                                    | `URLSessionWebSocketTask`, which answers pings itself and offers `permessage-deflate` on every socket of its own accord (no switch; seen in the upgrade request CFNetwork sends), so the voice server's offers arrive compressed (`negotiatedExtensions` is the server's answer, `permessage-deflate; server_no_context_takeover; client_no_context_takeover` in the proof); `connect` waits for the upgrade, so a refusal is a `TransportError`                                      |
-| `CallCredentials.swift`    | `Credentials`                                                                | The account at the deployment among those `PushStateStore` keeps (the keychain item the web view writes on sign-in): its session token for each request, renewed through `TokenRefresh` (shared with the notification service extension) and written back when the API server refuses it                                                                                                                                                                                              |
-| `CallTracks.swift`         | The track ids the engine passes around                                       | WebRTC tracks by their own `trackId`: the microphone, and each receiver's track                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `CallPeerConnection.swift` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `RTCPeerConnection`, unified plan, `max-bundle`, RTCP muxed. Transceivers are numbered in the order first seen and told apart by their sender's id, since `transceivers` wraps the native ones anew on every read; a sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its audio track's source's; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values |
-| `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth HFP and A2DP) and never activates it; `activated(_:)` and `deactivated(_:)` are what CallKit's `didActivate` and `didDeactivate` call, and WebRTC's audio units run between them (`isAudioEnabled`). The microphone is a track from WebRTC's audio device module                                                                               |
-| `CallSystem.swift`         | The call as the system knows it                                              | One `CXProvider` for the process and the one call it holds at a time, whichever deployment's engine runs it; see The system's call below                                                                                                                                                                                                                                                                                                                                              |
-| `CallRoutes.swift`         | What the call plays through                                                  | `AVAudioSession`'s current route and available inputs as typed entries, the choice held for the call, and the proximity sensor; see Routes below                                                                                                                                                                                                                                                                                                                                      |
-| `AspenCallPlugin.swift`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks the system for the microphone, opens it, and joins through `CallSystem`; each snapshot's JSON (`CallSnapshots.listenJSON`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered in `MainViewController`                                                                                                                    |
+| File                       | Implements                                                                   | Over                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CallEngine.swift`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                                              |
+| `CallSnapshots.swift`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main queue                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `CallHttp.swift`           | `Http`                                                                       | URLSession: no cookies, no redirects followed, every status answered as a response                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `CallSockets.swift`        | `SocketFactory`, `Socket`                                                    | `URLSessionWebSocketTask`, which answers pings itself and offers `permessage-deflate` on every socket of its own accord (no switch; seen in the upgrade request CFNetwork sends), so the voice server's offers arrive compressed (`negotiatedExtensions` is the server's answer, `permessage-deflate; server_no_context_takeover; client_no_context_takeover` in the proof); `connect` waits for the upgrade, so a refusal is a `TransportError`                                                                   |
+| `CallCredentials.swift`    | `Credentials`                                                                | The account at the deployment among those `PushStateStore` keeps (the keychain item the web view writes on sign-in): its session token for each request, renewed through `TokenRefresh` (shared with the notification service extension) and written back when the API server refuses it                                                                                                                                                                                                                           |
+| `CallTracks.swift`         | The track ids the engine passes around                                       | WebRTC tracks by their own `trackId`: the microphone, and each receiver's track                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `CallPeerConnection.swift` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `RTCPeerConnection`, unified plan, `max-bundle`, RTCP muxed. Transceivers are numbered in the order first seen and told apart by their sender's id, since `transceivers` wraps the native ones anew on every read; a sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its audio track's source's; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values                              |
+| `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth HFP and A2DP) and never activates it; `activated(_:)` and `deactivated(_:)` are what CallKit's `didActivate` and `didDeactivate` call, and WebRTC's audio units run between them (`isAudioEnabled`). The microphone is a track from WebRTC's audio device module                                                                                                            |
+| `CallSystem.swift`         | The call as the system knows it                                              | One `CXProvider` for the process and the one call it holds at a time, whichever deployment's engine runs it; see The system's call below                                                                                                                                                                                                                                                                                                                                                                           |
+| `CallRoutes.swift`         | What the call plays through                                                  | `AVAudioSession`'s current route and available inputs as typed entries, the choice held for the call, and the proximity sensor; see Routes below                                                                                                                                                                                                                                                                                                                                                                   |
+| `CallVideo.swift`          | Where video is drawn                                                         | A view beneath the web view with one `AVSampleBufferDisplayLayer` renderer per hole the page reports, each drawing its surface's track, and the system's picture in picture on one of them; see Video below                                                                                                                                                                                                                                                                                                        |
+| `CallCamera.swift`         | The camera                                                                   | `RTCCameraVideoCapturer` into one `RTCVideoSource` and track for the process, listed with each camera's position, moved between cameras with the track kept; see Video below                                                                                                                                                                                                                                                                                                                                       |
+| `AspenCallPlugin.swift`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks the system for the microphone, opens it, and joins through `CallSystem`; each snapshot's JSON (`CallSnapshots.listenJSON`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; the cameras, `startCamera`, `switchCamera`, `stopCamera`, `clearCameraError`, `setWatched`, and `setTiles`, with `shape` and `pip` events back; registered in `MainViewController` |
 
 `CallEngine.join`, `leave`, and `setMuted` go through `CallSystem`, so that the system's own
 controls and the engine agree; the engine's other commands are called directly. `CallSnapshots`
@@ -243,6 +246,75 @@ queue. The app's Speaker button reaches it through the plugin's `setRoute` and `
 reads the list through `routes` (`voice/native-calls.md`, Where the call plays); the web view's own
 audio has no route of its own.
 
+### Video
+
+The page draws no picture itself: every picture is a surface the phone draws beneath a transparent
+web view, where the page leaves a hole (`voice/native-calls.md`, Video). Capacitor's view controller
+has no container under its web view, so the window's root is `RootViewController`
+(`App/RootViewController.swift`), which holds `CallEngine.video`'s view across the whole window and
+`MainViewController` as a child over it; `MainViewController` makes its web view transparent
+(`isOpaque` off, clear backgrounds on the web view, its scroll view, and its own view) as it loads.
+The video view is black, so a hole shows black until its first frame, as a `<video>` with nothing to
+play does; the status bar and the home indicator are still the web view controller's to decide.
+
+- **Tiles** (`CallVideo.apply`, from the plugin's `setTiles`): one `SampleBufferRenderer` per hole
+  the page reports, keyed by the page's tile id, made as a tile first appears and taken off its
+  track as it goes, attached to the surface's track from `CallTracks` (again on every report, for a
+  track that arrives after the tile; the reference is weak, so a track gone with its connection
+  frees the renderer to draw one of the same id again). Each is laid out where the page says, the
+  page's CSS pixels being the web view's points, converted into the video view's coordinates; a
+  full-screen tile takes the view's own bounds, laid out again in `layoutSubviews`, so a turn needs
+  no round trip through the page. Self previews (mirrored tiles) are ordered above the other
+  pictures. A tile's `cover` is the layer's `resizeAspectFill`, otherwise `resizeAspect`.
+- **The renderer** (`SampleBufferRenderer`, an `RTCVideoRenderer`): each frame WebRTC delivers is
+  wrapped as a `CMSampleBuffer` marked to display immediately (WebRTC already paced it to its sound,
+  as the voice server keeps a person's voice and camera in one stream) and enqueued on an
+  `AVSampleBufferDisplayLayer`. The camera's and the hardware decoder's frames are NV12 pixel
+  buffers shown as they are; the software decoder's I420 planes are written into an NV12 buffer from
+  a pool. A frame's rotation (the camera's own frames carry the phone's; received frames arrive
+  upright, the sender having turned them, since no orientation extension is negotiated) and a self
+  preview's mirror are the layer's transform, with the layer's bounds swapped for a quarter turn so
+  it still fills the tile's box. The picture's shape, upright, is reported as the first frame
+  arrives and whenever it changes (`shape` events to the page).
+- **The camera** (`CallCamera`, `CallEngine.camera`): one capturer and one `RTCVideoSource` and
+  track for the process. `startCamera` asks the system for the camera (`AVCaptureDevice`'s
+  authorization, as `join` asks for the microphone) and opens the camera chosen by `uniqueID`, or
+  the front camera, through `RTCCameraVideoCapturer` in the largest format at most 1280 by 720 at up
+  to 30 frames a second (the engine's encoding bounds what is sent); the track goes to the engine as
+  its `camera` source. Where the system allows it (iOS 16 and later, an app with the VoIP background
+  mode), the capture session is given multitasking camera access, so the camera stays on in a
+  picture in picture; whether a shipping iOS grants it is on the checklist. `switchCamera` starts
+  the capturer on the other camera with the track kept, so the engine's sender needs nothing. The
+  camera is on only while its engine sends it: the plugin follows the snapshots and stops the
+  capture when the call ends or the voice server refuses the camera, so the camera's light goes off
+  with the picture. A failure to open is `denied`, `none`, or `failed` (`CallCameraFailure`), the
+  plugin's rejection code and the page's `cameraError`. The capturer is behind `CallCameraCapturer`,
+  which the simulator's proof, having no camera, implements in software
+  (`AppTests/SyntheticVideoCapturer.swift`).
+- **Picture in picture** (`CallPictureInPicture`): the tile the page marks `pictureInPicture` has
+  its renderer's layer made the content source of an `AVPictureInPictureController`, which starts
+  the picture in picture itself when the app leaves the screen
+  (`canStartPictureInPictureAutomaticallyFromInline`), the content live with no timeline. The page
+  hears it start and stop (`pip` events) and is otherwise unaffected: the system draws the picture.
+  `AVPictureInPictureController.isPictureInPictureSupported()` is false on the simulator, so it is
+  the device's to show.
+
+The page's own motion is the design's known weak point: a picture follows its hole a frame or two
+behind while the hole moves, since the page measures and reports rectangles after it has laid them
+out. The call screen on a phone pages rather than scrolls for that reason (`voice/call-screen.md`,
+On a phone). `scripts/check_mobile_call.py --record-trailing` measures it: the bridge's test
+`testPictureFollowsAMovingHole` hides the page, moves a red-bordered box across the screen and back
+(three passes of 200 points in 800 ms each) reporting its inside as a hole every animation frame
+with the camera in software drawn in it, `xcrun simctl io booted recordVideo` records the screen
+around it, and `scripts/measure_video_trailing.py` reads every recorded frame for how far the
+picture's left edge is from the border's inside against the direction of motion. On the simulator
+(an iPhone 18 Pro on the iOS 27 runtime, whose web view moved the box about 12 points a recorded
+frame): 47 moving frames, the picture never more than 4.7 points from its hole either way, a median
+of 4 points ahead of it and at worst 4.7 behind, which at the box's speed is a fraction of a frame
+(a median of 5 ms ahead, at worst 30 ms behind in one frame), so the layer reaches the screen in the
+same frame as the page's paint, a little before it as often as after. Judging it by eye on a device,
+at a phone's own frame rate, is on the checklist.
+
 ### What only a device can show
 
 The simulator's CallKit cannot hold an outgoing call: its daemon opens `facetime://?showInCallUI=1`
@@ -282,6 +354,21 @@ radio. These stand to be checked on an iPhone:
 - [ ] The system's call UI on the lock screen ends, mutes, and holds the call, and shows the name
       given to `join`.
 - [ ] A call held for an hour with the screen locked stays connected.
+- [ ] The camera: the front camera's preview is mirrored and upright however the phone is held, the
+      back camera's is not mirrored, the flip moves between them with the picture pausing only for
+      the camera's own start, and the other side sees the picture upright through a turn.
+- [ ] The camera in the background: with the app behind another or the phone locked in a picture in
+      picture, the camera stays on (multitasking camera access) and the others keep seeing it.
+- [ ] The picture in picture: leaving the app while someone's camera or screen shows starts it on
+      the focused screen (else the first camera of someone else), it follows the call as the picture
+      shown changes, and coming back ends it; `isPictureInPicturePossible` and the `pip` events say
+      so on a device, the simulator supporting none.
+- [ ] Rotation: a full-screen picture turns with the phone without a flash of the old layout, and
+      the paged tiles lay out again beneath their holes after a turn.
+- [ ] Trailing by eye: while paging between tiles and while a transition moves one, the native
+      picture follows its hole; frame-step a screen recording (`xcrun simctl io booted recordVideo`
+      on the simulator, the device's own recording on a phone) and judge how far it trails and
+      whether the paged grid hides it.
 
 ### The proof
 
@@ -298,30 +385,54 @@ Chromium's own level statistics read zero behind the muted element it plays each
 and unmutes, puts the call on hold and releases it (the browser's report, `onHold` in
 `calls/page.ts`, lists the simulator's user meanwhile, neither side's packets reach the other, and
 the release waits for the server's word), cuts its socket and watches the engine take its place back
-with `resume`, and leaves; its log line also names what the signalling socket negotiated.
-`AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
-for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
-choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app,
-whose `MainViewController` has loaded the web shell with the plugin registered, so the test finds
-its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the app's
-`NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision 0, of
-its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker and
-reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
+with `resume`, and leaves; its log line also names what the signalling socket negotiated. Between
+the hold and the cut it proves the video both ways: the browser shows video and turns Chromium's
+fake camera on, the engine is asked to watch it, and the track that arrives is drawn by
+`CallEngine.video` where the page would put its hole, the renderer counting frames (at least five)
+and reporting an upright shape and its layer lying in the rectangle given; then a camera in software
+(`SyntheticVideoCapturer`, 320 by 240 frames carried at 90 degrees as a phone's upright camera's
+are) is opened through `CallCamera` on the test's own factory and sent as the engine's camera, its
+preview drawn 240 by 320, and the browser decodes its frames (`framesDecoded` in `calls/page.ts`'s
+report) and sees a picture in them (`cameraSample`: a frame drawn to a canvas, brighter than black
+and taller than wide); the camera is moved to the other synthetic camera with the track kept; video
+flows on across the resume; and the camera is stopped before the leave. The picture in picture is
+started on the browser's camera where the system supports one, and the simulator's does not, which
+the log line says. `AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use,
+a receiver listed for the iPhone idiom), the kind of each port type, and the proximity rule, and
+holds and resets a choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under
+test is the app, whose `MainViewController` has loaded the web shell with the plugin registered, so
+the test finds its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the
+app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision
+0, of its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker
+and reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
 stands; the simulator has no receiver port) and clears it, mutes and unmutes outside a call and sees
 each in a snapshot, has malformed commands refused by name, reports whether the page's
 `AudioContext` runs with the call's session active, and joins the channel through the plugin: the
 start action's `joining` snapshot reaches the page, then the simulator's daemon ends the call and
 its `idle` does, in revision order, with no snapshot twice, and a fresh `state()` is the latest
-published. `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to
-end from Linux, with the same deployment and browser the Android check uses (`android-builds.md`,
-The call engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`),
-SSH reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
+published. Then, since the simulator's CallKit holds no call, it joins the engine the plugin made
+directly (`AspenCallPlugin.engine(at:)` is internal for it), the test standing in for `didActivate`,
+and drives the video from the page: `cameras()` lists the two synthetic cameras with their facings,
+`startCamera` opens the front one and the snapshot shows the camera among `sources`, a hole reported
+with `setTiles` for its track has its shape come back as a `shape` event (240 by 320) and its layer
+laid out in the rectangle given, `switchCamera` moves to the back one, a second participant from the
+browser turns its camera on and `setWatched` has the snapshot show its track, whose hole hears its
+shape too, malformed `setWatched` and `setTiles` are refused by name, and `stopCamera` takes the
+source out of the snapshot and the capture off. Before any engine is made the test replaces
+`CallEngine.peerConnections` with a factory on `ToneAudioDevice` and the camera's capturer with the
+synthetic one, as the simulator's own audio unit and lack of a camera require.
+`scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to end from
+Linux, with the same deployment and browser the Android check uses (`android-builds.md`, The call
+engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`), SSH
+reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
 loopback (plain HTTP there, as a development build allows; media goes to the voice server's
 announced address over the network), Chromium as the second participant with a tone WAV as its
-microphone (`calls/second.ts`), and `xcodebuild test-without-building` on the Mac of both tests,
-with `--build` first building the engine, the bindings, and the app for the simulator there. The
-test reads its deployment, channel, user, refresh token, and the script's helper from the
-environment (`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI
-runs the Android half of this check (`android-builds.md`) and not this one: the deployment runs in
-Docker, which GitHub's macOS runners lack, so the simulator's call is checked from a development
-machine with a Mac beside it.
+microphone and its fake camera (`calls/second.ts`, which the script's helper drives: showing video,
+the camera on and off, and a frame of someone's camera sampled), the simulator granted the camera
+beside the microphone, and `xcodebuild test-without-building` on the Mac of both tests, with
+`--build` first building the engine, the bindings, and the app for the simulator there. The test
+reads its deployment, channel, user, refresh token, and the script's helper from the environment
+(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI runs the
+Android half of this check (`android-builds.md`) and not this one: the deployment runs in Docker,
+which GitHub's macOS runners lack, so the simulator's call is checked from a development machine
+with a Mac beside it.

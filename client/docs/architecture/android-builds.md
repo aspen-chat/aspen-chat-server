@@ -51,9 +51,10 @@ Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's
 WebSockets through interfaces each platform implements. The Android implementation is
 `app/src/main/java/com/aspen_chat/client/call/`, Kotlin, compiled into the app with the engine's
 generated Kotlin package (`com.aspen_chat.client.voice`): the engine's platform, the system's call
-(Telecom), the routes, and the Capacitor plugin the web view commands it through and reads its state
-from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side). The call's sounds, the camera,
-and a DM call ringing the phone are later pieces.
+(Telecom), the routes, the Capacitor plugin the web view commands it through and reads its state
+from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side), and the call's video: the
+camera, the pictures drawn behind the web view, and the picture-in-picture mode (Video below). The
+call's sounds and a DM call ringing the phone are later pieces.
 
 ### What the app packages, and where it comes from
 
@@ -93,7 +94,9 @@ engine) where Android allows:
 | `CallTelecom.kt`        | The system's side of the engine's call                                       | Follows the engine's snapshots: the call in Telecom, `CallService`, the audio mode, and `CallRoutes` attached for the call's length; Telecom's callbacks go to the engine. See The system's call below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `CallService.kt`        | The foreground service and the ongoing call's notification                   | A service of the kinds `phoneCall` and `microphone` for the call's length, posting a `CallStyle` notification (the call's name, In a call, the system's Hang up, a tap back into the app) as it starts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `CallRoutes.kt`         | Where the call plays                                                         | Telecom's endpoints for the call, each with a kind from its type; selection by kind through `requestEndpointChange`, kept as the call's `chosen` kind and applied once Telecom lists the endpoints; the proximity sensor while the route is the earpiece                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `AspenCallPlugin.kt`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks for `RECORD_AUDIO` (Capacitor's permission callback), opens the microphone, names the call for Telecom, and joins; each snapshot's JSON (`CallSnapshots.listenJson`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered by name in `MainActivity`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `CallVideo.kt`          | Where video is drawn                                                         | A container behind the web view with one `SurfaceViewRenderer` per hole the page reports, each drawing its surface's track; see Video below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `CallCamera.kt`         | The camera                                                                   | `Camera2Enumerator`'s capturer into one `VideoSource` and track for the process, listed with each camera's facing, moved between cameras with the track kept; see Video below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `AspenCallPlugin.kt`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks for `RECORD_AUDIO` (Capacitor's permission callback), opens the microphone, names the call for Telecom, and joins; each snapshot's JSON (`CallSnapshots.listenJson`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered by name in `MainActivity`; the cameras, `startCamera`, `switchCamera`, `stopCamera`, `clearCameraError`, `setWatched`, and `setTiles`, with `shape` and `pip` events back; attaches `CallVideo` to the activity's container as it loads                                                                                                                                                                                                                                                                                           |
 
 Where it differs from iOS: the iOS layer keeps WebRTC's transceiver objects, whose lifetime is the
 connection's; Android's are read anew each time, as above. iOS's audio session is configured and
@@ -188,45 +191,134 @@ the other's sound (the browser's as the loudest sample off its received tracks, 
 each track in), puts the call on hold and releases it (the browser's report, `onHold` in
 `calls/page.ts`, lists the device's user meanwhile, neither side's packets reach the other, and the
 release waits for the server's word), cuts its socket and watches the engine take its place back
-with `resume`, and leaves; its log line also names what the signalling socket negotiated. Around
-that it checks the system's side: Telecom holds the call as outgoing (`dialing`) and then active,
-and `dumpsys telecom` (run through the instrumentation's shell) names the call by the id Telecom
-gave it; the call's service runs in the foreground with its `CallStyle` notification posted, and the
-audio mode is the communication mode; the routes are Telecom's endpoints, each with a kind, one
-current, and selecting the loudspeaker (and the earpiece again, where the device has one) moves the
-call there; and leaving ends Telecom's call, stops the service, takes the notification down, empties
-the routes, and gives the audio mode back. What the browser must hear is what the device's
-microphone carried, which the device's own `media-source` statistics tell: sound, when a tone is
-played to it, or silence, as on an emulator whose host audio never reaches it. `AspenCallPluginTest`
-drives the bridge itself: it launches `MainActivity`, which loads the web shell with the plugin
-registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page through the bridge's web
-view, as the app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON,
-idle, revision 0, of its origin) and the empty routes of no call, has malformed commands refused by
-name, joins the channel through the plugin and watches the `joining` and `connected` snapshots reach
-the page, moves the call to the loudspeaker (and the earpiece again, where the device has one) and
-watches the `routes` events say so as Telecom's current endpoint changes, clears the choice, mutes
-and unmutes, and leaves: the snapshots arrive in revision order with none twice, a fresh `state()`
-is the latest published, the renewed session token is kept, and the routes empty again.
+with `resume`, and leaves; its log line also names what the signalling socket negotiated. Between
+the hold and the cut it proves the video both ways: the browser shows video and turns Chromium's
+fake camera on, the engine is asked to watch it, and the track that arrives is retained as
+`CallVideo` retains one and given a sink that counts its frames (at least five) and reads their
+upright shape (drawing needs a window, which the bridge's proof has); then the emulator's front
+camera is opened through `CallCamera` and sent as the engine's camera, its own frames counted with
+their rotation, and the browser decodes its frames (`framesDecoded` in `calls/page.ts`'s report) and
+sees a picture in them (`cameraSample`: a frame drawn to a canvas, brighter than black); the camera
+is moved to the back camera with the track kept; video flows on across the resume; and the camera is
+stopped before the leave. Around that it checks the system's side: Telecom holds the call as
+outgoing (`dialing`) and then active, and `dumpsys telecom` (run through the instrumentation's
+shell) names the call by the id Telecom gave it; the call's service runs in the foreground with its
+`CallStyle` notification posted, and the audio mode is the communication mode; the routes are
+Telecom's endpoints, each with a kind, one current, and selecting the loudspeaker (and the earpiece
+again, where the device has one) moves the call there; and leaving ends Telecom's call, stops the
+service, takes the notification down, empties the routes, and gives the audio mode back. What the
+browser must hear is what the device's microphone carried, which the device's own `media-source`
+statistics tell: sound, when a tone is played to it, or silence, as on an emulator whose host audio
+never reaches it. `AspenCallPluginTest` drives the bridge itself: it launches `MainActivity`, which
+loads the web shell with the plugin registered, and runs `Capacitor.registerPlugin("AspenCall")` in
+the page through the bridge's web view, as the app's `NativeCall` does. From the page it reads a
+fresh snapshot (the engine's JSON, idle, revision 0, of its origin) and the empty routes of no call,
+has malformed commands refused by name, joins the channel through the plugin and watches the
+`joining` and `connected` snapshots reach the page, moves the call to the loudspeaker (and the
+earpiece again, where the device has one) and watches the `routes` events say so as Telecom's
+current endpoint changes, clears the choice, mutes and unmutes, and then drives the video:
+`cameras()` lists the emulator's cameras with their facings, `startCamera` opens the front one and
+the snapshot shows the camera among `sources`, a hole reported with `setTiles` for its track has its
+shape come back as a `shape` event and its surface view laid out at the hole's rectangle in device
+pixels and drawing (`onFirstFrameRendered`), `switchCamera` moves to the back one, a second
+participant from the browser turns its camera on and `setWatched` has the snapshot show its track,
+whose hole hears its shape and draws too, the activity enters the picture-in-picture mode on it
+(`enterPictureInPicture`, standing for the user's leaving) and the page hears `pip` while
+`isInPictureInPictureMode` holds, starting the activity again leaves the mode and the page hears
+that too, the browser decodes the camera, malformed `setWatched` and `setTiles` are refused by name,
+and `stopCamera` takes the source out of the snapshot and the capture off; then it leaves: the
+snapshots arrive in revision order with none twice, a fresh `state()` is the latest published, the
+renewed session token is kept, and the routes empty again.
 `scripts/check_mobile_call.py --platform android` at the repository's root runs both end to end,
 with the same deployment and browser the iOS check uses: a deployment of its own serving the call
 page (`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the
 voice server, and the script's helper at its own loopback (plain HTTP there, as a development build
 allows; media goes to the voice server's announced address over the network), Chromium as the second
-participant with a tone WAV as its microphone (`calls/second.ts`), and
-`gradlew connectedDebugAndroidTest` on these two tests alone, judging their JUnit reports (two
-tests, none failed, erred, or skipped) and that each printed its own line, with `ANDROID_SERIAL` set
-to the emulator's serial so a phone plugged in beside it is never touched. With `--avd` it starts
-the emulator headless, recording the machine's microphone (`-allow-host-audio`, without which the
-emulator records silence); the emulator's PulseAudio backend does not start against PipeWire's
-server (``Could not init `pa' audio driver``), so there its microphone is silent and the test checks
-the browser hears silence. The test reads its deployment, channel, user, refresh token, and the
-script's helper from the instrumentation's arguments
+participant with a tone WAV as its microphone and its fake camera (`calls/second.ts`, which the
+script's helper drives: showing video, the camera on and off, and a frame of someone's camera
+sampled), and `gradlew connectedDebugAndroidTest` on these two tests alone, judging their JUnit
+reports (two tests, none failed, erred, or skipped) and that each printed its own line, with
+`ANDROID_SERIAL` set to the emulator's serial so a phone plugged in beside it is never touched. With
+`--avd` it starts the emulator headless, recording the machine's microphone (`-allow-host-audio`,
+without which the emulator records silence); the emulator's PulseAudio backend does not start
+against PipeWire's server (``Could not init `pa' audio driver``), so there its microphone is silent
+and the test checks the browser hears silence. The test reads its deployment, channel, user, refresh
+token, and the script's helper from the instrumentation's arguments
 (`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is
 skipped without them, so the `android` job's `connectedDebugAndroidTest` runs it as a skip. CI's
 `android-call` job runs the check itself: it builds the servers, the engine for the emulator, and
 the web shell, and runs `check_mobile_call.py --start-services` inside the emulator action's step,
 against the emulator it started (no `--avd`), whose audio is off, so there too the test checks the
 browser hears silence.
+
+### Video
+
+The page draws no picture itself: every picture is a surface the phone draws behind a transparent
+web view, where the page leaves a hole (`voice/native-calls.md`, Video). The app's copy of
+Capacitor's layout (`res/layout/capacitor_bridge_layout_main.xml`) puts a `FrameLayout`,
+`video_container`, black, beneath the web view; `AspenCallPlugin` attaches `CallEngine.video` to it
+as it loads and makes the web view's background transparent, so a hole shows black until its first
+frame, as a `<video>` with nothing to play does.
+
+- **Tiles** (`CallVideo.apply`, from the plugin's `setTiles`): one `SurfaceViewRenderer` per hole
+  the page reports, keyed by the page's tile id, made as a tile first appears and released as it
+  goes, on the factory's EGL context (`CallPeerConnections.eglContext`, which the codecs and the
+  camera's texture share). Surface views lie behind the window by design, so the transparent web
+  view shows them through its holes; a self preview (a mirrored tile) is ordered above the other
+  pictures with `setZOrderMediaOverlay`, still beneath the window. Each is laid out where the page
+  says, the page's CSS pixels times the display's density, from where the web view lies in the
+  container; a full-screen tile takes the container's own size, laid out again on its layout change.
+  A tile's `cover` is `SCALE_ASPECT_FILL`, otherwise `SCALE_ASPECT_FIT`; `mirrored` is the view's
+  mirror. The picture's shape, upright, is reported as the first frame arrives and whenever it
+  changes (`RendererEvents.onFrameResolutionChanged`, as `shape` events to the page), and the frames
+  handed to each view are counted for the proof.
+- **Received tracks are retained** (`CallTracks.retainedVideoTrack`, `org.webrtc.TrackRefs`):
+  `PeerConnection.getTransceivers()` makes new Java wrappers of the transceivers, receivers, and
+  tracks on every call and disposes those it made before, and a disposed `VideoTrack` wrapper takes
+  the sinks it added with it, so a renderer added through one of those wrappers would stop drawing
+  at the engine's next read of the transceivers. `TrackRefs`, in WebRTC's own package since the
+  native pointer and the reference count are package-private there, holds a reference of its own on
+  the native track and wraps it anew; the wrapper lives until the renderer gives it back
+  (`releaseVideoTrack`). The build without the call layer excludes `org/webrtc/**` with the rest.
+- **The camera** (`CallCamera`, `CallEngine.camera`): one Camera2 capturer and one `VideoSource` and
+  track for the process, the frames through a `SurfaceTextureHelper` on the shared EGL context.
+  `startCamera` asks for `CAMERA` through Capacitor's permission callback, as `join` asks for the
+  microphone, then opens the camera chosen by Camera2's id, or the front camera, at most 1280 by 720
+  at 30 frames a second (the engine's encoding bounds what is sent), resolving once the first frame
+  arrives; the track goes to the engine as its `camera` source. `switchCamera` is the capturer's own
+  `switchCamera` to the named camera, the track kept, so the engine's sender needs nothing. Camera2
+  names no camera, so the page names each by its facing. The camera is on only while its engine
+  sends it: the plugin follows the snapshots and stops the capture when the call ends or the voice
+  server refuses the camera. A failure to open is `denied`, `none`, or `failed`
+  (`CallCameraFailure`), the plugin's rejection code and the page's `cameraError`. While the camera
+  is on, `CallService` is started again with the `camera` foreground service type beside `phoneCall`
+  and `microphone` (`setCamera`; the manifest declares the type and `FOREGROUND_SERVICE_CAMERA`), so
+  the camera may go on while the app is not in front, and the type comes off as the camera does.
+- **Picture in picture**: the activity declares `supportsPictureInPicture`, and its configuration
+  changes keep it, and so the call's page, through the shrink and the turn. The tile the page marks
+  `pictureInPicture` sets the activity's `PictureInPictureParams`: the picture's aspect ratio
+  (within the 1:2.39 to 2.39:1 the system allows) and its bounds as the source rectangle, and from
+  Android 12 `setAutoEnterEnabled`, so the activity enters the mode itself as the user leaves;
+  before Android 12 the plugin enters it in `onUserLeaveHint`. `MainActivity` tells the plugin of
+  both through `CallPictureInPictureHost` (in the app's main package, so a build without the call
+  layer has it), and the plugin tells the page as `pip` events; the page then shows that one picture
+  alone, filling the shrunken page, whose hole the surface view follows.
+
+The page's own motion is the design's known weak point: a picture follows its hole a frame or two
+behind while the hole moves, since the page measures and reports rectangles after it has laid them
+out. The call screen on a phone pages rather than scrolls for that reason (`voice/call-screen.md`,
+On a phone). `scripts/check_mobile_call.py --record-trailing` measures it: the bridge's test
+`pictureFollowsAMovingHole` hides the page, moves a red-bordered box across the screen and back
+(three passes of 200 CSS pixels in 800 ms each) reporting its inside as a hole every animation frame
+with the emulator's camera drawn in it, `adb shell screenrecord` records the screen around it, and
+`scripts/measure_video_trailing.py` reads every recorded frame for how far the picture's left edge
+is from the border's inside against the direction of motion. On the emulator (`aspen-test`, API 36,
+x86-64, software rendering), which keeps a recorded frame only when the screen changes and showed
+the box in steps of about 20 CSS pixels: 29 moving frames, the picture behind its hole by a median
+of 2.4 CSS pixels and at worst 4.5, never ahead by more than 2.4, which at the box's speed is under
+a frame (a median of 0.5 ms, at worst 12 ms); so the surface view and the page reach the screen in
+the same frame most of the time and never more than one apart. Judging it by eye on a device, at a
+phone's own frame rate, is on the checklist.
 
 ### What only a phone can show
 
@@ -255,5 +347,20 @@ interface commands the engine:
       use the system attributes to it recorded.
 - [ ] Android 8 to 13 (the `ConnectionService` path): the call appears in the phone's call screen,
       the same holds and resumes, and the foreground service alone keeps the process alive.
+- [ ] The camera: the front camera's preview is mirrored and upright however the phone is held, the
+      back camera's is not mirrored, the flip moves between them with the picture pausing only for
+      the camera's own start, and the other side sees the picture upright through a turn.
+- [ ] The camera in the background: with the app behind another, or in the picture-in-picture
+      window, the camera stays on under the service's `camera` type and the others keep seeing it.
+- [ ] The picture in picture: leaving the app (home, recents) while someone's camera or screen shows
+      enters the mode on the focused screen (else the first camera of someone else), the page shows
+      that picture alone in the window, the window's shape is the picture's, and opening the app
+      again leaves the mode; on a phone before Android 12 the plugin enters it from
+      `onUserLeaveHint`.
+- [ ] Rotation: a full-screen picture turns with the phone without a flash of the old layout, and
+      the paged tiles lay out again behind their holes after a turn.
+- [ ] Trailing by eye: while paging between tiles and while a transition moves one, the surface view
+      follows its hole; frame-step a screen recording (`adb shell screenrecord`) and judge how far
+      it trails and whether the paged grid hides it.
 - [ ] A phone without an earpiece (a tablet): `hasEarpiece` is false and the routes are the
       loudspeaker and whatever is connected.

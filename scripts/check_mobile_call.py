@@ -45,7 +45,8 @@ build then runs the test (`connectedDebugAndroidTest`), which needs the web shel
 screen with the camera drawn in it (`testPictureFollowsAMovingHole`, `pictureFollowsAMovingHole`)
 while the simulator's or emulator's screen is recorded, and leaves the recording as
 `target/mobile-call/trailing-<platform>.mp4` for `scripts/measure_video_trailing.py`, which says
-how far the native picture trails the page's box in each frame.
+how far the native picture trails the page's box in each frame. It needs no deployment, so none is
+run and nothing is tunnelled or reversed.
 
 Both need the client's dependencies installed here and Playwright's Chromium.
 """
@@ -303,29 +304,25 @@ class Ios:
         the recording here."""
         if self.runner != "xcodebuild":
             raise Failed("--record-trailing runs through xcodebuild")
-        tunnel = tunnels(self.mac)
-        try:
-            ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
-            remote = "/tmp/aspen-trailing-ios.mp4"
-            # The recorder ends, and writes the file out, on an interrupt; it runs on the Mac's own
-            # shell so the signal reaches it rather than the ssh session.
-            ssh_output(self.mac, f"rm -f {remote}; nohup xcrun simctl io booted recordVideo --codec h264 --force {remote} "
-                                 f">/tmp/aspen-trailing-ios.log 2>&1 & echo $! > /tmp/aspen-trailing-ios.pid")
-            time.sleep(2)
-            say("recording the simulator while the hole moves")
-            environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items())
-            code = ssh(self.mac,
-                       f"cd {self.project} && {environment} {self.xcodebuild} test-without-building -only-testing:{IOS_TRAILING_TEST} 2>&1 "
-                       "| grep -E 'Test Case|call-plugin-test|error:|TEST' ; exit ${pipestatus[1]}",
-                       timeout=600, log=WORK / "trailing-test.log")
-            ssh_output(self.mac, "kill -INT $(cat /tmp/aspen-trailing-ios.pid); sleep 3")
-            if code != 0 or "recorded the picture" not in (WORK / "trailing-test.log").read_text():
-                raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test.log'}")
-            recording = WORK / "trailing-ios.mp4"
-            subprocess.run(["scp", "-q", f"{self.mac}:{remote}", str(recording)], check=True)
-            return recording
-        finally:
-            tunnel.terminate()
+        ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
+        remote = "/tmp/aspen-trailing-ios.mp4"
+        # The recorder ends, and writes the file out, on an interrupt; it runs on the Mac's own
+        # shell so the signal reaches it rather than the ssh session.
+        ssh_output(self.mac, f"rm -f {remote}; nohup xcrun simctl io booted recordVideo --codec h264 --force {remote} "
+                             f">/tmp/aspen-trailing-ios.log 2>&1 & echo $! > /tmp/aspen-trailing-ios.pid")
+        time.sleep(2)
+        say("recording the simulator while the hole moves")
+        environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items())
+        code = ssh(self.mac,
+                   f"cd {self.project} && {environment} {self.xcodebuild} test-without-building -only-testing:{IOS_TRAILING_TEST} 2>&1 "
+                   "| grep -E 'Test Case|call-plugin-test|error:|TEST' ; exit ${pipestatus[1]}",
+                   timeout=600, log=WORK / "trailing-test-ios.log")
+        ssh_output(self.mac, "kill -INT $(cat /tmp/aspen-trailing-ios.pid); sleep 3")
+        if code != 0 or "recorded the picture" not in (WORK / "trailing-test-ios.log").read_text():
+            raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test-ios.log'}")
+        recording = WORK / "trailing-ios.mp4"
+        subprocess.run(["scp", "-q", f"{self.mac}:{remote}", str(recording)], check=True)
+        return recording
 
     def run(self, variables: dict[str, str]) -> None:
         tunnel = tunnels(self.mac)
@@ -477,8 +474,6 @@ class Android:
         remote = "/sdcard/aspen-trailing.mp4"
         recorder = None
         try:
-            for port in (PORTS.api, PORTS.voice, HELPER_PORT):
-                adb("reverse", f"tcp:{port}", f"tcp:{port}", serial=serial)
             adb("shell", "rm", "-f", remote, serial=serial)
             recorder = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "shell", "screenrecord",
                                          "--time-limit", "120", remote], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -488,21 +483,19 @@ class Android:
                          for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items()]
             code = self.gradle(":app:connectedDebugAndroidTest",
                                f"-Pandroid.testInstrumentationRunnerArguments.class={ANDROID_TRAILING_TEST}",
-                               *arguments, log=WORK / "trailing-test.log")
+                               *arguments, log=WORK / "trailing-test-android.log")
             adb("shell", "pkill", "-INT", "screenrecord", serial=serial)
             recorder.wait(timeout=30)
             recorder = None
             logcat = adb("logcat", "-d", serial=serial, timeout=120)
             if code != 0 or "recorded the picture" not in logcat:
-                raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test.log'}")
+                raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test-android.log'}")
             recording = WORK / "trailing-android.mp4"
             adb("pull", remote, str(recording), serial=serial, timeout=120)
             return recording
         finally:
             if recorder is not None:
                 recorder.kill()
-            for port in (PORTS.api, PORTS.voice, HELPER_PORT):
-                adb("reverse", "--remove", f"tcp:{port}", serial=serial)
             if self.emulator is not None:
                 self.emulator.stop()
 
@@ -567,6 +560,10 @@ def main() -> None:
         platform = Ios(args) if args.platform == "ios" else Android(args)
         if args.build:
             platform.build()
+        if args.record_trailing:
+            recording = platform.record_trailing({})
+            say(f"recorded {recording}; measure it with scripts/measure_video_trailing.py")
+            return
         if args.start_services:
             start_services()
         build_page()
@@ -598,11 +595,7 @@ def main() -> None:
                 "ASPEN_CALL_HELPER": f"http://127.0.0.1:{HELPER_PORT}",
             }
             try:
-                if args.record_trailing:
-                    recording = platform.record_trailing(variables)
-                    say(f"recorded {recording}; measure it with scripts/measure_video_trailing.py")
-                else:
-                    platform.run(variables)
+                platform.run(variables)
             finally:
                 second.leave()
                 server.shutdown()
