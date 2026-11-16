@@ -10,29 +10,39 @@
 //!   `call_bridge_schema.json`, which `state` describes. `HttpRequest` and `HttpResponse` carry
 //!   their headers as `Header` records rather than pairs; `SenderParameters` carries `rest` as
 //!   JSON text rather than a value.
-//! - `TransportError` and `PeerConnectionError` are error enums of one variant, `Failed`, with
-//!   the platform's words as `detail` (not `message`, which Kotlin's exceptions already have),
-//!   since UniFFI's errors are enums and a flat one cannot be raised by foreign code; both take
-//!   an exception the platform did not declare as that detail too.
+//! - `TransportError`, `PeerConnectionError`, and `FileError` are error enums of one variant,
+//!   `Failed`, with the platform's words as `detail` (not `message`, which Kotlin's exceptions
+//!   already have), since UniFFI's errors are enums and a flat one cannot be raised by foreign
+//!   code; each takes an exception the platform did not declare as that detail too.
 //! - `Options` has no `random`: the engine draws from `call::Options::system_random`.
-//! - `SocketFactory::connect` and `PeerConnectionFactory::create` answer a record holding what
-//!   they made (`ConnectedSocket`, `CreatedPeerConnection`) rather than the trait object.
-//! - `Socket::close` and `PeerConnection::close` are `close_socket` and `close_peer_connection`,
-//!   since the Kotlin classes UniFFI generates are `AutoCloseable`.
+//! - `SocketFactory::connect`, `PeerConnectionFactory::create`, `PeerConnection::create_data_channel`,
+//!   `Files::open`, and `Files::create_sink` answer a record holding what they made
+//!   (`ConnectedSocket`, `CreatedPeerConnection`, `CreatedDataChannel`, `OpenedFile`,
+//!   `CreatedSink`) rather than the trait object.
+//! - `Socket::close`, `PeerConnection::close`, `DataChannel::close`, and `FileSource::close` are
+//!   `close_socket`, `close_peer_connection`, `close_data_channel`, and `close_source`, since the
+//!   Kotlin classes UniFFI generates are `AutoCloseable`; `Files::open` is `open_file`, since
+//!   `open` is a Swift keyword, which the generator escapes in the C header too, where it cannot
+//!   be.
 //! - The traits the platforms implement (`Http`, `Socket`, `SocketFactory`, `PeerConnection`,
-//!   `PeerConnectionFactory`, `CallObserver`) are declared again here over the mirrored types,
-//!   and each foreign implementation is wrapped to implement the engine's trait.
+//!   `PeerConnectionFactory`, `DataChannel`, `Files`, `FileSource`, `FileSink`, `CallObserver`)
+//!   are declared again here over the mirrored types, and each foreign implementation is wrapped
+//!   to implement the engine's trait; the two the engine implements and hands to the platform
+//!   (`PeerConnectionObserver`, `DataChannelObserver`) are declared again the same way, and each
+//!   of the engine's is wrapped to implement the one declared here.
 //!
-//! Every trait method is called on the engine's thread. A foreign implementation of a method
-//! that returns no `Result` must not throw: UniFFI has nowhere to put the exception, and the
-//! engine's thread ends. An `Engine` must not be released from inside `CallObserver`, which runs
-//! on the thread releasing it waits for.
+//! Every trait method is called on the engine's thread or a task of its runtime, except the
+//! observers', which the platform calls from its WebRTC threads. A foreign implementation of a
+//! method that returns no `Result` must not throw: UniFFI has nowhere to put the exception, and
+//! the engine's thread ends. An `Engine` must not be released from inside `CallObserver`, which
+//! runs on the thread releasing it waits for.
 
 use crate::api::Credentials;
 use crate::call;
 use crate::engine;
+use crate::files;
 use crate::peer_connection::{
-    self, Configuration, ConnectionState, Direction, MediaKind, PeerConnectionObserver,
+    self, Configuration, ConnectionState, DataChannelState, Direction, IceCandidate, MediaKind,
     SendEncoding, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
 use crate::sounds::SoundCue;
@@ -42,7 +52,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use uuid::Uuid;
 use voice_protocol::signal::Grants;
-use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
+use voice_protocol::signal::{
+    MediaSource, SourceInfo, TransferLink, TransferMode, TransferRole, WatchedVideo,
+};
 
 uniffi::custom_type!(Uuid, String, {
     remote,
@@ -91,6 +103,27 @@ pub struct Grants {
     pub share_screen: bool,
     pub camera: bool,
     pub transfer_files: bool,
+}
+
+/// How a transfer travels, as the person receiving it chose.
+#[uniffi::remote(Enum)]
+pub enum TransferMode {
+    DirectPreferred,
+    RelayOnly,
+}
+
+/// Which end of a transfer a participant is.
+#[uniffi::remote(Enum)]
+pub enum TransferRole {
+    Sender,
+    Receiver,
+}
+
+/// A transfer under way in the call, as everyone in it is told: who sends to whom.
+#[uniffi::remote(Record)]
+pub struct TransferLink {
+    pub sender: Uuid,
+    pub receiver: Uuid,
 }
 
 /// Reads each snapshot as the call changes, as the record and as the same snapshot's JSON, for
@@ -163,6 +196,249 @@ impl From<PeerConnectionError> for peer_connection::PeerConnectionError {
         let PeerConnectionError::Failed { detail } = error;
         Self(detail)
     }
+}
+
+/// What the platform could not do with a file (`files::FileError`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
+pub enum FileError {
+    #[error("{detail}")]
+    Failed { detail: String },
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for FileError {
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed {
+            detail: error.reason,
+        }
+    }
+}
+
+impl From<FileError> for files::FileError {
+    fn from(error: FileError) -> Self {
+        let FileError::Failed { detail } = error;
+        Self(detail)
+    }
+}
+
+/// A file the user offered, opened for one transfer of it (`files::FileSource`): read from its
+/// start, in order, `read` giving at most `max_bytes` and nothing once it has ended.
+#[uniffi::export(with_foreign)]
+#[async_trait]
+pub trait FileSource: Send + Sync {
+    /// The file's size in bytes as the platform has it when opened.
+    fn size(&self) -> u64;
+    async fn read(&self, max_bytes: u64) -> Result<Vec<u8>, FileError>;
+    /// Done reading. (Not `close`, for the reason `Socket::close_socket` is not.)
+    fn close_source(&self);
+}
+
+struct ForeignSource(Arc<dyn FileSource>);
+
+#[async_trait]
+impl files::FileSource for ForeignSource {
+    fn size(&self) -> u64 {
+        self.0.size()
+    }
+
+    async fn read(&self, max_bytes: u64) -> Result<Vec<u8>, files::FileError> {
+        Ok(self.0.read(max_bytes).await?)
+    }
+
+    fn close(&self) {
+        self.0.close_source();
+    }
+}
+
+/// A file being received, in the place its receiver chose (`files::FileSink`): written in
+/// order, kept by `finish` once every byte is in, and removed by `discard` when the transfer
+/// ended otherwise, since it holds only part of what was sent.
+#[uniffi::export(with_foreign)]
+#[async_trait]
+pub trait FileSink: Send + Sync {
+    async fn write(&self, data: Vec<u8>) -> Result<(), FileError>;
+    async fn finish(&self) -> Result<(), FileError>;
+    async fn discard(&self);
+}
+
+struct ForeignSink(Arc<dyn FileSink>);
+
+#[async_trait]
+impl files::FileSink for ForeignSink {
+    async fn write(&self, data: Vec<u8>) -> Result<(), files::FileError> {
+        Ok(self.0.write(data).await?)
+    }
+
+    async fn finish(&self) -> Result<(), files::FileError> {
+        Ok(self.0.finish().await?)
+    }
+
+    async fn discard(&self) {
+        self.0.discard().await;
+    }
+}
+
+/// A file `Files::open` opened; a record for the reason `ConnectedSocket` is one.
+#[derive(uniffi::Record)]
+pub struct OpenedFile {
+    pub source: Arc<dyn FileSource>,
+}
+
+/// A place `Files::create_sink` opened; a record for the reason `ConnectedSocket` is one.
+#[derive(uniffi::Record)]
+pub struct CreatedSink {
+    pub sink: Arc<dyn FileSink>,
+}
+
+/// The platform's files, by the references it gave the page (`files::Files`): a picked file to
+/// read for a transfer (`open_file`, each transfer of an offer opening it anew), let go once
+/// nothing offers or sends it (`release`), and a place the user chose to write a file into
+/// (`create_sink`).
+#[uniffi::export(with_foreign)]
+#[async_trait]
+pub trait Files: Send + Sync {
+    /// (Not `open`, a Swift keyword.)
+    async fn open_file(&self, reference: String) -> Result<OpenedFile, FileError>;
+    fn release(&self, reference: String);
+    async fn create_sink(&self, destination: String) -> Result<CreatedSink, FileError>;
+}
+
+struct ForeignFiles(Arc<dyn Files>);
+
+#[async_trait]
+impl files::Files for ForeignFiles {
+    async fn open(
+        &self,
+        reference: String,
+    ) -> Result<Arc<dyn files::FileSource>, files::FileError> {
+        let opened = self.0.open_file(reference).await?;
+        Ok(Arc::new(ForeignSource(opened.source)))
+    }
+
+    fn release(&self, reference: String) {
+        self.0.release(reference);
+    }
+
+    async fn create_sink(
+        &self,
+        destination: String,
+    ) -> Result<Arc<dyn files::FileSink>, files::FileError> {
+        let created = self.0.create_sink(destination).await?;
+        Ok(Arc::new(ForeignSink(created.sink)))
+    }
+}
+
+/// One data channel, ordered and reliable (`peer_connection::DataChannel`): `send_binary` and
+/// `send_text` queue a message and fail only when the channel is not open; `buffered_amount` is
+/// what is queued and not yet sent, and the observer's `buffered_amount_low` is called when it
+/// falls to the threshold set here or below it, from above.
+#[uniffi::export(with_foreign)]
+pub trait DataChannel: Send + Sync {
+    fn send_binary(&self, data: Vec<u8>) -> Result<(), PeerConnectionError>;
+    fn send_text(&self, text: String) -> Result<(), PeerConnectionError>;
+    fn buffered_amount(&self) -> u64;
+    fn set_buffered_amount_low_threshold(&self, bytes: u64);
+    fn state(&self) -> DataChannelState;
+    /// Closes the channel, sending what it holds first. (Not `close`, for the reason
+    /// `Socket::close_socket` is not.)
+    fn close_data_channel(&self);
+}
+
+struct ForeignDataChannel(Arc<dyn DataChannel>);
+
+impl peer_connection::DataChannel for ForeignDataChannel {
+    fn send_binary(&self, data: Vec<u8>) -> Result<(), peer_connection::PeerConnectionError> {
+        Ok(self.0.send_binary(data)?)
+    }
+
+    fn send_text(&self, text: String) -> Result<(), peer_connection::PeerConnectionError> {
+        Ok(self.0.send_text(text)?)
+    }
+
+    fn buffered_amount(&self) -> u64 {
+        self.0.buffered_amount()
+    }
+
+    fn set_buffered_amount_low_threshold(&self, bytes: u64) {
+        self.0.set_buffered_amount_low_threshold(bytes);
+    }
+
+    fn state(&self) -> DataChannelState {
+        self.0.state()
+    }
+
+    fn close(&self) {
+        self.0.close_data_channel();
+    }
+}
+
+/// What the engine hears of a data channel (`peer_connection::DataChannelObserver`): the
+/// platform calls these from its WebRTC thread, each message whole and in the order sent,
+/// binary and text told apart as the sender sent them.
+#[uniffi::export]
+pub trait DataChannelObserver: Send + Sync {
+    fn state_changed(&self, state: DataChannelState);
+    fn binary(&self, data: Vec<u8>);
+    fn text(&self, text: String);
+    /// The bytes waiting to be sent fell to the threshold `set_buffered_amount_low_threshold`
+    /// gave, or below it, from above.
+    fn buffered_amount_low(&self);
+}
+
+struct ExportedChannelObserver(Arc<dyn peer_connection::DataChannelObserver>);
+
+impl DataChannelObserver for ExportedChannelObserver {
+    fn state_changed(&self, state: DataChannelState) {
+        self.0.state_changed(state);
+    }
+
+    fn binary(&self, data: Vec<u8>) {
+        self.0.binary(data);
+    }
+
+    fn text(&self, text: String) {
+        self.0.text(text);
+    }
+
+    fn buffered_amount_low(&self) {
+        self.0.buffered_amount_low();
+    }
+}
+
+/// What the engine hears of a peer connection (`peer_connection::PeerConnectionObserver`): the
+/// platform calls these from its WebRTC thread. The observer `data_channel_opened` answers
+/// reads the channel from then on, the messages that arrived before it was asked for included,
+/// in order.
+#[uniffi::export]
+pub trait PeerConnectionObserver: Send + Sync {
+    fn connection_state_changed(&self, state: ConnectionState);
+    fn ice_candidate(&self, candidate: IceCandidate);
+    fn data_channel_opened(&self, channel: Arc<dyn DataChannel>) -> Arc<dyn DataChannelObserver>;
+}
+
+struct ExportedConnectionObserver(Arc<dyn peer_connection::PeerConnectionObserver>);
+
+impl PeerConnectionObserver for ExportedConnectionObserver {
+    fn connection_state_changed(&self, state: ConnectionState) {
+        self.0.connection_state_changed(state);
+    }
+
+    fn ice_candidate(&self, candidate: IceCandidate) {
+        self.0.ice_candidate(candidate);
+    }
+
+    fn data_channel_opened(&self, channel: Arc<dyn DataChannel>) -> Arc<dyn DataChannelObserver> {
+        let observer = self
+            .0
+            .data_channel_opened(Arc::new(ForeignDataChannel(channel)));
+        Arc::new(ExportedChannelObserver(observer))
+    }
+}
+
+/// A data channel `PeerConnection::create_data_channel` opened; a record for the reason
+/// `ConnectedSocket` is one.
+#[derive(uniffi::Record)]
+pub struct CreatedDataChannel {
+    pub channel: Arc<dyn DataChannel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -374,10 +650,16 @@ impl peer_connection::PeerConnectionFactory for ForeignPeerConnections {
     async fn create(
         &self,
         configuration: Configuration,
-        observer: Arc<dyn PeerConnectionObserver>,
+        observer: Arc<dyn peer_connection::PeerConnectionObserver>,
     ) -> Result<Arc<dyn peer_connection::PeerConnection>, peer_connection::PeerConnectionError>
     {
-        let created = self.0.create(configuration, observer).await?;
+        let created = self
+            .0
+            .create(
+                configuration,
+                Arc::new(ExportedConnectionObserver(observer)),
+            )
+            .await?;
         Ok(Arc::new(ForeignPeerConnection(created.connection)))
     }
 }
@@ -397,6 +679,15 @@ pub trait PeerConnection: Send + Sync {
         &self,
         description: SessionDescription,
     ) -> Result<(), PeerConnectionError>;
+    /// Adds a candidate of the other side's, after its description.
+    async fn add_ice_candidate(&self, candidate: IceCandidate) -> Result<(), PeerConnectionError>;
+    /// Opens an ordered, reliable data channel labelled `label` for the other side to receive,
+    /// read by `observer` from the start; negotiated by the next offer.
+    async fn create_data_channel(
+        &self,
+        label: String,
+        observer: Arc<dyn DataChannelObserver>,
+    ) -> Result<CreatedDataChannel, PeerConnectionError>;
     fn local_description(&self) -> Option<SessionDescription>;
     fn signaling_state(&self) -> SignalingState;
     async fn add_transceiver(
@@ -473,6 +764,22 @@ impl peer_connection::PeerConnection for ForeignPeerConnection {
         description: SessionDescription,
     ) -> PeerConnectionResult<()> {
         Ok(self.0.set_remote_description(description).await?)
+    }
+
+    async fn add_ice_candidate(&self, candidate: IceCandidate) -> PeerConnectionResult<()> {
+        Ok(self.0.add_ice_candidate(candidate).await?)
+    }
+
+    async fn create_data_channel(
+        &self,
+        label: String,
+        observer: Arc<dyn peer_connection::DataChannelObserver>,
+    ) -> PeerConnectionResult<Arc<dyn peer_connection::DataChannel>> {
+        let created = self
+            .0
+            .create_data_channel(label, Arc::new(ExportedChannelObserver(observer)))
+            .await?;
+        Ok(Arc::new(ForeignDataChannel(created.channel)))
     }
 
     fn local_description(&self) -> Option<SessionDescription> {
@@ -582,6 +889,7 @@ pub struct Platform {
     pub http: Arc<dyn Http>,
     pub sockets: Arc<dyn SocketFactory>,
     pub peer_connections: Arc<dyn PeerConnectionFactory>,
+    pub files: Arc<dyn Files>,
 }
 
 /// `call::Options`; the engine draws its random numbers itself.
@@ -614,6 +922,7 @@ impl Engine {
             http: Arc::new(ForeignHttp(platform.http)),
             sockets: Arc::new(ForeignSockets(platform.sockets)),
             peer_connections: Arc::new(ForeignPeerConnections(platform.peer_connections)),
+            files: Arc::new(ForeignFiles(platform.files)),
         };
         let options = call::Options {
             api_url: options.api_url,
@@ -701,5 +1010,43 @@ impl Engine {
 
     pub fn clear_source_refusal(&self) {
         self.0.clear_source_refusal();
+    }
+
+    /// Offers the picked file `reference` names (`Files::open`) to the call under `offer`, an id
+    /// the page chose, as `name`, for `valid_for_seconds`, letting receivers connect directly
+    /// when `allow_direct`. A file that cannot be opened is `state.files.failure`.
+    pub fn offer_file(
+        &self,
+        offer: Uuid,
+        reference: String,
+        name: String,
+        allow_direct: bool,
+        valid_for_seconds: u32,
+    ) {
+        self.0
+            .offer_file(offer, reference, name, allow_direct, valid_for_seconds);
+    }
+
+    pub fn withdraw_offer(&self, offer: Uuid) {
+        self.0.withdraw_offer(offer);
+    }
+
+    /// Accepts `offer` in `mode`, writing the file into the place `destination` names
+    /// (`Files::create_sink`), which the user chose first. A place that cannot be opened is
+    /// `state.files.failure`.
+    pub fn accept_offer(&self, offer: Uuid, mode: TransferMode, destination: String) {
+        self.0.accept_offer(offer, mode, destination);
+    }
+
+    pub fn cancel_transfer(&self, offer: Uuid, peer: Uuid) {
+        self.0.cancel_transfer(offer, peer);
+    }
+
+    pub fn dismiss_transfer(&self, offer: Uuid, peer: Uuid) {
+        self.0.dismiss_transfer(offer, peer);
+    }
+
+    pub fn clear_file_failure(&self) {
+        self.0.clear_file_failure();
     }
 }

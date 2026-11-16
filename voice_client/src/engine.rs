@@ -11,7 +11,7 @@ use crate::state::{CallObserver, CallState, SessionEndReason};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use voice_protocol::signal::{MediaSource, WatchedVideo};
+use voice_protocol::signal::{MediaSource, TransferMode, WatchedVideo};
 
 /// Keeps the latest snapshot for `Engine::state` and passes each on to the platform's observer.
 struct Keeping {
@@ -143,6 +143,53 @@ impl Engine {
 
     pub fn clear_source_refusal(&self) {
         self.send(Command::ClearSourceRefusal);
+    }
+
+    /// Offers the picked file `reference` names to the call under `offer`, an id the page chose,
+    /// as `name`, for `valid_for_seconds`, letting receivers connect directly when
+    /// `allow_direct`. The file is opened for its size first; a file that cannot be opened is
+    /// `state.files.failure`.
+    pub fn offer_file(
+        &self,
+        offer: Uuid,
+        reference: String,
+        name: String,
+        allow_direct: bool,
+        valid_for_seconds: u32,
+    ) {
+        self.send(Command::OfferFile {
+            offer,
+            reference,
+            name,
+            allow_direct,
+            valid_for_seconds,
+        });
+    }
+
+    pub fn withdraw_offer(&self, offer: Uuid) {
+        self.send(Command::WithdrawOffer(offer));
+    }
+
+    /// Accepts `offer` in `mode`, writing the file into the place `destination` names, which the
+    /// user chose first; a place that cannot be opened is `state.files.failure`.
+    pub fn accept_offer(&self, offer: Uuid, mode: TransferMode, destination: String) {
+        self.send(Command::AcceptOffer {
+            offer,
+            mode,
+            destination,
+        });
+    }
+
+    pub fn cancel_transfer(&self, offer: Uuid, peer: Uuid) {
+        self.send(Command::CancelTransfer { offer, peer });
+    }
+
+    pub fn dismiss_transfer(&self, offer: Uuid, peer: Uuid) {
+        self.send(Command::DismissTransfer { offer, peer });
+    }
+
+    pub fn clear_file_failure(&self) {
+        self.send(Command::ClearFileFailure);
     }
 }
 

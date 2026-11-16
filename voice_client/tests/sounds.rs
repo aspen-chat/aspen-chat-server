@@ -1,7 +1,8 @@
 //! The call's sounds as the observer is told to play them, from the engine's own transitions
-//! against the scripted fakes: one scenario for each cue the engine gives, and the changes that
-//! give none (a socket dropped and taken back within the grace, the user's own state echoed
-//! back, a snapshot read again).
+//! against the scripted fakes: one scenario for each cue the engine gives (the transfer cues'
+//! from the server's link frames and a file received whole through the fake data channel), and
+//! the changes that give none (a socket dropped and taken back within the grace, the user's own
+//! state echoed back, a snapshot read again).
 
 mod support;
 
@@ -11,9 +12,10 @@ use uuid::Uuid;
 use voice_client::call::{Command, READY_TIMEOUT, RESUME_GRACE};
 use voice_client::peer_connection::{ConnectionState, TrackId};
 use voice_client::sounds::SoundCue;
-use voice_client::state::{CallStatus, EndedReason, SessionEndReason};
+use voice_client::state::{CallStatus, EndedReason, SessionEndReason, TransferStatus};
 use voice_protocol::signal::{
     ClientMessage, KickReason, MediaSource, ParticipantInfo, ServerMessage, SourceInfo,
+    TransferLink, TransferMode, TransferRole,
 };
 
 const A: &str = "https://a.example.org";
@@ -487,5 +489,92 @@ async fn a_join_that_fails_says_nothing() {
     w.send(Command::Join { channel: w.channel });
     settle().await;
     assert_eq!(w.state().status, CallStatus::Failed);
+    assert_eq!(w.sounds(), vec![]);
+}
+
+/// `callSounds.test.ts`: "plays transferAccepted as transfers begin, for everyone's but not
+/// while deafened unless its own" and "plays transferComplete as the user's transfers arrive".
+#[tokio::test(start_paused = true)]
+async fn a_transfer_beginning_is_an_acceptance_and_one_arrived_whole_a_completion() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    w.sounds();
+    let (bob, carol) = (Uuid::now_v7(), Uuid::now_v7());
+    let link = |sender, receiver, active| ServerMessage::TransferLinkChanged {
+        link: TransferLink { sender, receiver },
+        active,
+    };
+    // A transfer between two others begins: heard, as everyone in the call hears an acceptance.
+    a.send(&link(bob, carol, true));
+    settle().await;
+    assert_eq!(w.sounds(), vec![SoundCue::TransferAccepted]);
+    // Another within the gap is heard as part of the first; one ending says nothing.
+    a.send(&link(carol, bob, true));
+    settle().await;
+    assert_eq!(w.sounds(), vec![]);
+    advance(Duration::from_secs(1)).await;
+    a.send(&link(bob, carol, false));
+    settle().await;
+    assert_eq!(w.sounds(), vec![]);
+    // Deafened, others' transfers are silent, and one the user is a side of is heard.
+    w.send(Command::SetDeafened(true));
+    settle().await;
+    w.sounds();
+    a.send(&link(bob, carol, true));
+    settle().await;
+    assert_eq!(w.sounds(), vec![]);
+    advance(Duration::from_secs(1)).await;
+    a.send(&link(bob, w.user, true));
+    settle().await;
+    assert_eq!(w.sounds(), vec![SoundCue::TransferAccepted]);
+    // The file Bob sends arrives whole, through the channel he opens: a completion, heard though
+    // the user is deafened, since it is their own.
+    advance(Duration::from_secs(1)).await;
+    let offer = Uuid::now_v7();
+    let bytes: Vec<u8> = (0..10u8).collect();
+    w.files.add_destination("chosen-1");
+    a.send(&offered(offer, bob, "a.bin", 10, true, 60_000));
+    settle().await;
+    w.send(Command::AcceptOffer {
+        offer,
+        mode: TransferMode::DirectPreferred,
+        destination: "chosen-1".to_string(),
+    });
+    settle().await;
+    a.send(&starting(
+        offer,
+        bob,
+        TransferRole::Receiver,
+        TransferMode::DirectPreferred,
+        "a.bin",
+        10,
+    ));
+    settle().await;
+    let pc = w.pcs.latest();
+    a.send(&signal(offer, bob, description("offer", "their offer")));
+    settle().await;
+    pc.report(ConnectionState::Connected);
+    let channel = channel_arrives(&pc);
+    settle().await;
+    assert_eq!(
+        w.sounds(),
+        vec![],
+        "a transfer moving is no sound of its own"
+    );
+    deliver_all(&channel, &bytes);
+    settle().await;
+    assert_eq!(
+        w.state().files.transfers[0].status,
+        TransferStatus::Completed
+    );
+    assert_eq!(w.sounds(), vec![SoundCue::TransferComplete]);
+    // Kept until dismissed, it is not heard again, nor is its link's end or its dismissal,
+    // past the gap.
+    advance(Duration::from_secs(1)).await;
+    a.send(&link(bob, w.user, false));
+    settle().await;
+    assert_eq!(w.sounds(), vec![]);
+    w.send(Command::DismissTransfer { offer, peer: bob });
+    settle().await;
     assert_eq!(w.sounds(), vec![]);
 }

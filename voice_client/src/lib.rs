@@ -18,6 +18,10 @@
 //!   and each `kicked` reason.
 //! - `sounds`: the call's sounds as cues derived from one snapshot to the next, which the
 //!   observer is told to play through the call's own audio path.
+//! - `transfers`: the call's files, everything the web client's `FileTransfers` decides: offers
+//!   made, withdrawn, expired, and accepted, one peer connection with a data channel per
+//!   transfer, the relay's credentials, chunked sending with progress, cancelling, and the
+//!   verdict, with the files themselves read and written through `files`, a chunk at a time.
 //! - `signalling`: typed frames over a `Socket`, and the signalling address of a voice server.
 //! - `api`: the REST calls a call makes.
 //! - `bindings`: the engine as Swift and Kotlin reach it, through UniFFI: what crosses as it
@@ -26,8 +30,7 @@
 //!   a phone stops ringing when the ring ends anywhere else; `ring_bindings` is it as the apps
 //!   reach it.
 //!
-//! File transfers, CallKit, and Telecom are not here: the signalling's file frames are
-//! left alone for the transfers piece, and `state::CallState` is what the rest read.
+//! CallKit and Telecom are not here; `state::CallState` is what they read.
 
 uniffi::setup_scaffolding!();
 
@@ -35,10 +38,12 @@ pub mod api;
 pub mod bindings;
 pub mod call;
 pub mod engine;
+pub mod files;
 pub mod peer_connection;
 pub mod ring;
 pub mod ring_bindings;
 pub mod signalling;
 pub mod sounds;
 pub mod state;
+pub mod transfers;
 pub mod transport;

@@ -1,32 +1,37 @@
 //! Stand-ins for the platform: an API server answering the join and failure routes and each
 //! candidate's health check, voice servers scripted frame by frame in `voice_protocol::signal`,
-//! and a peer connection that records what it is asked and reports the states a test gives
-//! it. `World` wires them to a `Call` running on the test's runtime.
+//! a peer connection that records what it is asked and reports the states a test gives it, with
+//! data channels whose other end the test plays, and files that record what is read and written.
+//! `World` wires them to a `Call` running on the test's runtime.
 
 #![allow(dead_code)]
 
 use async_trait::async_trait;
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use voice_client::api::Credentials;
 use voice_client::call::{Call, Command, Options, Platform};
+use voice_client::files::{FileError, FileSink, FileSource, Files};
 use voice_client::peer_connection::{
-    Configuration, ConnectionState, DescriptionKind, Direction, MediaKind, PeerConnection,
-    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SendEncoding,
-    SenderParameters, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
+    Configuration, ConnectionState, DataChannel, DataChannelObserver, DataChannelState,
+    DescriptionKind, Direction, IceCandidate, MediaKind, PeerConnection, PeerConnectionError,
+    PeerConnectionFactory, PeerConnectionObserver, SendEncoding, SenderParameters,
+    SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
 use voice_client::sounds::SoundCue;
 use voice_client::state::{CallObserver, CallState, CallStatus};
+use voice_client::transfers::CHUNK_BYTES;
 use voice_client::transport::{
     Http, HttpRequest, HttpResponse, Received, Socket, SocketFactory, TransportError,
 };
 use voice_protocol::signal::{
-    ClientMessage, ConnectionKind, MediaSource, ParticipantInfo, Section, SectionContent,
-    ServerMessage,
+    ClientMessage, ConnectionKind, FileOffer, IceServer, MediaSource, ParticipantInfo, Section,
+    SectionContent, ServerMessage, TransferMode, TransferRole,
 };
 
 pub const API_URL: &str = "https://chat.example.org";
@@ -162,6 +167,7 @@ pub struct Offer {
     pub speak: bool,
     pub share_screen: bool,
     pub camera: bool,
+    pub transfer_files: bool,
     pub server_muted: bool,
 }
 
@@ -177,6 +183,7 @@ impl Offer {
             speak: true,
             share_screen: true,
             camera: true,
+            transfer_files: true,
             server_muted: false,
         }
     }
@@ -190,12 +197,13 @@ impl Offer {
         plain(
             200,
             &format!(
-                r#"{{"channelId":"{}","candidates":[{}],"token":"{}","expiresAt":"2026-01-01T00:00:00Z","speak":{},"shareScreen":{},"transferFiles":false,"useCamera":{},"serverMuted":{}}}"#,
+                r#"{{"channelId":"{}","candidates":[{}],"token":"{}","expiresAt":"2026-01-01T00:00:00Z","speak":{},"shareScreen":{},"transferFiles":{},"useCamera":{},"serverMuted":{}}}"#,
                 self.channel,
                 candidates.join(","),
                 self.token,
                 self.speak,
                 self.share_screen,
+                self.transfer_files,
                 self.camera,
                 self.server_muted
             ),
@@ -478,6 +486,10 @@ pub enum Op {
     SetVolume(String, f64),
     SetEncoding(String, Option<u32>, Option<f64>),
     Close,
+    /// A transfer's own offer, which the client makes; `CreateOffer` and `SetLocal` record it.
+    CreateOffer,
+    AddCandidate(IceCandidate),
+    CreateDataChannel(String),
 }
 
 struct Inner {
@@ -489,14 +501,21 @@ struct Inner {
     closed: bool,
     /// Fails the next `set_remote_description`.
     fail_remote: bool,
+    /// Fails the next `create_data_channel`.
+    fail_channel: bool,
+    /// What `stats` answers: the W3C array as JSON.
+    stats: String,
 }
 
 pub struct FakePeerConnection {
     pub id: usize,
+    pub configuration: Configuration,
     observer: Arc<dyn PeerConnectionObserver>,
     inner: Mutex<Inner>,
     parameters: Mutex<HashMap<TransceiverId, SenderParameters>>,
     pub ops: Mutex<Vec<Op>>,
+    /// The data channel the engine opened on this connection, a transfer's sender's.
+    pub channel: Mutex<Option<Arc<FakeDataChannel>>>,
 }
 
 impl FakePeerConnection {
@@ -506,8 +525,46 @@ impl FakePeerConnection {
         self.observer.connection_state_changed(state);
     }
 
+    /// Reports a candidate of this connection's own, as the platform's observer would.
+    pub fn gathered(&self, candidate: &str) {
+        self.observer.ice_candidate(IceCandidate {
+            candidate: candidate.to_string(),
+            sdp_mid: Some("0".to_string()),
+            sdp_m_line_index: Some(0),
+            username_fragment: None,
+        });
+    }
+
+    /// The other side opened `channel` on this connection, as the platform's observer would
+    /// tell; the observer the engine answers reads the channel from then on.
+    pub fn channel_opened(&self, channel: Arc<FakeDataChannel>) -> Arc<dyn DataChannelObserver> {
+        self.observer.data_channel_opened(channel)
+    }
+
     pub fn fail_next_remote(&self) {
         self.inner.lock().unwrap().fail_remote = true;
+    }
+
+    pub fn fail_next_channel(&self) {
+        self.inner.lock().unwrap().fail_channel = true;
+    }
+
+    /// What `stats` answers from now on.
+    pub fn set_stats(&self, json: &str) {
+        self.inner.lock().unwrap().stats = json.to_string();
+    }
+
+    pub fn remote_description(&self) -> Option<SessionDescription> {
+        self.inner.lock().unwrap().remote.clone()
+    }
+
+    /// The data channel the engine opened, which a transfer's sender does.
+    pub fn data_channel(&self) -> Arc<FakeDataChannel> {
+        self.channel
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the engine opened a data channel")
     }
 
     pub fn ops(&self) -> Vec<Op> {
@@ -534,8 +591,11 @@ impl FakePeerConnection {
 
 #[async_trait]
 impl PeerConnection for FakePeerConnection {
+    /// The call connection is offered by the server alone; a transfer's connection is offered by
+    /// its sender, which this answers with an offer naming the connection.
     async fn create_offer(&self, _ice_restart: bool) -> Result<String, PeerConnectionError> {
-        Err(PeerConnectionError("the client never offers".to_string()))
+        self.op(Op::CreateOffer);
+        Ok(format!("offer from pc {}", self.id))
     }
 
     async fn create_answer(&self) -> Result<String, PeerConnectionError> {
@@ -562,7 +622,13 @@ impl PeerConnection for FakePeerConnection {
         if std::mem::take(&mut inner.fail_remote) {
             return Err(PeerConnectionError("bad sdp".to_string()));
         }
-        assert_eq!(description.kind, DescriptionKind::Offer);
+        // The server's offers name their mids; a transfer's descriptions name none.
+        if description.kind == DescriptionKind::Offer {
+            assert!(
+                description.sdp.contains("mids=") || inner.remote.is_none(),
+                "a second offer on a transfer's connection"
+            );
+        }
         let mids = description
             .sdp
             .split_once("mids=")
@@ -575,6 +641,26 @@ impl PeerConnection for FakePeerConnection {
         }
         inner.remote = Some(description);
         Ok(())
+    }
+
+    async fn add_ice_candidate(&self, candidate: IceCandidate) -> Result<(), PeerConnectionError> {
+        self.op(Op::AddCandidate(candidate));
+        Ok(())
+    }
+
+    async fn create_data_channel(
+        &self,
+        label: String,
+        observer: Arc<dyn DataChannelObserver>,
+    ) -> Result<Arc<dyn DataChannel>, PeerConnectionError> {
+        self.op(Op::CreateDataChannel(label.clone()));
+        if std::mem::take(&mut self.inner.lock().unwrap().fail_channel) {
+            return Err(PeerConnectionError("no data channels".to_string()));
+        }
+        let channel = Arc::new(FakeDataChannel::new(label));
+        *channel.observer.lock().unwrap() = Some(observer);
+        *self.channel.lock().unwrap() = Some(channel.clone());
+        Ok(channel)
     }
 
     fn local_description(&self) -> Option<SessionDescription> {
@@ -699,7 +785,11 @@ impl PeerConnection for FakePeerConnection {
     }
 
     async fn stats(&self, _: StatsOf) -> Result<String, PeerConnectionError> {
-        Ok("[]".to_string())
+        let inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return Err(PeerConnectionError("closed".to_string()));
+        }
+        Ok(inner.stats.clone())
     }
 
     fn connection_state(&self) -> ConnectionState {
@@ -738,7 +828,7 @@ impl FakePeerConnections {
 impl PeerConnectionFactory for FakePeerConnections {
     async fn create(
         &self,
-        _configuration: Configuration,
+        configuration: Configuration,
         observer: Arc<dyn PeerConnectionObserver>,
     ) -> Result<Arc<dyn PeerConnection>, PeerConnectionError> {
         if self.fail_create.load(Ordering::SeqCst) {
@@ -747,6 +837,7 @@ impl PeerConnectionFactory for FakePeerConnections {
         let mut created = self.created.lock().unwrap();
         let pc = Arc::new(FakePeerConnection {
             id: created.len() + 1,
+            configuration,
             observer,
             inner: Mutex::new(Inner {
                 mids: Vec::new(),
@@ -755,12 +846,318 @@ impl PeerConnectionFactory for FakePeerConnections {
                 state: ConnectionState::New,
                 closed: false,
                 fail_remote: false,
+                fail_channel: false,
+                stats: "[]".to_string(),
             }),
             parameters: Mutex::new(HashMap::new()),
             ops: Mutex::new(Vec::new()),
+            channel: Mutex::new(None),
         });
         created.push(pc.clone());
         Ok(pc)
+    }
+}
+
+// --- Data channels --------------------------------------------------------------------------------
+
+/// A data channel whose other end the test plays: what the engine sends is recorded, what the
+/// test sends arrives through the observer the engine gave (a sender's, kept from
+/// `create_data_channel`; a receiver's, answered by `channel_opened`). The buffered amount is
+/// whatever the test sets, so backpressure can be staged.
+pub struct FakeDataChannel {
+    pub label: String,
+    pub observer: Mutex<Option<Arc<dyn DataChannelObserver>>>,
+    state: Mutex<DataChannelState>,
+    pub buffered: AtomicU64,
+    pub threshold: AtomicU64,
+    /// Binary messages the engine sent, in order.
+    pub sent: Mutex<Vec<Vec<u8>>>,
+    /// Text messages the engine sent, in order.
+    pub texts: Mutex<Vec<String>>,
+    pub closed: AtomicBool,
+}
+
+impl FakeDataChannel {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            observer: Mutex::new(None),
+            state: Mutex::new(DataChannelState::Connecting),
+            buffered: AtomicU64::new(0),
+            threshold: AtomicU64::new(0),
+            sent: Mutex::new(Vec::new()),
+            texts: Mutex::new(Vec::new()),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    fn observer(&self) -> Arc<dyn DataChannelObserver> {
+        self.observer
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the engine reads this channel")
+    }
+
+    /// The channel opens, as the platform would tell.
+    pub fn open(&self) {
+        *self.state.lock().unwrap() = DataChannelState::Open;
+        self.observer().state_changed(DataChannelState::Open);
+    }
+
+    /// The other side closed the channel.
+    pub fn closed_by_peer(&self) {
+        *self.state.lock().unwrap() = DataChannelState::Closed;
+        self.observer().state_changed(DataChannelState::Closed);
+    }
+
+    /// The other side sent `data`.
+    pub fn deliver(&self, data: Vec<u8>) {
+        self.observer().binary(data);
+    }
+
+    /// The other side sent `text`.
+    pub fn deliver_text(&self, text: &str) {
+        self.observer().text(text.to_string());
+    }
+
+    /// The bytes waiting fell to the threshold, as the platform would tell.
+    pub fn drained(&self, to: u64) {
+        self.buffered.store(to, Ordering::SeqCst);
+        self.observer().buffered_amount_low();
+    }
+
+    /// Every byte the engine sent, joined.
+    pub fn sent_bytes(&self) -> Vec<u8> {
+        self.sent.lock().unwrap().concat()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+}
+
+impl DataChannel for FakeDataChannel {
+    fn send_binary(&self, data: Vec<u8>) -> Result<(), PeerConnectionError> {
+        if *self.state.lock().unwrap() != DataChannelState::Open {
+            return Err(PeerConnectionError("the channel is not open".to_string()));
+        }
+        self.sent.lock().unwrap().push(data);
+        Ok(())
+    }
+
+    fn send_text(&self, text: String) -> Result<(), PeerConnectionError> {
+        if *self.state.lock().unwrap() != DataChannelState::Open {
+            return Err(PeerConnectionError("the channel is not open".to_string()));
+        }
+        self.texts.lock().unwrap().push(text);
+        Ok(())
+    }
+
+    fn buffered_amount(&self) -> u64 {
+        self.buffered.load(Ordering::SeqCst)
+    }
+
+    fn set_buffered_amount_low_threshold(&self, bytes: u64) {
+        self.threshold.store(bytes, Ordering::SeqCst);
+    }
+
+    fn state(&self) -> DataChannelState {
+        *self.state.lock().unwrap()
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        *self.state.lock().unwrap() = DataChannelState::Closed;
+    }
+}
+
+// --- Files ----------------------------------------------------------------------------------------
+
+/// A picked file: its bytes, and how many times it has been opened.
+pub struct FakeFile {
+    pub bytes: Vec<u8>,
+    pub opened: AtomicU64,
+    /// What `read` answers, when set: the file could not be read.
+    pub fail_read: AtomicBool,
+    /// What `size` answers in place of the bytes' length, when set: a file that changed.
+    pub claimed_size: Mutex<Option<u64>>,
+}
+
+/// One opening of a `FakeFile`, read from its start.
+pub struct FakeSource {
+    file: Arc<FakeFile>,
+    position: Mutex<u64>,
+    pub closed: AtomicBool,
+}
+
+impl FakeSource {
+    /// How far it has been read.
+    pub fn position(&self) -> u64 {
+        *self.position.lock().unwrap()
+    }
+}
+
+#[async_trait]
+impl FileSource for FakeSource {
+    fn size(&self) -> u64 {
+        self.file
+            .claimed_size
+            .lock()
+            .unwrap()
+            .unwrap_or(self.file.bytes.len() as u64)
+    }
+
+    async fn read(&self, max_bytes: u64) -> Result<Vec<u8>, FileError> {
+        if self.file.fail_read.load(Ordering::SeqCst) {
+            return Err(FileError("the disk refused".to_string()));
+        }
+        let mut position = self.position.lock().unwrap();
+        let start = (*position as usize).min(self.file.bytes.len());
+        let end = (start + max_bytes as usize).min(self.file.bytes.len());
+        *position = end as u64;
+        Ok(self.file.bytes[start..end].to_vec())
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A place the user chose: what was written to it, in order, and how it ended.
+#[derive(Default)]
+pub struct FakeSink {
+    pub written: Mutex<Vec<Vec<u8>>>,
+    pub finished: AtomicBool,
+    pub discarded: AtomicBool,
+    /// Fails every `write`.
+    pub fail_write: AtomicBool,
+    /// Fails `finish`.
+    pub fail_finish: AtomicBool,
+}
+
+impl FakeSink {
+    pub fn written_bytes(&self) -> Vec<u8> {
+        self.written.lock().unwrap().concat()
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::SeqCst)
+    }
+
+    pub fn is_discarded(&self) -> bool {
+        self.discarded.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl FileSink for FakeSink {
+    async fn write(&self, data: Vec<u8>) -> Result<(), FileError> {
+        if self.fail_write.load(Ordering::SeqCst) {
+            return Err(FileError("the disk is full".to_string()));
+        }
+        self.written.lock().unwrap().push(data);
+        Ok(())
+    }
+
+    async fn finish(&self) -> Result<(), FileError> {
+        if self.fail_finish.load(Ordering::SeqCst) {
+            return Err(FileError("the file could not be closed".to_string()));
+        }
+        self.finished.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn discard(&self) {
+        self.discarded.store(true, Ordering::SeqCst);
+    }
+}
+
+/// The platform's files: picked files by reference and chosen places by destination, each given
+/// by the test before the engine asks for it; a reference or destination it was not given fails.
+#[derive(Default)]
+pub struct FakeFiles {
+    files: Mutex<HashMap<String, Arc<FakeFile>>>,
+    sinks: Mutex<HashMap<String, Arc<FakeSink>>>,
+    /// Every source opened, in order.
+    pub sources: Mutex<Vec<Arc<FakeSource>>>,
+    /// Every reference released, in order.
+    pub released: Mutex<Vec<String>>,
+    /// Makes every `create_sink` take a second, as a picker's place on slow storage might.
+    pub slow_sinks: AtomicBool,
+}
+
+impl FakeFiles {
+    /// A picked file at `reference` holding `bytes`.
+    pub fn add(&self, reference: &str, bytes: Vec<u8>) -> Arc<FakeFile> {
+        let file = Arc::new(FakeFile {
+            bytes,
+            opened: AtomicU64::new(0),
+            fail_read: AtomicBool::new(false),
+            claimed_size: Mutex::new(None),
+        });
+        self.files
+            .lock()
+            .unwrap()
+            .insert(reference.to_string(), file.clone());
+        file
+    }
+
+    /// A place the user chose at `destination`.
+    pub fn add_destination(&self, destination: &str) -> Arc<FakeSink> {
+        let sink = Arc::new(FakeSink::default());
+        self.sinks
+            .lock()
+            .unwrap()
+            .insert(destination.to_string(), sink.clone());
+        sink
+    }
+
+    pub fn released(&self) -> Vec<String> {
+        self.released.lock().unwrap().clone()
+    }
+
+    /// The source opened last.
+    pub fn latest_source(&self) -> Arc<FakeSource> {
+        self.sources
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .expect("a file was opened")
+    }
+}
+
+#[async_trait]
+impl Files for FakeFiles {
+    async fn open(&self, reference: String) -> Result<Arc<dyn FileSource>, FileError> {
+        let file = self.files.lock().unwrap().get(&reference).cloned();
+        let Some(file) = file else {
+            return Err(FileError(format!("no file at {reference}")));
+        };
+        file.opened.fetch_add(1, Ordering::SeqCst);
+        let source = Arc::new(FakeSource {
+            file,
+            position: Mutex::new(0),
+            closed: AtomicBool::new(false),
+        });
+        self.sources.lock().unwrap().push(source.clone());
+        Ok(source)
+    }
+
+    fn release(&self, reference: String) {
+        self.released.lock().unwrap().push(reference);
+    }
+
+    async fn create_sink(&self, destination: String) -> Result<Arc<dyn FileSink>, FileError> {
+        if self.slow_sinks.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let sink = self.sinks.lock().unwrap().get(&destination).cloned();
+        match sink {
+            Some(sink) => Ok(sink),
+            None => Err(FileError(format!("no place at {destination}"))),
+        }
     }
 }
 
@@ -784,6 +1181,7 @@ pub struct World {
     pub http: Arc<FakeHttp>,
     pub sockets: Arc<FakeSockets>,
     pub pcs: Arc<FakePeerConnections>,
+    pub files: Arc<FakeFiles>,
     pub snapshots: Arc<Snapshots>,
     pub commands: mpsc::UnboundedSender<Command>,
     pub channel: Uuid,
@@ -799,11 +1197,13 @@ impl World {
         let http = Arc::new(FakeHttp::default());
         let sockets = Arc::new(FakeSockets::default());
         let pcs = Arc::new(FakePeerConnections::default());
+        let files = Arc::new(FakeFiles::default());
         let snapshots = Arc::new(Snapshots::default());
         let platform = Platform {
             http: http.clone(),
             sockets: sockets.clone(),
             peer_connections: pcs.clone(),
+            files: files.clone(),
         };
         let options = Options {
             api_url: API_URL.to_string(),
@@ -818,6 +1218,7 @@ impl World {
             http,
             sockets,
             pcs,
+            files,
             snapshots,
             commands,
             channel: Uuid::now_v7(),
@@ -893,5 +1294,94 @@ impl World {
             held: false
         }));
         (offer, server)
+    }
+}
+
+// --- The voice server's transfer frames, and the other side of a transfer ------------------
+
+/// The ICE servers a `transferStarting` names: a STUN server and a TURN relay.
+pub fn ice() -> Vec<IceServer> {
+    vec![
+        IceServer {
+            urls: vec!["stun:voice.example:3478".to_string()],
+            username: None,
+            credential: None,
+        },
+        IceServer {
+            urls: vec!["turn:voice.example:3478?transport=udp".to_string()],
+            username: Some("u".to_string()),
+            credential: Some("c".to_string()),
+        },
+    ]
+}
+
+/// A `fileOffered` frame.
+pub fn offered(
+    id: Uuid,
+    from: Uuid,
+    name: &str,
+    size: u64,
+    allow_direct: bool,
+    ms: u64,
+) -> ServerMessage {
+    ServerMessage::FileOffered {
+        offer: FileOffer {
+            id,
+            from,
+            name: name.to_string(),
+            size,
+            allow_direct,
+            expires_in_ms: ms,
+        },
+    }
+}
+
+/// A `transferStarting` frame with `ice()`'s servers.
+pub fn starting(
+    offer: Uuid,
+    peer: Uuid,
+    role: TransferRole,
+    mode: TransferMode,
+    name: &str,
+    size: u64,
+) -> ServerMessage {
+    ServerMessage::TransferStarting {
+        offer,
+        peer,
+        role,
+        mode,
+        name: name.to_string(),
+        size,
+        ice_servers: ice(),
+    }
+}
+
+/// A `transferSignal` frame carrying `signal`.
+pub fn signal(offer: Uuid, peer: Uuid, signal: Value) -> ServerMessage {
+    ServerMessage::TransferSignal {
+        offer,
+        peer,
+        signal,
+    }
+}
+
+/// A transfer signal carrying a session description.
+pub fn description(kind: &str, sdp: &str) -> Value {
+    json!({ "kind": "description", "description": { "type": kind, "sdp": sdp } })
+}
+
+/// Opens the sender's channel on the receiver's connection, as the platform would on the other
+/// side's channel arriving, and opens it.
+pub fn channel_arrives(pc: &FakePeerConnection) -> Arc<FakeDataChannel> {
+    let channel = Arc::new(FakeDataChannel::new("file"));
+    let observer = pc.channel_opened(channel.clone());
+    *channel.observer.lock().unwrap() = Some(observer);
+    channel.open();
+    channel
+}
+
+pub fn deliver_all(channel: &FakeDataChannel, bytes: &[u8]) {
+    for chunk in bytes.chunks(CHUNK_BYTES as usize) {
+        channel.deliver(chunk.to_vec());
     }
 }

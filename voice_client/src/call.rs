@@ -21,10 +21,11 @@
 //! lock guards the call's state and every handler sees the whole of it.
 
 use crate::api::{Api, ApiError, Candidate, Credentials, JoinOffer};
+use crate::files::Files;
 use crate::peer_connection::{
-    Configuration, ConnectionState, DescriptionKind, Direction, PeerConnection,
-    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SessionDescription,
-    TrackId, TransceiverId,
+    Configuration, ConnectionState, DataChannel, DataChannelObserver, DataChannelState,
+    DescriptionKind, Direction, IceCandidate, PeerConnection, PeerConnectionError,
+    PeerConnectionFactory, PeerConnectionObserver, SessionDescription, TrackId, TransceiverId,
 };
 use crate::signalling::{Incoming, Signalling, signalling_url};
 use crate::sounds::Sounds;
@@ -32,8 +33,9 @@ use crate::state::{
     AudioSlot, CallObserver, CallState, CallStatus, EndedReason, ErrorKind, LocalSource,
     Participant, Refusal, RemoteVideo, SessionEndReason, ShareAudio, SourceRefusal,
 };
+use crate::transfers::{self, Transfers};
 use crate::transport::{Http, Socket, SocketFactory, TransportError};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -42,7 +44,7 @@ use uuid::Uuid;
 use voice_protocol::signal::Grants;
 use voice_protocol::signal::{
     ClientMessage, ConnectionKind, KickReason, MediaSource, ParticipantInfo, RESUME_GRACE_SECONDS,
-    Section, SectionContent, ServerMessage, SlotAssignment, WatchedVideo,
+    Section, SectionContent, ServerMessage, SlotAssignment, TransferMode, WatchedVideo,
 };
 
 /// How long a candidate has to accept the socket and answer `identify` (or `resume`) with
@@ -71,11 +73,12 @@ pub const DEAD_SERVER_RETRY: Duration = Duration::from_secs(60);
 /// How long the server keeps a participant whose socket dropped, for `resume`.
 pub const RESUME_GRACE: Duration = Duration::from_secs(RESUME_GRACE_SECONDS);
 
-/// The platform's side of the network and of WebRTC.
+/// The platform's side of the network, of WebRTC, and of the files transfers read and write.
 pub struct Platform {
     pub http: Arc<dyn Http>,
     pub sockets: Arc<dyn SocketFactory>,
     pub peer_connections: Arc<dyn PeerConnectionFactory>,
+    pub files: Arc<dyn Files>,
 }
 
 pub struct Options {
@@ -149,6 +152,36 @@ pub enum Command {
     AcknowledgeEnd,
     ClearStateRefusal,
     ClearSourceRefusal,
+    /// Offers the picked file `reference` names (`files::Files`) to the call under the id the
+    /// page chose, as `name`, for `valid_for_seconds` (clamped to what the server allows),
+    /// letting receivers connect directly when `allow_direct`.
+    OfferFile {
+        offer: Uuid,
+        reference: String,
+        name: String,
+        allow_direct: bool,
+        valid_for_seconds: u32,
+    },
+    /// Takes back one of the user's offers; transfers already started go on.
+    WithdrawOffer(Uuid),
+    /// Accepts an offer in the mode the user acknowledged, writing the file into the place
+    /// `destination` names (`files::Files`), which they chose first.
+    AcceptOffer {
+        offer: Uuid,
+        mode: TransferMode,
+        destination: String,
+    },
+    /// Cancels one transfer, which ends at once on both sides.
+    CancelTransfer {
+        offer: Uuid,
+        peer: Uuid,
+    },
+    /// Forgets a finished transfer.
+    DismissTransfer {
+        offer: Uuid,
+        peer: Uuid,
+    },
+    ClearFileFailure,
     /// Leaves any call and ends the engine.
     Shutdown,
 }
@@ -205,7 +238,7 @@ impl Failure {
 }
 
 /// What arrives on the call's queue besides commands.
-enum Internal {
+pub(crate) enum Internal {
     Offered {
         generation: u64,
         result: Result<JoinOffer, ApiError>,
@@ -240,10 +273,13 @@ enum Internal {
         step: u64,
         kind: Timer,
     },
+    /// About the call's files (`transfers`), from the tasks they spawn and the platform's
+    /// observers of their connections.
+    Files(transfers::Event),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Timer {
+pub(crate) enum Timer {
     /// `READY_TIMEOUT` after a socket was asked for.
     Ready,
     /// `CONNECT_TIMEOUT` after `ready`.
@@ -262,14 +298,14 @@ enum Timer {
 
 /// One signalling socket, numbered so frames from one the call has let go are told apart.
 #[derive(Clone)]
-struct Link {
+pub(crate) struct Link {
     id: u64,
     signalling: Arc<Signalling>,
 }
 
 impl Link {
     /// A send that fails means the socket is closing, which `SocketClosed` tells of.
-    async fn send(&self, frame: ClientMessage) {
+    pub(crate) async fn send(&self, frame: ClientMessage) {
         let _ = self.signalling.send(&frame).await;
     }
 
@@ -297,6 +333,26 @@ impl PeerConnectionObserver for Forwarder {
             state,
         });
     }
+
+    /// The call connection's candidates are never trickled: the voice server offers, and the
+    /// answer carries them.
+    fn ice_candidate(&self, _candidate: IceCandidate) {}
+
+    /// The voice server opens no data channel on the call connection; one it did open is read by
+    /// no one.
+    fn data_channel_opened(&self, _channel: Arc<dyn DataChannel>) -> Arc<dyn DataChannelObserver> {
+        Arc::new(Unread)
+    }
+}
+
+/// Reads nothing of a data channel.
+struct Unread;
+
+impl DataChannelObserver for Unread {
+    fn state_changed(&self, _state: DataChannelState) {}
+    fn binary(&self, _data: Vec<u8>) {}
+    fn text(&self, _text: String) {}
+    fn buffered_amount_low(&self) {}
 }
 
 /// Why a channel is joined again without the user asking, and how far that has got.
@@ -425,6 +481,8 @@ pub struct Call {
     attempt: Option<Attempt>,
     pending_rejoin: Option<Rejoin>,
     live: Option<Live>,
+    /// The call's files, whose snapshot is `state.files`.
+    transfers: Transfers,
 }
 
 impl Call {
@@ -435,6 +493,11 @@ impl Call {
             &options.api_url,
             options.credentials,
         ));
+        let transfers = Transfers::new(
+            platform.files.clone(),
+            platform.peer_connections.clone(),
+            internal.clone(),
+        );
         Self {
             platform,
             api,
@@ -455,6 +518,7 @@ impl Call {
             attempt: None,
             pending_rejoin: None,
             live: None,
+            transfers,
         }
     }
 
@@ -483,6 +547,7 @@ impl Call {
     }
 
     fn publish(&mut self) {
+        self.state.files = self.transfers.snapshot();
         self.state.revision = self.published.revision;
         if self.state != self.published {
             self.state.revision += 1;
@@ -628,8 +693,43 @@ impl Call {
             Command::AcknowledgeEnd => self.state.ended_reason = None,
             Command::ClearStateRefusal => self.state.state_refused = None,
             Command::ClearSourceRefusal => self.state.source_refused = None,
+            Command::OfferFile {
+                offer,
+                reference,
+                name,
+                allow_direct,
+                valid_for_seconds,
+            } => {
+                self.transfers
+                    .offer(offer, reference, name, allow_direct, valid_for_seconds);
+            }
+            Command::WithdrawOffer(offer) => {
+                let link = self.live_link();
+                self.transfers.withdraw(link.as_ref(), offer).await;
+            }
+            Command::AcceptOffer {
+                offer,
+                mode,
+                destination,
+            } => {
+                let link = self.live_link();
+                self.transfers
+                    .accept(link.as_ref(), offer, mode, destination);
+            }
+            Command::CancelTransfer { offer, peer } => {
+                let link = self.live_link();
+                self.transfers.cancel(link.as_ref(), offer, peer).await;
+            }
+            Command::DismissTransfer { offer, peer } => self.transfers.dismiss(offer, peer),
+            Command::ClearFileFailure => self.transfers.clear_failure(),
             Command::Shutdown => {}
         }
+    }
+
+    /// The socket of the call's place, while the call has one; a file command outside a call
+    /// has nowhere to go.
+    fn live_link(&self) -> Option<Link> {
+        self.live.as_ref().map(|live| live.link.clone())
     }
 
     async fn join(&mut self, channel: Uuid) {
@@ -1157,7 +1257,9 @@ impl Call {
                 audio_slots,
                 max_watched_video,
                 resume,
-                ..
+                offers,
+                links,
+                transfers,
             } => {
                 self.admitted(
                     session,
@@ -1166,7 +1268,8 @@ impl Call {
                     (audio_slots, max_watched_video),
                     resume,
                 )
-                .await
+                .await;
+                self.transfers.reset(user, offers, links, transfers);
             }
             // Turned away for joining too fast is a refusal to wait out, not the server failing,
             // and another server would refuse it no differently.
@@ -1375,6 +1478,7 @@ impl Call {
         if let Some(peer) = &live.connection {
             peer.pc.close();
         }
+        self.transfers.close_all(&HashSet::new());
         self.state.session = None;
         self.state.user = None;
         self.state.participants.clear();
@@ -1456,6 +1560,12 @@ impl Call {
                 if generation == self.generation && current {
                     self.timeout(kind).await;
                 }
+            }
+            // Judged by the transfer or offer it is about, which a call since left no longer
+            // has, rather than by generation and step.
+            Internal::Files(event) => {
+                let link = self.live_link();
+                self.transfers.event(link.as_ref(), event).await;
             }
         }
     }
@@ -1739,14 +1849,19 @@ impl Call {
                 self.refused(refused.as_deref(), detail, retry_after_seconds)
                     .await
             }
-            // Files are the transfers piece's; a `ready` on an open socket answers nothing.
-            ServerMessage::Ready { .. }
-            | ServerMessage::FileOffered { .. }
+            frame @ (ServerMessage::FileOffered { .. }
             | ServerMessage::FileWithdrawn { .. }
             | ServerMessage::TransferStarting { .. }
             | ServerMessage::TransferSignal { .. }
             | ServerMessage::TransferEnded { .. }
-            | ServerMessage::TransferLinkChanged { .. } => {}
+            | ServerMessage::TransferLinkChanged { .. }) => {
+                let Some(link) = self.live_link() else {
+                    return;
+                };
+                self.transfers.frame(&link, frame).await;
+            }
+            // A `ready` on an open socket answers nothing.
+            ServerMessage::Ready { .. } => {}
         }
     }
 
@@ -1777,6 +1892,11 @@ impl Call {
                     let source = self.state.sources.remove(at).source;
                     self.state.source_refused = Some(SourceRefusal { source, refusal });
                 }
+            }
+            // An offer or acceptance the server would not take, which the page shows as the
+            // file's failure.
+            Some(request @ ("offerFile" | "acceptFile")) => {
+                self.transfers.refused(request, &refusal.detail);
             }
             _ => {}
         }
@@ -2094,7 +2214,9 @@ impl Call {
                 audio_slots,
                 max_watched_video,
                 resume,
-                ..
+                offers,
+                links,
+                transfers,
             } => {
                 let Some(live) = &mut self.live else {
                     return;
@@ -2114,6 +2236,7 @@ impl Call {
                 self.state.participants = participants.into_iter().map(participant).collect();
                 self.state.audio_slots = audio_slots;
                 self.state.max_watched_video = max_watched_video;
+                self.transfers.reset(user, offers, links, transfers);
                 self.update_silence().await;
                 // What was asked of the dropped socket is asked again; the rest the server kept.
                 if resuming.state_asked {

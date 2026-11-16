@@ -12,16 +12,20 @@
 //!   error, or an end the call bar explains (removed, access lost, idle);
 //! - `Reconnected` when a call lost that way is connected again;
 //! - `StreamStarted` when the user, or someone else in the call, starts sharing a screen;
-//! - `TransferAccepted` and `TransferComplete` are given by nothing: the snapshot carries no file
-//!   transfers (a native call's `canTransfer` is false), so there is nothing to derive them from.
+//! - `TransferAccepted` when a transfer in the call begins, whoever its two sides are: one more
+//!   of the snapshot's `files.links` between a sender and a receiver than before;
+//! - `TransferComplete` when a file the user sent or received has arrived whole: a transfer of
+//!   the snapshot's `files.transfers` newly `Completed`.
 //!
-//! Moving to another call gives only the joining. Others' comings and goings and their shares are
-//! not given while the user is deafened, and are compared only while the call is connected: who
-//! is there as it connects, and what they share, is taken as found, silently, and the user's own
-//! participant, should the server ever list it, is no one. The call stays connected through a
-//! resume, so whoever a resume's `ready` lists come or gone since is heard as any joining or
-//! leaving, as the web client hears them from its event stream while its socket is down. Each
-//! cue is given again only after its `repeat_gap`, as the web client's `playSound` plays one:
+//! Moving to another call gives only the joining. Others' comings and goings, their shares, and
+//! transfers the user is no side of are not given while the user is deafened, and are compared
+//! only while the call is connected: who is there as it connects, what they share, and the
+//! links standing, are taken as found, silently, and the user's own participant, should the
+//! server ever list it, is no one. The call stays connected through a resume, so whoever a
+//! resume's `ready` lists come or gone since is heard as any joining or leaving, as the web
+//! client hears them from its event stream while its socket is down, and the links it restates
+//! are compared with those held, so a link that stood throughout is no new acceptance. Each cue
+//! is given again only after its `repeat_gap`, as the web client's `playSound` plays one:
 //! several people joining at once are heard as one, and a call lost twice within half a minute
 //! is said lost once.
 //!
@@ -29,8 +33,8 @@
 //! (the web client's `MAX_PLAYING_PER_SOUND`), and what becomes of one that arrives before the
 //! call's audio session is active.
 
-use crate::state::{CallState, CallStatus};
-use std::collections::{BTreeSet, HashMap};
+use crate::state::{CallState, CallStatus, TransferStatus};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -76,6 +80,10 @@ pub struct Sounds {
     sharing: BTreeSet<Uuid>,
     /// Whether `Disconnected` was given for a call that is rejoining.
     lost: bool,
+    /// How many transfers were under way between each sender and receiver as last compared.
+    links: BTreeMap<(Uuid, Uuid), usize>,
+    /// The transfers of the user's own, by offer and peer, that had arrived whole as last compared.
+    completed: BTreeSet<(Uuid, Uuid)>,
     last_given: HashMap<SoundCue, Instant>,
 }
 
@@ -133,6 +141,26 @@ impl Sounds {
         if !sends_screen(before) && sends_screen(after) {
             cues.push(SoundCue::StreamStarted);
         }
+        // The links are compared only within a connected call, where the server tells of them;
+        // the call's end clears them, and a connection's `ready` lists them as found.
+        let links = link_counts(after);
+        if was_in && is_in {
+            let begun = links.iter().any(|(pair, count)| {
+                *count > self.links.get(pair).copied().unwrap_or(0)
+                    && (!after.deafened || Some(pair.0) == after.user || Some(pair.1) == after.user)
+            });
+            if begun {
+                cues.push(SoundCue::TransferAccepted);
+            }
+        }
+        self.links = links;
+        // A finished transfer stays among the user's until dismissed, so one is new here only as
+        // it completes, whether or not the call is still connected.
+        let completed = completed_transfers(after);
+        if completed.difference(&self.completed).next().is_some() {
+            cues.push(SoundCue::TransferComplete);
+        }
+        self.completed = completed;
         let now = Instant::now();
         cues.retain(|&cue| {
             let recent = self
@@ -182,12 +210,52 @@ fn sends_screen(state: &CallState) -> bool {
         .any(|source| source.source == MediaSource::Screen)
 }
 
+/// How many transfers are under way between each sender and receiver.
+fn link_counts(state: &CallState) -> BTreeMap<(Uuid, Uuid), usize> {
+    let mut counts = BTreeMap::new();
+    for link in &state.files.links {
+        *counts.entry((link.sender, link.receiver)).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// The user's transfers that have arrived whole, by offer and peer.
+fn completed_transfers(state: &CallState) -> BTreeSet<(Uuid, Uuid)> {
+    state
+        .files
+        .transfers
+        .iter()
+        .filter(|transfer| transfer.status == TransferStatus::Completed)
+        .map(|transfer| (transfer.offer, transfer.peer))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::peer_connection::TrackId;
-    use crate::state::{EndedReason, LocalSource, Participant};
-    use voice_protocol::signal::SourceInfo;
+    use crate::state::{EndedReason, LocalSource, Participant, TransferState};
+    use voice_protocol::signal::{SourceInfo, TransferLink, TransferMode, TransferRole};
+
+    fn link(sender: Uuid, receiver: Uuid) -> TransferLink {
+        TransferLink { sender, receiver }
+    }
+
+    fn transfer(offer: Uuid, peer: Uuid, status: TransferStatus) -> TransferState {
+        TransferState {
+            offer,
+            peer,
+            role: TransferRole::Receiver,
+            mode: TransferMode::DirectPreferred,
+            name: "a.bin".to_string(),
+            size: 10,
+            bytes: 10,
+            status,
+            route: None,
+            ended_by: None,
+            failure: None,
+        }
+    }
 
     fn participant(user: Uuid, sources: &[MediaSource]) -> Participant {
         Participant {
@@ -502,6 +570,112 @@ mod tests {
             ],
         );
         assert_eq!(sounds.cues(&two, &three), vec![SoundCue::CallJoined]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transfer_beginning_is_an_acceptance_and_links_found_at_the_connection_are_not() {
+        let (me, channel, a, b) = (
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+        );
+        let mut sounds = Sounds::default();
+        let mut joining = CallState {
+            status: CallStatus::Joining,
+            channel: Some(channel),
+            ..CallState::default()
+        };
+        joining.files.links = vec![link(a, b)];
+        assert_eq!(sounds.cues(&CallState::default(), &joining), vec![]);
+        let mut in_call = connected(me, channel, Vec::new());
+        in_call.files.links = vec![link(a, b)];
+        assert_eq!(
+            sounds.cues(&joining, &in_call),
+            vec![SoundCue::CallJoined],
+            "a link standing as the call connects is taken as found"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        // Another transfer between the same two is one more link, and is heard.
+        let mut second = in_call.clone();
+        second.files.links = vec![link(a, b), link(a, b)];
+        assert_eq!(
+            sounds.cues(&in_call, &second),
+            vec![SoundCue::TransferAccepted]
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        // A link ending says nothing, and a resume's `ready` restating the rest is no new one.
+        assert_eq!(sounds.cues(&second, &in_call), vec![]);
+        assert_eq!(sounds.cues(&in_call, &in_call.clone()), vec![]);
+        // Deafened, others' transfers are silent; the user's own are heard.
+        let mut deafened = in_call.clone();
+        deafened.deafened = true;
+        deafened.files.links = vec![link(a, b), link(b, a)];
+        assert_eq!(sounds.cues(&in_call, &deafened), vec![]);
+        let mut mine = deafened.clone();
+        mine.files.links.push(link(b, me));
+        assert_eq!(
+            sounds.cues(&deafened, &mine),
+            vec![SoundCue::TransferAccepted]
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        // The call's end clears the links; the next call's are found afresh.
+        let idle = CallState::default();
+        assert_eq!(sounds.cues(&mine, &idle), vec![SoundCue::CallLeft]);
+        assert!(sounds.links.is_empty());
+        let mut again = connected(me, channel, Vec::new());
+        again.files.links = vec![link(a, b)];
+        assert_eq!(sounds.cues(&idle, &again), vec![SoundCue::CallJoined]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transfer_arriving_whole_is_a_completion_once_whatever_the_call_does() {
+        let (me, channel, offer, bob) = (
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+        );
+        let mut sounds = Sounds::default();
+        let in_call = connected(me, channel, Vec::new());
+        sounds.cues(&CallState::default(), &in_call);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut moving = in_call.clone();
+        moving.deafened = true;
+        moving.files.transfers = vec![transfer(offer, bob, TransferStatus::Moving)];
+        assert_eq!(sounds.cues(&in_call, &moving), vec![]);
+        let mut done = moving.clone();
+        done.files.transfers = vec![transfer(offer, bob, TransferStatus::Completed)];
+        assert_eq!(
+            sounds.cues(&moving, &done),
+            vec![SoundCue::TransferComplete],
+            "heard though deafened: it is the user's own"
+        );
+        // Kept until dismissed, it is not heard again; one that failed is not heard at all.
+        let mut more = done.clone();
+        more.files
+            .transfers
+            .push(transfer(offer, me, TransferStatus::Failed));
+        assert_eq!(sounds.cues(&done, &more), vec![]);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        // A transfer completing as the call is lost is heard beside the loss.
+        let mut lost = with_status(&more, CallStatus::Rejoining);
+        lost.files.transfers[1].status = TransferStatus::Completed;
+        assert_eq!(
+            sounds.cues(&more, &lost),
+            vec![SoundCue::Disconnected, SoundCue::TransferComplete]
+        );
+        // Dismissed, past the gap, it is not a completion; completed again under the same offer
+        // and peer, it is heard again.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut dismissed = lost.clone();
+        dismissed.files.transfers.clear();
+        assert_eq!(sounds.cues(&lost, &dismissed), vec![]);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            sounds.cues(&dismissed, &lost),
+            vec![SoundCue::TransferComplete]
+        );
     }
 
     #[tokio::test(start_paused = true)]

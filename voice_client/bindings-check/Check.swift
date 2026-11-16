@@ -50,6 +50,18 @@ final class FakePeerConnections: PeerConnectionFactory {
     }
 }
 
+final class FakeFiles: Files {
+    func openFile(reference: String) async throws -> OpenedFile {
+        throw FileError.Failed(detail: "this check opens no files")
+    }
+
+    func release(reference: String) {}
+
+    func createSink(destination: String) async throws -> CreatedSink {
+        throw FileError.Failed(detail: "this check opens no files")
+    }
+}
+
 final class Snapshots: CallObserver {
     let seen = Locked<[CallState]>([])
     /// The JSON beside each snapshot, which the apps hand their web views.
@@ -71,7 +83,7 @@ func run() async throws -> String {
     let http = FakeHttp()
     let snapshots = Snapshots()
     let engine = Engine.start(
-        platform: Platform(http: http, sockets: FakeSockets(), peerConnections: FakePeerConnections()),
+        platform: Platform(http: http, sockets: FakeSockets(), peerConnections: FakePeerConnections(), files: FakeFiles()),
         options: Options(apiUrl: "https://chat.example.org", credentials: FakeCredentials(), loopbackPlainText: false),
         observer: snapshots
     )

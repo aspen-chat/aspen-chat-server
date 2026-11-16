@@ -13,7 +13,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use voice_protocol::signal::Grants;
-use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
+use voice_protocol::signal::{
+    MediaSource, SourceInfo, TransferLink, TransferMode, TransferRole, WatchedVideo,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +143,123 @@ pub struct SourceRefusal {
     pub refusal: Refusal,
 }
 
+/// A file offered in the call, this device's own included, while it may still be accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOfferState {
+    pub id: Uuid,
+    pub from: Uuid,
+    /// As the sender named it; the page shows and saves it without format and control
+    /// characters (`plainFileName`).
+    pub name: String,
+    pub size: u64,
+    pub allow_direct: bool,
+    /// When the offer can no longer be accepted, in milliseconds since the Unix epoch on this
+    /// device's clock, counted from when the server's frame arrived; the page judges it with the
+    /// same clock, which is also the engine's for taking the offer down.
+    pub expires_at_ms: u64,
+    /// Whether this device made it.
+    pub own: bool,
+}
+
+/// Where a transfer stands: connecting, moving bytes, or ended as `TransferEnd` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferStatus {
+    Connecting,
+    Moving,
+    Completed,
+    Cancelled,
+    Failed,
+    Left,
+    NotPermitted,
+}
+
+/// How a transfer's bytes travel, whatever its receiver preferred: straight between the two
+/// devices, or through the voice server's relay; read from the connection's selected candidate
+/// pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferRoute {
+    Direct,
+    Relayed,
+}
+
+/// Who ended a transfer: this device, or the other side (the server speaking for it, when it
+/// left or lost the grant).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum EndedBy {
+    #[serde(rename = "self")]
+    ThisDevice,
+    Peer,
+}
+
+/// A transfer this device is one side of, kept once ended until dismissed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferState {
+    pub offer: Uuid,
+    pub peer: Uuid,
+    pub role: TransferRole,
+    pub mode: TransferMode,
+    pub name: String,
+    pub size: u64,
+    /// Bytes sent, or received, so far; moved on at most every `transfers::PROGRESS_INTERVAL`,
+    /// and whenever anything else about the transfer changes.
+    pub bytes: u64,
+    pub status: TransferStatus,
+    /// The route in use, or last used once ended; `None` before the connection came up.
+    pub route: Option<TransferRoute>,
+    /// Who ended it, once it has ended.
+    pub ended_by: Option<EndedBy>,
+    /// Why it failed, in the platform's or the engine's words, when it did and the reason is
+    /// this device's to know: the file could not be read or written, the connection broke.
+    pub failure: Option<String>,
+}
+
+/// Which file command of this device's failed before any transfer came of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
+#[serde(rename_all = "camelCase")]
+pub enum FileCommand {
+    /// Offering: the picked file could not be opened, or the voice server refused the offer.
+    Offer,
+    /// Accepting: the chosen place could not be opened, or the voice server refused the
+    /// acceptance.
+    Accept,
+}
+
+/// A file command that failed, with why, until the next file command or `clear_file_failure`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFailure {
+    pub command: FileCommand,
+    pub offer: Uuid,
+    /// The file's name as offered, for the page to name it by.
+    pub name: String,
+    /// Why, in the platform's or the voice server's words.
+    pub detail: String,
+}
+
+/// The call's files as this device sees them: what the web client's `FilesState` carries, and
+/// `failure`, which only an engine has, since only it can fail to open a file.
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesState {
+    /// Offers that may still be accepted, this device's own included, in the order they came.
+    pub offers: Vec<FileOfferState>,
+    /// Transfers this device is one side of, live ones first, then the ended until dismissed.
+    pub transfers: Vec<TransferState>,
+    /// Every transfer under way in the call, one entry each, whoever its two sides are.
+    pub links: Vec<TransferLink>,
+    /// The megabits a second every relayed transfer on this voice server shares; `None` when it
+    /// does not relay.
+    pub relay_mbps: Option<u32>,
+    pub failure: Option<FileFailure>,
+}
+
 /// The whole snapshot, the root of `call_bridge_schema.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
@@ -195,6 +314,9 @@ pub struct CallState {
     /// The voice server refused a source the client asked to send, until the next is asked.
     pub source_refused: Option<SourceRefusal>,
     pub ended_reason: Option<EndedReason>,
+    /// The call's files: offers, this device's transfers, everyone's links, and the relay's
+    /// limit (`transfers`).
+    pub files: FilesState,
 }
 
 impl Default for CallState {
@@ -225,6 +347,7 @@ impl Default for CallState {
             state_refused: None,
             source_refused: None,
             ended_reason: None,
+            files: FilesState::default(),
         }
     }
 }

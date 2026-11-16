@@ -34,6 +34,12 @@ class FakePeerConnections : PeerConnectionFactory {
         throw PeerConnectionException.Failed("this check makes no peer connections")
 }
 
+class FakeFiles : Files {
+    override suspend fun openFile(reference: String): OpenedFile = throw FileException.Failed("this check opens no files")
+    override fun release(reference: String) {}
+    override suspend fun createSink(destination: String): CreatedSink = throw FileException.Failed("this check opens no files")
+}
+
 class Snapshots : CallObserver {
     val seen = CopyOnWriteArrayList<CallState>()
     /** The JSON beside each snapshot, which the apps hand their web views. */
@@ -55,7 +61,7 @@ fun main() {
     val http = FakeHttp()
     val snapshots = Snapshots()
     val engine = Engine.start(
-        Platform(http, FakeSockets(), FakePeerConnections()),
+        Platform(http, FakeSockets(), FakePeerConnections(), FakeFiles()),
         Options("https://chat.example.org", FakeCredentials(), false),
         snapshots,
     )

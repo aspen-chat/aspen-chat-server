@@ -23,6 +23,7 @@ fn the_engine_runs_the_call_on_its_own_thread_and_numbers_its_snapshots() {
             http: http.clone(),
             sockets,
             peer_connections: pcs,
+            files: Arc::new(FakeFiles::default()),
         },
         Options {
             api_url: API_URL.to_string(),

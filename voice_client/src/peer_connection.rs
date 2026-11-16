@@ -3,8 +3,13 @@
 //! over `org.webrtc.PeerConnection`; media (tracks, frames, devices) stays on their side, named
 //! here by opaque ids. Everything that reaches the network goes through this interface, so a test
 //! can stand in for the platform and replay what a real one answered. The enums and records
-//! here cross to Swift and Kotlin as they are, and `PeerConnectionObserver` is the trait the
-//! engine implements and hands to them; the rest of the interface crosses through `bindings`.
+//! here cross to Swift and Kotlin as they are; the traits cross through `bindings`, those the
+//! platform implements (`PeerConnectionFactory`, `PeerConnection`, `DataChannel`) and those the
+//! engine implements and hands to it (`PeerConnectionObserver`, `DataChannelObserver`) alike.
+//!
+//! The call's own connection is offered by the voice server and carries media alone. A file
+//! transfer's connection is between two clients (`transfers`): the sender offers it, both
+//! trickle their ICE candidates through the voice server, and it carries one data channel.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -139,15 +144,72 @@ pub enum StatsOf {
     Receiver(TransceiverId),
 }
 
+/// An ICE candidate as `RTCIceCandidateInit` carries it, which is how a transfer's two sides
+/// exchange them through the voice server, a browser among them. A browser's last candidate may
+/// be the end-of-candidates mark, an empty `candidate`, which the engine never hands to the
+/// platform: native WebRTC parses it as no candidate and refuses it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct IceCandidate {
+    pub candidate: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdp_mid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdp_m_line_index: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_fragment: Option<String>,
+}
+
+/// Where a data channel stands, as `RTCDataChannelState` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "lowercase")]
+pub enum DataChannelState {
+    Connecting,
+    Open,
+    Closing,
+    Closed,
+}
+
 /// What the platform's WebRTC refused or could not do, with the platform's own words.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
 #[error("{0}")]
 pub struct PeerConnectionError(pub String);
 
+/// What the engine hears of a data channel without asking. Each message arrives whole, in the
+/// order sent, binary and text told apart as the sender sent them.
+pub trait DataChannelObserver: Send + Sync {
+    fn state_changed(&self, state: DataChannelState);
+    fn binary(&self, data: Vec<u8>);
+    fn text(&self, text: String);
+    /// The bytes waiting to be sent fell to the threshold `set_buffered_amount_low_threshold`
+    /// gave, or below it, from above.
+    fn buffered_amount_low(&self);
+}
+
+/// One data channel, ordered and reliable: the engine's file transfers want every byte, in
+/// order, and ask for no other kind. `send_binary` and `send_text` queue a message and fail only
+/// when the channel is not open; `buffered_amount` is what is queued and not yet sent, which the
+/// sender keeps between two marks by pausing until `buffered_amount_low`. Every method may be
+/// called from the engine's thread while the platform's WebRTC thread calls the observer.
+pub trait DataChannel: Send + Sync {
+    fn send_binary(&self, data: Vec<u8>) -> Result<(), PeerConnectionError>;
+    fn send_text(&self, text: String) -> Result<(), PeerConnectionError>;
+    fn buffered_amount(&self) -> u64;
+    fn set_buffered_amount_low_threshold(&self, bytes: u64);
+    fn state(&self) -> DataChannelState;
+    /// Closes the channel, sending what it holds first. Closing a closed channel does nothing.
+    fn close(&self);
+}
+
 /// What the engine hears of a peer connection without asking.
-#[uniffi::export(with_foreign)]
 pub trait PeerConnectionObserver: Send + Sync {
     fn connection_state_changed(&self, state: ConnectionState);
+    /// The connection gathered a candidate of its own, for the other side.
+    fn ice_candidate(&self, candidate: IceCandidate);
+    /// The other side opened a data channel on this connection. The observer answered reads
+    /// the channel from then on, the messages that arrived before it was asked for included,
+    /// in order.
+    fn data_channel_opened(&self, channel: Arc<dyn DataChannel>) -> Arc<dyn DataChannelObserver>;
 }
 
 /// Makes peer connections. One per platform process.
@@ -175,6 +237,16 @@ pub trait PeerConnection: Send + Sync {
         &self,
         description: SessionDescription,
     ) -> Result<(), PeerConnectionError>;
+    /// Adds a candidate of the other side's, after its description.
+    async fn add_ice_candidate(&self, candidate: IceCandidate) -> Result<(), PeerConnectionError>;
+    /// Opens an ordered, reliable data channel for the other side to receive, read by `observer`
+    /// from the start. Negotiated by the next offer: a transfer's sender opens its channel before
+    /// offering.
+    async fn create_data_channel(
+        &self,
+        label: String,
+        observer: Arc<dyn DataChannelObserver>,
+    ) -> Result<Arc<dyn DataChannel>, PeerConnectionError>;
     /// The description last set locally, which has the mids `set_local_description` assigned.
     fn local_description(&self) -> Option<SessionDescription>;
     fn signaling_state(&self) -> SignalingState;

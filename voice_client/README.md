@@ -37,6 +37,15 @@ platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android l
   `participantState`. Holding is never rate limited, releasing is, and a refused release leaves the
   call on hold like a refused unmute. The layers keep no mute or deafen of their own around a hold:
   the server keeps them.
+- **Files are streams, never whole.** A transfer's file is read and written through `Files`,
+  `FileSource`, and `FileSink` (`src/files.rs`), by references the platform gave the page: a picked
+  file is opened anew for each transfer of it and read `CHUNK_BYTES` at a time as the channel takes
+  them, a received file is written a chunk at a time into the place the user chose and kept by
+  `finish` or removed by `discard`, and `release` lets a picked file go once nothing offers or sends
+  it. Each transfer's peer connection is the platform's too, with a `DataChannel` the engine sends
+  on and a `DataChannelObserver` it reads from; the platform tells of its candidates and of a
+  channel the other side opened through `PeerConnectionObserver`. `state::FilesState` is what the
+  page shows (`docs/architecture/file-transfers.md`, Client).
 - **Nothing is kept per mid between offers.** Every offer is read whole (`Live::sections` and the
   transceiver of each mid are rebuilt from it, and each received track read again through
   `receiver_track`), since the server may reuse a section for other content: a section moved into
@@ -90,9 +99,9 @@ Foundation. Each app's platform layer and how it is checked against a real deplo
 
 ## Checking the bindings
 
-`bindings-check/` proves each side compiles and talks to the engine: stand-ins for the platform
-start the engine, join a call the stand-in API server refuses, read the refusal from `state()` and
-the observer, and stop it.
+`bindings-check/` proves each side compiles and talks to the engine: stand-ins for the platform (its
+network, WebRTC, and files) start the engine, join a call the stand-in API server refuses, read the
+refusal from `state()` and the observer, and stop it.
 
 - `bindings-check/kotlin.sh` runs on any machine with a JDK and `kotlinc` (the
   [Kotlin compiler release](https://github.com/JetBrains/kotlin/releases), on the PATH or named by

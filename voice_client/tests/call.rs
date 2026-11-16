@@ -101,7 +101,7 @@ async fn candidates_are_tried_nearest_first_and_one_that_refuses_is_reported() {
             speak: true,
             share_screen: true,
             camera: true,
-            transfer_files: false
+            transfer_files: true
         }
     );
 }
