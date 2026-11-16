@@ -5,9 +5,11 @@
 //!
 //! - `Uuid` crosses as its text, `TrackId` as its string, and `TransceiverId` as its number
 //!   (custom types), and the `voice_protocol` types the snapshot carries are declared remote.
-//! - `CallState` is mirrored, since its `source_refused` is a pair, which becomes
-//!   `SourceRefusal`; `HttpRequest` and `HttpResponse` carry their headers as `Header` records
-//!   rather than pairs; `SenderParameters` carries `rest` as JSON text rather than a value.
+//! - `CallState` crosses as it is, and beside it as JSON (`CallObserver::state_changed`'s `json`,
+//!   `Engine::state_json`), which the apps hand their web views untouched: its shape is
+//!   `call_bridge_schema.json`, which `state` describes. `HttpRequest` and `HttpResponse` carry
+//!   their headers as `Header` records rather than pairs; `SenderParameters` carries `rest` as
+//!   JSON text rather than a value.
 //! - `TransportError` and `PeerConnectionError` are error enums of one variant, `Failed`, with
 //!   the platform's words as `detail` (not `message`, which Kotlin's exceptions already have),
 //!   since UniFFI's errors are enums and a flat one cannot be raised by foreign code; both take
@@ -33,10 +35,7 @@ use crate::peer_connection::{
     self, Configuration, ConnectionState, Direction, MediaKind, PeerConnectionObserver,
     SendEncoding, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
-use crate::state::{
-    self, AudioSlot, CallStatus, EndedReason, ErrorKind, LocalSource, Participant, Refusal,
-    RemoteVideo, SessionEndReason, ShareAudio,
-};
+use crate::state::{self, CallState, SessionEndReason};
 use crate::transport::{self, Received};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -93,93 +92,25 @@ pub struct Grants {
     pub transfer_files: bool,
 }
 
-/// A source the voice server refused to take, and why.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
-pub struct SourceRefusal {
-    pub source: MediaSource,
-    pub refusal: Refusal,
-}
-
-/// `state::CallState` as the apps read it; see there for each field.
-#[derive(Clone, Debug, PartialEq, uniffi::Record)]
-pub struct CallState {
-    pub revision: u64,
-    pub status: CallStatus,
-    pub channel: Option<Uuid>,
-    pub session: Option<Uuid>,
-    pub user: Option<Uuid>,
-    pub muted: bool,
-    pub deafened: bool,
-    pub held: bool,
-    pub server_muted: bool,
-    pub grants: Grants,
-    pub participants: Vec<Participant>,
-    pub microphone: Option<TrackId>,
-    pub sources: Vec<LocalSource>,
-    pub audio_slots: u8,
-    pub max_watched_video: u32,
-    pub slots: Vec<AudioSlot>,
-    pub watching: Vec<WatchedVideo>,
-    pub videos: Vec<RemoteVideo>,
-    pub share_audio: Vec<ShareAudio>,
-    pub error_kind: Option<ErrorKind>,
-    pub error: Option<String>,
-    pub retry_after_seconds: Option<u64>,
-    pub state_refused: Option<Refusal>,
-    pub source_refused: Option<SourceRefusal>,
-    pub ended_reason: Option<EndedReason>,
-}
-
-impl From<&state::CallState> for CallState {
-    fn from(state: &state::CallState) -> Self {
-        Self {
-            revision: state.revision,
-            status: state.status,
-            channel: state.channel,
-            session: state.session,
-            user: state.user,
-            muted: state.muted,
-            deafened: state.deafened,
-            held: state.held,
-            server_muted: state.server_muted,
-            grants: state.grants,
-            participants: state.participants.clone(),
-            microphone: state.microphone.clone(),
-            sources: state.sources.clone(),
-            audio_slots: state.audio_slots,
-            max_watched_video: state.max_watched_video,
-            slots: state.slots.clone(),
-            watching: state.watching.clone(),
-            videos: state.videos.clone(),
-            share_audio: state.share_audio.clone(),
-            error_kind: state.error_kind,
-            error: state.error.clone(),
-            retry_after_seconds: state.retry_after_seconds,
-            state_refused: state.state_refused.clone(),
-            source_refused: state
-                .source_refused
-                .as_ref()
-                .map(|(source, refusal)| SourceRefusal {
-                    source: *source,
-                    refusal: refusal.clone(),
-                }),
-            ended_reason: state.ended_reason,
-        }
-    }
-}
-
-/// Reads each snapshot as the call changes. Called on the engine's thread; keep it short.
+/// Reads each snapshot as the call changes, as the record and as the same snapshot's JSON, for
+/// the app's web view. Called on the engine's thread; keep it short.
 #[uniffi::export(with_foreign)]
 pub trait CallObserver: Send + Sync {
-    fn state_changed(&self, state: CallState);
+    fn state_changed(&self, state: CallState, json: String);
 }
 
 struct ForeignObserver(Arc<dyn CallObserver>);
 
 impl state::CallObserver for ForeignObserver {
     fn state_changed(&self, state: &state::CallState) {
-        self.0.state_changed(state.into());
+        self.0.state_changed(state.clone(), state_json(state));
     }
+}
+
+/// `state` as the web view reads it (`call_bridge_schema.json`). The snapshot is plain data,
+/// with no map keyed by anything but a string, so writing it cannot fail.
+fn state_json(state: &state::CallState) -> String {
+    serde_json::to_string(state).expect("the call's state is plain data")
 }
 
 /// What the platform's network stack could not do, in its own words (`transport::TransportError`).
@@ -690,7 +621,12 @@ impl Engine {
     }
 
     pub fn state(&self) -> CallState {
-        CallState::from(&self.0.state())
+        self.0.state()
+    }
+
+    /// The latest snapshot as the web view reads it, the JSON the observer is given beside each.
+    pub fn state_json(&self) -> String {
+        state_json(&self.0.state())
     }
 
     pub fn join(&self, channel: Uuid) {

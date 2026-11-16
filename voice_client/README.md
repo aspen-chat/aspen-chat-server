@@ -6,6 +6,20 @@ platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android l
 
 ## What the platform layers lean on
 
+- **The snapshot as JSON.** Beside each `CallState` the observer is handed the same snapshot as the
+  JSON `state::CallState` serializes to (`CallObserver::state_changed`'s `json`;
+  `Engine::state_json` for the latest), camelCase, whose shape is `call_bridge_schema.json`:
+  `cargo run -p voice_client --bin call-bridge-schema` writes it at the repository root
+  (gitignored), the client's `pnpm codegen` reads it into
+  `packages/protocol/src/generated/callBridge.ts`, and the apps' `NativeCall` reads every snapshot
+  as that type. The platform layers' `AspenCall` plugins hand the string to the web view untouched,
+  beside the deployment's origin, and never convert a field; a field added to the state reaches the
+  page by regenerating. Each snapshot's `revision` is what the page orders them by.
+- **No microphone, no join where the user may speak.** `set_microphone(None)` before `join` is how a
+  plugin joins when the system refused the microphone: the engine fails the join with
+  `ErrorKind::Microphone` where the channel grants Speak, and joins to listen where it does not, as
+  the web client does when the browser refuses it.
+
 - **Hold.** `set_held` is the system's hold (CallKit's `CXSetHeldCallAction` and an interruption on
   iOS, Telecom's `onSetInactive` on Android): the engine sends `setState {muted, deafened, held}`,
   shows `CallState.held` at once, takes the microphone's track off its sender as it does for a mute,

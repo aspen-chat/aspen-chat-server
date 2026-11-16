@@ -52,9 +52,12 @@ final class FakePeerConnections: PeerConnectionFactory {
 
 final class Snapshots: CallObserver {
     let seen = Locked<[CallState]>([])
+    /// The JSON beside each snapshot, which the apps hand their web views.
+    let json = Locked<[String]>([])
 
-    func stateChanged(state: CallState) {
+    func stateChanged(state: CallState, json: String) {
         seen.with { $0.append(state) }
+        self.json.with { $0.append(json) }
     }
 }
 

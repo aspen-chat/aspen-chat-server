@@ -1,17 +1,18 @@
-import type { AspenClient, VoiceCallOptions, VoiceMedia } from "@aspen/protocol";
+import type { AspenClient, EngineCallState, VoiceCallOptions, VoiceMedia } from "@aspen/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PublishedState } from "./nativeCall";
 
 /** What the native side was asked, in order. */
 const calls: { method: string; options: Record<string, unknown> | undefined }[] = [];
 /** What `state` answers next, by origin. */
-const current = new Map<string, Record<string, unknown>>();
+const current = new Map<string, { origin: string; state: string }>();
 /** What `state` rejects with, when set. */
 let stateFailure: Error | null = null;
 /** What `join` rejects with, when set. */
 let joinFailure: Error | null = null;
 /** What each method named here rejects with. */
 const refusals = new Map<string, Error>();
-const listeners = new Map<string, (event: Record<string, unknown>) => void>();
+const listeners = new Map<string, (event: PublishedState) => void>();
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
@@ -24,7 +25,7 @@ vi.mock("@capacitor/core", () => ({
       {
         get: (_, method: string) => {
           if (method === "addListener") {
-            return (event: string, listener: (event: Record<string, unknown>) => void) => {
+            return (event: string, listener: (event: PublishedState) => void) => {
               listeners.set(event, listener);
               return Promise.resolve({ remove: () => Promise.resolve() });
             };
@@ -61,11 +62,11 @@ const {
   NativeCallProtocolError,
   NativeCallUnavailableError,
   nativeCalls,
+  parseState,
   stateOf,
 } = await import("./nativeCall");
-const { DEFAULT_DEVICE, IDLE_CALL_STATE, NO_FILES } = await import("@aspen/protocol");
 
-type Snapshot = ReturnType<typeof snapshot>;
+const { DEFAULT_DEVICE, IDLE_CALL_STATE, NO_FILES } = await import("@aspen/protocol");
 
 const ORIGIN = "https://chat.example";
 const CHANNEL = "0190f0a0-0000-7000-8000-000000000011";
@@ -73,10 +74,9 @@ const ANN = "0190f0a0-0000-7000-8000-000000000001";
 const BOB = "0190f0a0-0000-7000-8000-000000000002";
 const CAROL = "0190f0a0-0000-7000-8000-000000000003";
 
-/** An idle snapshot of `ORIGIN`'s engine, with `patch` laid over it. */
-function snapshot(patch: Record<string, unknown> = {}) {
+/** An idle snapshot of `ORIGIN`'s engine, as the engine writes it, with `patch` laid over it. */
+function engineState(patch: Record<string, unknown> = {}): EngineCallState {
   return {
-    origin: ORIGIN,
     revision: 1,
     status: "idle",
     channel: null,
@@ -88,13 +88,31 @@ function snapshot(patch: Record<string, unknown> = {}) {
     serverMuted: false,
     grants: { speak: false, shareScreen: false, camera: false, transferFiles: false },
     participants: [],
+    microphone: null,
+    sources: [],
+    audioSlots: 0,
+    maxWatchedVideo: 0,
+    slots: [],
+    watching: [],
+    videos: [],
+    shareAudio: [],
     errorKind: null,
     error: null,
     retryAfterSeconds: null,
     stateRefused: null,
+    sourceRefused: null,
     endedReason: null,
     ...patch,
-  } as never as Parameters<typeof stateOf>[0] & Record<string, unknown>;
+  };
+}
+
+/** `engineState(patch)` as the plugin publishes it: the engine's JSON beside the deployment. */
+function snapshot(patch: Record<string, unknown> = {}): PublishedState {
+  const { origin, ...rest } = patch;
+  return {
+    origin: typeof origin === "string" ? origin : ORIGIN,
+    state: JSON.stringify(engineState(rest)),
+  };
 }
 
 function participant(user: string, held = false) {
@@ -109,7 +127,7 @@ async function settle(): Promise<void> {
 }
 
 /** The engine publishes `snapshot` to the page. */
-function publish(published: Snapshot): void {
+function publish(published: PublishedState): void {
   listeners.get("state")?.(published);
 }
 
@@ -160,17 +178,17 @@ describe("nativeCall", () => {
   describe("stateOf", () => {
     it("carries each status by name", () => {
       for (const status of ["idle", "joining", "connected", "rejoining", "failed"] as const) {
-        expect(stateOf(snapshot({ status })).status).toBe(status);
+        expect(stateOf(engineState({ status })).status).toBe(status);
       }
     });
 
     it("refuses a status this build does not know", () => {
-      expect(() => stateOf(snapshot({ status: "dialling" }))).toThrow(NativeCallProtocolError);
+      expect(() => stateOf(engineState({ status: "dialling" }))).toThrow(NativeCallProtocolError);
     });
 
     it("maps the channel, the session, and the user's own state", () => {
       const state = stateOf(
-        snapshot({
+        engineState({
           status: "connected",
           channel: CHANNEL,
           session: "s1",
@@ -192,7 +210,7 @@ describe("nativeCall", () => {
 
     it("keeps the voice-only fields whatever the grants say", () => {
       const state = stateOf(
-        snapshot({
+        engineState({
           grants: { speak: true, shareScreen: true, camera: true, transferFiles: true },
         }),
       );
@@ -210,7 +228,7 @@ describe("nativeCall", () => {
 
     it("lists who is on hold in id order", () => {
       const state = stateOf(
-        snapshot({
+        engineState({
           participants: [participant(CAROL, true), participant(ANN), participant(BOB, true)],
         }),
       );
@@ -218,18 +236,18 @@ describe("nativeCall", () => {
     });
 
     it("shows the join offer's refusal as the servers failing, as the web does", () => {
-      expect(stateOf(snapshot({ errorKind: "offer" })).errorKind).toBe("server");
-      expect(stateOf(snapshot({ errorKind: "server" })).errorKind).toBe("server");
-      expect(stateOf(snapshot({ errorKind: "microphone" })).errorKind).toBe("microphone");
-      expect(stateOf(snapshot({ errorKind: "refused" })).errorKind).toBe("refused");
-      expect(stateOf(snapshot({ errorKind: "device" })).errorKind).toBe("device");
-      expect(stateOf(snapshot({ errorKind: null })).errorKind).toBeNull();
-      expect(() => stateOf(snapshot({ errorKind: "network" }))).toThrow(NativeCallProtocolError);
+      expect(stateOf(engineState({ errorKind: "offer" })).errorKind).toBe("server");
+      expect(stateOf(engineState({ errorKind: "server" })).errorKind).toBe("server");
+      expect(stateOf(engineState({ errorKind: "microphone" })).errorKind).toBe("microphone");
+      expect(stateOf(engineState({ errorKind: "refused" })).errorKind).toBe("refused");
+      expect(stateOf(engineState({ errorKind: "device" })).errorKind).toBe("device");
+      expect(stateOf(engineState({ errorKind: null })).errorKind).toBeNull();
+      expect(() => stateOf(engineState({ errorKind: "network" }))).toThrow(NativeCallProtocolError);
     });
 
     it("carries the failure's words and how long to wait", () => {
       const state = stateOf(
-        snapshot({
+        engineState({
           status: "failed",
           errorKind: "refused",
           error: "Too fast",
@@ -241,20 +259,30 @@ describe("nativeCall", () => {
     });
 
     it("carries a refused state change", () => {
-      expect(stateOf(snapshot()).stateRefused).toBeNull();
+      expect(stateOf(engineState()).stateRefused).toBeNull();
       expect(
-        stateOf(snapshot({ stateRefused: { detail: "no", retryAfterSeconds: 3 } })).stateRefused,
+        stateOf(engineState({ stateRefused: { detail: "no", retryAfterSeconds: 3 } })).stateRefused,
       ).toEqual({ retryAfterSeconds: 3 });
       expect(
-        stateOf(snapshot({ stateRefused: { detail: "no", retryAfterSeconds: null } })).stateRefused,
+        stateOf(engineState({ stateRefused: { detail: "no", retryAfterSeconds: null } }))
+          .stateRefused,
       ).toEqual({ retryAfterSeconds: null });
     });
 
     it("carries each ended reason by name", () => {
       for (const endedReason of ["kicked", "accessLost", "idle", null] as const) {
-        expect(stateOf(snapshot({ endedReason })).endedReason).toBe(endedReason);
+        expect(stateOf(engineState({ endedReason })).endedReason).toBe(endedReason);
       }
-      expect(() => stateOf(snapshot({ endedReason: "bored" }))).toThrow(NativeCallProtocolError);
+      expect(() => stateOf(engineState({ endedReason: "bored" }))).toThrow(NativeCallProtocolError);
+    });
+  });
+
+  describe("parseState", () => {
+    it("reads the engine's JSON, and refuses what is not it", () => {
+      expect(parseState(JSON.stringify(engineState({ revision: 4 }))).revision).toBe(4);
+      expect(() => parseState("not json")).toThrow(NativeCallProtocolError);
+      expect(() => parseState("[]")).toThrow(NativeCallProtocolError);
+      expect(() => parseState("null")).toThrow(NativeCallProtocolError);
     });
   });
 
@@ -309,7 +337,10 @@ describe("nativeCall", () => {
       const { call: made, reported } = call();
       await settle();
       publish(snapshot({ revision: 2, status: "connected", endedReason: "bored" }));
+      publish({ origin: ORIGIN, state: "{not json" });
+      expect(reported).toHaveLength(2);
       expect(reported[0]).toBeInstanceOf(NativeCallProtocolError);
+      expect(reported[1]).toBeInstanceOf(NativeCallProtocolError);
       expect(made.state.status).toBe("idle");
       publish(snapshot({ revision: 2, status: "connected", channel: CHANNEL }));
       expect(made.state.status).toBe("connected");

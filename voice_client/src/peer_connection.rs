@@ -19,7 +19,7 @@ pub enum MediaKind {
 
 /// A platform's track: a microphone or camera it opened, or a track a receiver gave it. The
 /// engine passes these on and never looks inside.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TrackId(pub String);
 
 /// A transceiver of one peer connection, as the platform numbers them.

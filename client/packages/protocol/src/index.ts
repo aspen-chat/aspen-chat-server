@@ -1,5 +1,10 @@
 export type { components, paths } from "./generated/openapi";
 export type { ClientMessage, ServerEvent, ServerMessage } from "./generated/events";
+/**
+ * The mobile call engine's snapshot, as its `Engine::state_json` writes it (`voice_client`'s
+ * `CallState`, `call_bridge_schema.json`), which the apps' `NativeCall` reads.
+ */
+export type { CallState as EngineCallState } from "./generated/callBridge";
 export {
   AspenClient,
   problemOf,

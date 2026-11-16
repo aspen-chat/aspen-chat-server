@@ -290,9 +290,11 @@ or what an operator must open, route, or back up updates it in the same commit.
 
    This writes `openapi.yaml`, `event_schema.json`, and `federation_schema.json` (what deployments
    exchange; see Federation) to the working directory and then exits. The voice server's
-   `--gen-signal-schema` writes `voice_signal_schema.json` the same way. Both files are gitignored;
-   the client's code generator (`pnpm codegen` in `client/`) reads them from the repository root and
-   can regenerate them itself. Regenerate them whenever API types change.
+   `--gen-signal-schema` writes `voice_signal_schema.json` the same way, and the mobile call
+   engine's `cargo run -p voice_client --bin call-bridge-schema` writes `call_bridge_schema.json`
+   (the snapshot the apps' web views read of it, `voice_client::state::CallState`). All of them are
+   gitignored; the client's code generator (`pnpm codegen` in `client/`) reads them from the
+   repository root and can regenerate them itself. Regenerate them whenever API types change.
 
 5. Build servers that run elsewhere, on x86-64 or 64-bit ARM (a Raspberry Pi 5, say), on an x86-64
    Linux machine:
@@ -447,10 +449,12 @@ or what an operator must open, route, or back up updates it in the same commit.
    ```
 
    It runs a deployment here, reaches it from the phone's loopback (SSH tunnels to the Mac,
-   `adb reverse` to the emulator), and runs the app's test of the engine (`CallEngineTests` on the
-   simulator, `CallEngineTest` on the emulator) against it, with a browser here as the second
-   participant; with `--avd` it starts the emulator headless (`client/docs/architecture/ios-app.md`
-   and `android-builds.md`, The call engine).
+   `adb reverse` to the emulator), and runs the app's tests of the engine (`CallEngineTests` on the
+   simulator, `CallEngineTest` on the emulator) and of the web view's bridge to it
+   (`AspenCallPluginTests`, `AspenCallPluginTest`, driving the `AspenCall` plugin from the app's own
+   page) against it, with a browser here as the second participant; with `--avd` it starts the
+   emulator headless, and it drives the emulator alone (`ANDROID_SERIAL`), never a phone plugged in
+   beside it (`client/docs/architecture/ios-app.md` and `android-builds.md`, The call engine).
 
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,

@@ -44,10 +44,13 @@ outputs by hand. It needs `rsvg-convert` and ImageMagick's `magick`.
 ## The server contract is generated, never hand-written
 
 `packages/protocol/src/generated/` is produced by `pnpm codegen` from `../openapi.yaml` and
-`../event_schema.json`, which the server produces with `cargo run -- --gen-openapi-schema`. Do not
-edit generated files, do not declare server types by hand, and do not build a request URL as a
-string. Use the typed openapi-fetch client (`client.api.GET("/api/v1/channels/{channel}", …)`) so a
-server-side change surfaces as a compile error here.
+`../event_schema.json`, which the server produces with `cargo run -- --gen-openapi-schema`, from
+`../voice_signal_schema.json` (the voice server's `--gen-signal-schema`), and from
+`../call_bridge_schema.json` (the mobile call engine's snapshot,
+`cargo run -p voice_client --bin call-bridge-schema`). Do not edit generated files, do not declare
+server types by hand, and do not build a request URL as a string. Use the typed openapi-fetch client
+(`client.api.GET("/api/v1/channels/{channel}", …)`) so a server-side change surfaces as a compile
+error here.
 
 When the server API changes, run `pnpm codegen:regen` and fix whatever stops compiling.
 

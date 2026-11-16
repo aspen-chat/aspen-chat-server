@@ -1,16 +1,20 @@
 //! What the interface layer reads of a call: one whole snapshot on every change, numbered, with
 //! tracks as the platform's ids. It is what the web client's `VoiceCallState` carries where that
 //! still applies, and what the new signalling adds: who is in the call, which audio slot carries
-//! whom, and which videos are watched. Its parts cross to Swift and Kotlin as they are
-//! (`uniffi::Enum`, `uniffi::Record`); the snapshot itself crosses as `bindings::CallState`.
+//! whom, and which videos are watched. The snapshot and its parts cross to Swift and Kotlin as
+//! they are (`uniffi::Enum`, `uniffi::Record`), and to the apps' web views as JSON
+//! (`Engine::state_json`, the observer's `json`), whose shape is `call_bridge_schema.json`,
+//! written from `CallState`'s `JsonSchema` by the `call-bridge-schema` binary and read by the
+//! client's code generator: camelCase names, as every schema the client is generated from.
 
 use crate::peer_connection::TrackId;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use voice_protocol::signal::Grants;
 use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum CallStatus {
     Idle,
@@ -23,7 +27,7 @@ pub enum CallStatus {
 }
 
 /// What failed when `status` is `Failed`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
     /// The API server refused the join offer (`error` is the Problem's text).
@@ -40,7 +44,7 @@ pub enum ErrorKind {
 }
 
 /// Why the call ended without the user asking, until `acknowledge_end`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum EndedReason {
     /// A moderator removed the user.
@@ -53,7 +57,7 @@ pub enum EndedReason {
 
 /// Why the API server ended a call, as its `voiceSessionEnded` event says
 /// (`aspen_wire::VoiceSessionEndReason`, which the app layer hands on).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionEndReason {
     Empty,
@@ -63,7 +67,7 @@ pub enum SessionEndReason {
 }
 
 /// Someone else in the call.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Participant {
     pub user: Uuid,
@@ -77,7 +81,7 @@ pub struct Participant {
 }
 
 /// One of the audio sections the client receives, and whose microphone it carries now.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSlot {
     pub slot: u8,
@@ -90,7 +94,7 @@ pub struct AudioSlot {
 
 /// A video the client watches and has a section for: a camera or a shared screen. The client's
 /// own share, watched for its preview, is one too.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteVideo {
     pub user: Uuid,
@@ -100,7 +104,7 @@ pub struct RemoteVideo {
 
 /// The sound of a shared screen the client watches. Only others' shares have one: the server
 /// gives no section for the sound of the client's own share, which it hears at its source.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareAudio {
     pub user: Uuid,
@@ -108,7 +112,7 @@ pub struct ShareAudio {
 }
 
 /// Something this client sends, or has asked to.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSource {
     pub source: MediaSource,
@@ -119,7 +123,7 @@ pub struct LocalSource {
 }
 
 /// A request the voice server would not honour.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Refusal {
     pub detail: String,
@@ -127,7 +131,16 @@ pub struct Refusal {
     pub retry_after_seconds: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A source the voice server refused to take, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRefusal {
+    pub source: MediaSource,
+    pub refusal: Refusal,
+}
+
+/// The whole snapshot, the root of `call_bridge_schema.json`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct CallState {
     /// Counts up with every snapshot that differs from the one before.
@@ -178,7 +191,7 @@ pub struct CallState {
     /// `deafened` show, until they try again, dismiss it, or the call ends.
     pub state_refused: Option<Refusal>,
     /// The voice server refused a source the client asked to send, until the next is asked.
-    pub source_refused: Option<(MediaSource, Refusal)>,
+    pub source_refused: Option<SourceRefusal>,
     pub ended_reason: Option<EndedReason>,
 }
 

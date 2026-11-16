@@ -119,9 +119,10 @@ The mobile apps' calls run natively, in the call engine (`voice_client/` at the 
 Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's WebRTC, HTTP, and
 WebSockets through interfaces each platform implements. The iOS implementation is
 `ios/App/App/Call`, compiled into the App target with the engine's generated Swift module: the
-engine's platform, the system's call integration (CallKit), and the audio routes. Nothing in the web
-view uses it yet: the Capacitor plugin that will command it and show its state, the call's sounds,
-rings (PushKit), and the camera are later pieces.
+engine's platform, the system's call integration (CallKit), the audio routes, and the Capacitor
+plugin the web view commands it through and reads its state from (`AspenCallPlugin`;
+`voice/native-calls.md` is the page's side). The call's sounds, rings (PushKit), and the camera are
+later pieces.
 
 ### What the App target links, and where it comes from
 
@@ -157,9 +158,12 @@ Each file under `Call/` implements one of the engine's interfaces over the platf
 | `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth HFP and A2DP) and never activates it; `activated(_:)` and `deactivated(_:)` are what CallKit's `didActivate` and `didDeactivate` call, and WebRTC's audio units run between them (`isAudioEnabled`). The microphone is a track from WebRTC's audio device module                                                                               |
 | `CallSystem.swift`         | The call as the system knows it                                              | One `CXProvider` for the process and the one call it holds at a time, whichever deployment's engine runs it; see The system's call below                                                                                                                                                                                                                                                                                                                                              |
 | `CallRoutes.swift`         | What the call plays through                                                  | `AVAudioSession`'s current route and available inputs as typed entries, the choice held for the call, and the proximity sensor; see Routes below                                                                                                                                                                                                                                                                                                                                      |
+| `AspenCallPlugin.swift`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks the system for the microphone, opens it, and joins through `CallSystem`; each snapshot's JSON (`CallSnapshots.listenJSON`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered in `MainViewController`                                                                                                                    |
 
 `CallEngine.join`, `leave`, and `setMuted` go through `CallSystem`, so that the system's own
-controls and the engine agree; the engine's other commands are called directly.
+controls and the engine agree; the engine's other commands are called directly. `CallSnapshots`
+keeps each snapshot as the record and as the JSON the engine writes beside it
+(`CallObserver.stateChanged(state:json:)`), which the plugin alone reads.
 
 ### The system's call
 
@@ -235,7 +239,9 @@ applied again on every `routeChangeNotification` and when CallKit activates the 
 device arriving (`newDeviceAvailable`) takes the call, as the Phone app's does, and ends the choice;
 a device going away leaves it. The proximity sensor is on while the route in use is the receiver and
 off otherwise, and the choice is let go when the call ends. Listeners hear every change on the main
-queue.
+queue. The app's Speaker button reaches it through the plugin's `setRoute` and `clearRoute`, and
+reads the list through `routes` (`voice/native-calls.md`, Where the call plays); the web view's own
+audio has no route of its own.
 
 ### What only a device can show
 
@@ -257,7 +263,13 @@ radio. These stand to be checked on an iPhone:
       the hold's end brings both back with the user's own mute standing; the app's own mute shows in
       the system's controls.
 - [ ] The receiver is listed, chosen, and heard at the ear; the proximity sensor turns the screen
-      off there and back on when the call moves to the loudspeaker.
+      off there and back on when the call moves to the loudspeaker. The app's Speaker button does
+      the same through the plugin (the simulator has no receiver port, so its route stays the
+      loudspeaker when the receiver is chosen).
+- [ ] The call's sounds, played by the page (`callSounds.ts`), are heard while CallKit holds the
+      call's audio session, in the foreground and locked.
+- [ ] A join with the microphone refused in Settings fails with `errorKind` `microphone` in the call
+      bar, and one in a channel without Speak joins to listen.
 - [ ] A Bluetooth headset is listed by kind with its name, chosen, and the call moves to it;
       choosing the loudspeaker brings it back; connecting a headset during a call takes the call and
       ends the choice; disconnecting it leaves the call on the choice made before.
@@ -289,16 +301,27 @@ the release waits for the server's word), cuts its socket and watches the engine
 with `resume`, and leaves; its log line also names what the signalling socket negotiated.
 `AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
 for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
-choice. `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to end
-from Linux, with the same deployment and browser the Android check uses (`android-builds.md`, The
-call engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`), SSH
-reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
+choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app,
+whose `MainViewController` has loaded the web shell with the plugin registered, so the test finds
+its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the app's
+`NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision 0, of
+its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker and
+reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
+stands; the simulator has no receiver port) and clears it, mutes and unmutes outside a call and sees
+each in a snapshot, has malformed commands refused by name, reports whether the page's
+`AudioContext` runs with the call's session active, and joins the channel through the plugin: the
+start action's `joining` snapshot reaches the page, then the simulator's daemon ends the call and
+its `idle` does, in revision order, with no snapshot twice, and a fresh `state()` is the latest
+published. `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to
+end from Linux, with the same deployment and browser the Android check uses (`android-builds.md`,
+The call engine): a deployment of its own serving the call page (`client/packages/protocol/calls/`),
+SSH reverse tunnels so the simulator reaches the API server and the voice server at the Mac's own
 loopback (plain HTTP there, as a development build allows; media goes to the voice server's
 announced address over the network), Chromium as the second participant with a tone WAV as its
-microphone (`calls/second.ts`), and `xcodebuild test-without-building` on the Mac, with `--build`
-first building the engine, the bindings, and the app for the simulator there. The test reads its
-deployment, channel, user, refresh token, and the script's helper from the environment
-(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI runs the
-Android half of this check (`android-builds.md`) and not this one: the deployment runs in Docker,
-which GitHub's macOS runners lack, so the simulator's call is checked from a development machine
-with a Mac beside it.
+microphone (`calls/second.ts`), and `xcodebuild test-without-building` on the Mac of both tests,
+with `--build` first building the engine, the bindings, and the app for the simulator there. The
+test reads its deployment, channel, user, refresh token, and the script's helper from the
+environment (`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI
+runs the Android half of this check (`android-builds.md`) and not this one: the deployment runs in
+Docker, which GitHub's macOS runners lack, so the simulator's call is checked from a development
+machine with a Mac beside it.

@@ -53,9 +53,9 @@ window's size.
   apps, a phone with only its receiver and loudspeaker (`choosesSpeakerphone`) has a Speaker button
   on the bar, its icon in a filled accent circle while on, and the deafen popover then has no
   speaker list. It sets `SPEAKERPHONE`, which `useFollowSpeakerphone` (`src/api/audioRoute.ts`)
-  applies through the native `AspenAudioRoute` plugin from the call's start to its end. While
-  anything else is connected (headphones, a headset, a car) the button is gone and the route is the
-  system's.
+  applies through the native `AspenCall` plugin's routes from the call's start to its end
+  ([native calls](native-calls.md)). While anything else is connected (headphones, a headset, a car)
+  the button is gone and the route is the system's.
 - **Camera flip** (`CameraFlipButton`, `useCameraFlip`): where every camera faces front or back
   (`flipsBetweenSides`), however many lenses the back has, a button beside the camera's switches to
   the other side, in place of the camera's arrow, whether the camera is on or off: to that side's

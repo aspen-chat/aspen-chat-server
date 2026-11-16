@@ -977,9 +977,9 @@ async fn a_screen_is_sent_as_picture_and_sound_and_a_source_without_its_grant_is
     });
     settle().await;
     assert!(a.received().is_empty());
-    let (source, refusal) = w.state().source_refused.clone().expect("refused");
-    assert_eq!(source, MediaSource::Camera);
-    assert_eq!(refusal.detail, "this call does not let you send it");
+    let refused = w.state().source_refused.clone().expect("refused");
+    assert_eq!(refused.source, MediaSource::Camera);
+    assert_eq!(refused.refusal.detail, "this call does not let you send it");
     w.send(Command::StartSource {
         source: MediaSource::Screen,
         track: TrackId("screen-1".to_string()),
@@ -997,7 +997,7 @@ async fn a_screen_is_sent_as_picture_and_sound_and_a_source_without_its_grant_is
     });
     settle().await;
     assert_eq!(
-        w.state().source_refused.clone().map(|(_, r)| r.detail),
+        w.state().source_refused.clone().map(|r| r.refusal.detail),
         Some("already sending it".to_string())
     );
     w.pcs.latest().ops();
@@ -1055,9 +1055,9 @@ async fn a_source_the_server_refuses_is_dropped() {
         "the microphone, asked for first, is kept"
     );
     assert_eq!(state.sources[0].source, MediaSource::Microphone);
-    let (source, refusal) = state.source_refused.expect("refused");
-    assert_eq!(source, MediaSource::Camera);
-    assert_eq!(refusal.retry_after_seconds, Some(3));
+    let refused = state.source_refused.expect("refused");
+    assert_eq!(refused.source, MediaSource::Camera);
+    assert_eq!(refused.refusal.retry_after_seconds, Some(3));
 }
 
 #[tokio::test(start_paused = true)]

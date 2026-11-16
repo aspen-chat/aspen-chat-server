@@ -171,8 +171,8 @@ jobs:
           ASPEN_BUS_TEST_NATS_TOKEN: aspen_test
 
   # The debug servers, built once for every job that runs them (`.github/actions/debug-servers`),
-  # and the API, event, and signalling schemas they write, which the client's code generator
-  # reads.
+  # and the API, event, signalling, and call bridge schemas they and the call engine write, which
+  # the client's code generator reads.
   servers:
     name: Servers (x86-64) — debug build and schemas
     runs-on: ubuntu-24.04
@@ -192,10 +192,11 @@ jobs:
       - run: >-
           cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate -p aspen-ul
           -p aspen-svg-render
-      - name: Write the API and signalling schemas
+      - name: Write the API, signalling, and call bridge schemas
         run: |
           target/debug/aspen-chat-server --gen-openapi-schema
           target/debug/voice_server --gen-signal-schema
+          cargo run --locked -p voice_client --bin call-bridge-schema
       - uses: actions/upload-artifact@v7
         with:
           name: schemas
@@ -203,6 +204,7 @@ jobs:
             openapi.yaml
             event_schema.json
             voice_signal_schema.json
+            call_bridge_schema.json
       # Packed first, since an artifact keeps no file modes; already compressed, so the upload
       # does not compress it again.
       - name: Pack the servers

@@ -8,12 +8,16 @@
  *                         `ServerMessage`, and the `ServerEvent` union they carry
  *   - voice_signal_schema.json  JSON Schema of the voice server's signalling frames, produced by
  *                         `cargo run -p voice_server -- --gen-signal-schema`
+ *   - call_bridge_schema.json  JSON Schema of the mobile call engine's snapshot, which the apps'
+ *                         web views read of it, produced by
+ *                         `cargo run -p voice_client --bin call-bridge-schema`
  *
  * Outputs (src/generated/, gitignored):
  *   - openapi.ts          `paths` and `components` types consumed by openapi-fetch
  *   - events.ts           `ClientMessage`, `ServerMessage`, `ServerEvent`, and the record types
  *   - event_schema.json   verbatim copy, loaded by the runtime validator in ../src/events.ts
  *   - voiceSignal.ts      `ClientMessage` and `ServerMessage` of the voice signalling protocol
+ *   - callBridge.ts       `CallState` and its parts, as the mobile apps' `NativeCall` reads them
  *
  * Usage: `pnpm codegen [--regen]`. When either input is missing the server is asked to produce
  * them; `--regen` forces that even when they exist so the client never builds against a stale
@@ -33,6 +37,7 @@ const repoRoot = resolve(here, "../../../..");
 const openapiPath = resolve(repoRoot, "openapi.yaml");
 const eventSchemaPath = resolve(repoRoot, "event_schema.json");
 const voiceSchemaPath = resolve(repoRoot, "voice_signal_schema.json");
+const callBridgeSchemaPath = resolve(repoRoot, "call_bridge_schema.json");
 const outDir = resolve(here, "../src/generated");
 
 const banner = `/* eslint-disable */
@@ -51,6 +56,11 @@ function regenerateServerSchemas(): void {
   });
   console.log("codegen: running the voice server's schema generator via cargo");
   execFileSync("cargo", ["run", "-p", "voice_server", "--", "--gen-signal-schema"], {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  console.log("codegen: running the call engine's schema generator via cargo");
+  execFileSync("cargo", ["run", "-p", "voice_client", "--bin", "call-bridge-schema"], {
     cwd: repoRoot,
     stdio: "inherit",
   });
@@ -128,29 +138,49 @@ async function generateVoiceSignal(): Promise<void> {
   await writeFile(resolve(outDir, "voiceSignal.ts"), source);
 }
 
+async function generateCallBridge(): Promise<void> {
+  const raw = await readFile(callBridgeSchemaPath, "utf8");
+  const schema = JSON.parse(raw) as JSONSchema;
+  const compilable = liftRefSiblings(schema) as JSONSchema;
+  const source = await compile(compilable, "CallState", {
+    bannerComment: banner,
+    additionalProperties: false,
+    strictIndexSignatures: true,
+    unknownAny: true,
+    cwd: dirname(callBridgeSchemaPath),
+    $refOptions: { resolve: { external: false } },
+  });
+  await writeFile(resolve(outDir, "callBridge.ts"), source);
+}
+
 async function main(): Promise<void> {
   const regen = process.argv.includes("--regen");
-  const missing =
-    !existsSync(openapiPath) || !existsSync(eventSchemaPath) || !existsSync(voiceSchemaPath);
-  if (regen || missing) {
-    if (missing) {
-      console.log(`codegen: ${openapiPath}, ${eventSchemaPath}, or ${voiceSchemaPath} is missing`);
+  const inputs = [openapiPath, eventSchemaPath, voiceSchemaPath, callBridgeSchemaPath];
+  const missing = inputs.filter((path) => !existsSync(path));
+  if (regen || missing.length > 0) {
+    if (missing.length > 0) {
+      console.log(`codegen: ${missing.join(", ")} missing`);
     }
     try {
       regenerateServerSchemas();
     } catch (error) {
       console.error(
         "codegen: could not run the server's schema generator. Install a Rust toolchain, or " +
-          "produce openapi.yaml, event_schema.json, and voice_signal_schema.json at the " +
-          "repository root some other way.",
+          "produce openapi.yaml, event_schema.json, voice_signal_schema.json, and " +
+          "call_bridge_schema.json at the repository root some other way.",
       );
       throw error;
     }
   }
   await mkdir(outDir, { recursive: true });
-  await Promise.all([generateOpenApi(), generateEvents(), generateVoiceSignal()]);
+  await Promise.all([
+    generateOpenApi(),
+    generateEvents(),
+    generateVoiceSignal(),
+    generateCallBridge(),
+  ]);
   console.log(
-    `codegen: wrote openapi.ts, events.ts, event_schema.json, voiceSignal.ts to ${outDir}`,
+    `codegen: wrote openapi.ts, events.ts, event_schema.json, voiceSignal.ts, callBridge.ts to ${outDir}`,
   );
 }
 

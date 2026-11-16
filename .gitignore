@@ -8,4 +8,5 @@
 .vscode/
 /voice_server.toml
 /voice_signal_schema.json
+/call_bridge_schema.json
 __pycache__/

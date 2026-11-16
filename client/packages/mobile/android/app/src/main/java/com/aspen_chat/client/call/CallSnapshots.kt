@@ -7,41 +7,71 @@ import com.aspen_chat.client.voice.CallState
 
 /**
  * Every snapshot the call engine publishes (its `CallObserver`), kept for whoever asks what the
- * call is now and handed to each listener on the main thread, where the interface reads it. The
- * engine calls `stateChanged` on its own thread and waits for it to return, so nothing here
- * blocks or reaches back into the engine.
+ * call is now and handed to each listener on the main thread, where the interface reads it: as
+ * the record, and as the JSON the engine writes beside it (`listenJson`, `latestJson`), which
+ * `AspenCallPlugin` hands the web view untouched. The engine calls `stateChanged` on its own
+ * thread and waits for it to return, so nothing here blocks or reaches back into the engine.
  */
 class CallSnapshots : CallObserver {
     fun interface Listener {
         fun changed(state: CallState)
     }
 
+    fun interface JsonListener {
+        fun changed(json: String)
+    }
+
     /** Stops the listener it was given for. */
-    inner class Subscription internal constructor(private val listener: Listener) {
+    inner class Subscription internal constructor(private val listener: Listener?, private val jsonListener: JsonListener?) {
         fun cancel() {
-            synchronized(lock) { listeners.remove(listener) }
+            synchronized(lock) {
+                listeners.remove(listener)
+                jsonListeners.remove(jsonListener)
+            }
         }
     }
 
     private val lock = Any()
     private val main = Handler(Looper.getMainLooper())
     private var current: CallState? = null
+    private var currentJson: String? = null
     private val listeners = ArrayList<Listener>()
+    private val jsonListeners = ArrayList<JsonListener>()
 
     /** The latest snapshot, or `null` before the engine published one. */
     val latest: CallState?
         get() = synchronized(lock) { current }
 
-    override fun stateChanged(state: CallState) {
-        val told = synchronized(lock) {
+    /** The latest snapshot's JSON, or `null` before the engine published one. */
+    val latestJson: String?
+        get() = synchronized(lock) { currentJson }
+
+    override fun stateChanged(state: CallState, json: String) {
+        val (told, toldJson) = synchronized(lock) {
             current = state
-            listeners.toList()
+            currentJson = json
+            listeners.toList() to jsonListeners.toList()
         }
         main.post {
             for (listener in told) {
                 listener.changed(state)
             }
+            for (listener in toldJson) {
+                listener.changed(json)
+            }
         }
+    }
+
+    /** As `listen`, with each snapshot's JSON. */
+    fun listenJson(listener: JsonListener): Subscription {
+        val latest = synchronized(lock) {
+            jsonListeners.add(listener)
+            currentJson
+        }
+        if (latest != null) {
+            main.post { listener.changed(latest) }
+        }
+        return Subscription(null, listener)
     }
 
     /**
@@ -56,6 +86,6 @@ class CallSnapshots : CallObserver {
         if (latest != null) {
             main.post { listener.changed(latest) }
         }
-        return Subscription(listener)
+        return Subscription(listener, null)
     }
 }

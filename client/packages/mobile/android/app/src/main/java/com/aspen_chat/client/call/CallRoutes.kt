@@ -24,9 +24,13 @@ import kotlinx.coroutines.launch
  * never through `AudioManager` beside it, which would fight Telecom for the same device.
  *
  * `CallTelecom` attaches the control scope of each call it adds, and detaches it when the call
- * ends, when the list is empty again. While the route is the earpiece the proximity sensor turns
- * the screen off at the ear (`PROXIMITY_SCREEN_OFF_WAKE_LOCK`), as the phone app does.
- * Listeners hear of every change on the main thread.
+ * ends, when the list is empty again. A kind chosen (`select`) is kept for the call as `chosen`:
+ * asked before Telecom lists the call's endpoints, as the app asks as a call starts, it is applied
+ * once they arrive, and a kind asked later is applied at once; Telecom's own moves afterwards (a
+ * headset connected) stand, and `clear` or the call's end forgets the choice. While the route is
+ * the earpiece the proximity sensor turns the screen off at the ear
+ * (`PROXIMITY_SCREEN_OFF_WAKE_LOCK`), as the phone app does. Listeners hear of every change on
+ * the main thread.
  */
 class CallRoutes(context: Context) {
     enum class Kind {
@@ -77,10 +81,17 @@ class CallRoutes(context: Context) {
     private var available: List<CallEndpointCompat> = emptyList()
     private var current: CallEndpointCompat? = null
     private val listeners = ArrayList<Listener>()
+    /** The kind chosen for the call, and whether it still waits for Telecom's endpoints to be applied. */
+    private var wanted: Kind? = null
+    private var wantedPending = false
 
     /** Whether this device has an earpiece, which a tablet lacks, whether or not a call is on. */
     val hasEarpiece: Boolean
-        get() = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+        get() = hasEarpiece(audioManager)
+
+    /** The kind chosen for this call (`select`), until `clear` or the call's end. */
+    val chosen: Kind?
+        get() = synchronized(lock) { wanted }
 
     /** The routes of the call Telecom holds, in Telecom's order (headset, Bluetooth, speaker, earpiece); none outside a call. */
     val routes: List<Route>
@@ -91,24 +102,72 @@ class CallRoutes(context: Context) {
         get() = synchronized(lock) { current?.let(Kind::of) }
 
     /**
-     * Asks Telecom to move the call to the first route of `kind`. Answers `false` when no call is
-     * on or no route of that kind is available; the move itself is announced to listeners as
-     * the current route changes, or logged when Telecom refuses it.
+     * Chooses `kind` for the call and asks Telecom to move the call to its first route. Before
+     * Telecom has listed the call's endpoints the choice is kept and applied once it does
+     * (`true`); with them listed, `false` when none is of that kind, and the choice is not kept.
+     * Listeners hear the choice at once (`chosen`), and the move itself as the current route
+     * changes; a move Telecom refuses is logged.
      */
     fun select(kind: Kind): Boolean {
-        val (control, endpoint) = synchronized(lock) {
-            control to available.firstOrNull { Kind.of(it) == kind }
+        var request: Pair<CallControlScope?, CallEndpointCompat>? = null
+        var kept = true
+        update {
+            if (available.isEmpty()) {
+                wanted = kind
+                wantedPending = true
+            } else {
+                val endpoint = available.firstOrNull { Kind.of(it) == kind }
+                if (endpoint == null) {
+                    kept = false
+                } else {
+                    wanted = kind
+                    wantedPending = false
+                    request = control to endpoint
+                }
+            }
         }
-        if (control == null || endpoint == null) {
+        if (!kept) {
             return false
         }
+        request?.let { (control, endpoint) ->
+            if (control != null) {
+                move(control, endpoint, kind)
+            }
+        }
+        return true
+    }
+
+    /** Forgets the choice; the call stays where Telecom has it. */
+    fun clear() {
+        update {
+            wanted = null
+            wantedPending = false
+        }
+    }
+
+    private fun move(control: CallControlScope, endpoint: CallEndpointCompat, kind: Kind) {
         scope.launch {
             val result = control.requestEndpointChange(endpoint)
             if (result is CallControlResult.Error) {
                 Log.w(TAG, "Telecom would not move the call to $kind: error ${result.errorCode}")
             }
         }
-        return true
+    }
+
+    /** Applies a choice made before Telecom listed the endpoints, once, as they arrive. Under `lock`. */
+    private fun applyWanted() {
+        val kind = wanted
+        val control = control
+        if (!wantedPending || kind == null || control == null || available.isEmpty()) {
+            return
+        }
+        wantedPending = false
+        val endpoint = available.firstOrNull { Kind.of(it) == kind }
+        if (endpoint == null) {
+            wanted = null
+            return
+        }
+        move(control, endpoint, kind)
     }
 
     /** Calls `listener` on the main thread with the routes now, and with every change, until cancelled. */
@@ -128,7 +187,14 @@ class CallRoutes(context: Context) {
      */
     internal fun attach(control: CallControlScope) {
         val following = listOf(
-            scope.launch { control.availableEndpoints.collect { endpoints -> update { available = endpoints } } },
+            scope.launch {
+                control.availableEndpoints.collect { endpoints ->
+                    update {
+                        available = endpoints
+                        applyWanted()
+                    }
+                }
+            },
             scope.launch { control.currentCallEndpoint.collect { endpoint -> update { current = endpoint } } },
         )
         synchronized(lock) {
@@ -146,6 +212,8 @@ class CallRoutes(context: Context) {
             control = null
             available = emptyList()
             current = null
+            wanted = null
+            wantedPending = false
         }
     }
 
@@ -175,7 +243,13 @@ class CallRoutes(context: Context) {
     private fun routesOf(available: List<CallEndpointCompat>, current: CallEndpointCompat?): List<Route> =
         available.sorted().map { Route(Kind.of(it), it.name, it.identifier == current?.identifier) }
 
-    private companion object {
-        const val TAG = "AspenCall"
+    companion object {
+        private const val TAG = "AspenCall"
+
+        /** Whether the device has an earpiece, read without a call or an engine. */
+        fun hasEarpiece(context: Context): Boolean = hasEarpiece(context.applicationContext.getSystemService(AudioManager::class.java))
+
+        private fun hasEarpiece(audioManager: AudioManager): Boolean =
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
     }
 }

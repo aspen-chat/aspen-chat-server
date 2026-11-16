@@ -36,9 +36,12 @@ class FakePeerConnections : PeerConnectionFactory {
 
 class Snapshots : CallObserver {
     val seen = CopyOnWriteArrayList<CallState>()
+    /** The JSON beside each snapshot, which the apps hand their web views. */
+    val json = CopyOnWriteArrayList<String>()
 
-    override fun stateChanged(state: CallState) {
+    override fun stateChanged(state: CallState, json: String) {
         seen.add(state)
+        this.json.add(json)
     }
 }
 

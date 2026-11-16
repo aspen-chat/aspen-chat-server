@@ -3,6 +3,7 @@ import {
   type Call,
   DEFAULT_DEVICE,
   type DeviceChoice,
+  type EngineCallState,
   type ExternalAudio,
   type ExternalShare,
   type FileSink,
@@ -20,46 +21,13 @@ import {
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
 /**
- * The call engine's state as the plugin writes it (`CallState` in `voice_client/src/state.rs`,
- * the fields the page reads of it): one whole snapshot, numbered by the engine, with the
- * deployment it is of, so each deployment's `NativeCall` takes its own.
+ * One snapshot of a deployment's engine as the plugin publishes it: the JSON the engine writes
+ * of its `CallState` (`EngineCallState`, generated from `call_bridge_schema.json`), untouched,
+ * with the deployment it is of, so each deployment's `NativeCall` takes its own.
  */
-export interface CallSnapshot {
+export interface PublishedState {
   readonly origin: string;
-  readonly revision: number;
-  readonly status: VoiceCallStatus;
-  readonly channel: string | null;
-  readonly session: string | null;
-  readonly user: string | null;
-  readonly muted: boolean;
-  readonly deafened: boolean;
-  readonly held: boolean;
-  readonly serverMuted: boolean;
-  readonly grants: {
-    readonly speak: boolean;
-    readonly shareScreen: boolean;
-    readonly camera: boolean;
-    readonly transferFiles: boolean;
-  };
-  readonly participants: readonly {
-    readonly user: string;
-    readonly muted: boolean;
-    readonly deafened: boolean;
-    readonly held: boolean;
-    readonly speaking: boolean;
-  }[];
-  /**
-   * The engine's kinds, one more than the web's: `offer` is the API server refusing the join
-   * offer, which `VoiceCall` reports as `server`.
-   */
-  readonly errorKind: "offer" | "microphone" | "server" | "refused" | "device" | null;
-  readonly error: string | null;
-  readonly retryAfterSeconds: number | null;
-  readonly stateRefused: {
-    readonly detail: string;
-    readonly retryAfterSeconds: number | null;
-  } | null;
-  readonly endedReason: "kicked" | "accessLost" | "idle" | null;
+  readonly state: string;
 }
 
 /**
@@ -114,13 +82,13 @@ export interface AspenCallPlugin {
   }): Promise<void>;
   acknowledgeEnd(options: { origin: string }): Promise<void>;
   clearStateRefusal(options: { origin: string }): Promise<void>;
-  state(options: { origin: string }): Promise<CallSnapshot>;
+  state(options: { origin: string }): Promise<PublishedState>;
   routes(): Promise<PhoneRoutes>;
   setRoute(options: { kind: RouteKind }): Promise<void>;
   clearRoute(): Promise<void>;
   addListener(
     event: "state",
-    listener: (snapshot: CallSnapshot) => void,
+    listener: (published: PublishedState) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "routes",
@@ -159,7 +127,10 @@ export class NativeCallFailedError extends Error {
   }
 }
 
-/** The plugin reported a value this build's types lack, which a page and its plugin shipped together never do. */
+/**
+ * The engine's snapshot holds a value this build's types lack, which a page and its engine
+ * shipped together never do; or is not the JSON the engine writes.
+ */
 export class NativeCallProtocolError extends Error {
   constructor(field: string, value: unknown) {
     super(`the native call's ${field} is ${JSON.stringify(value)}, which this build does not know`);
@@ -167,7 +138,7 @@ export class NativeCallProtocolError extends Error {
   }
 }
 
-function statusOf(status: CallSnapshot["status"]): VoiceCallStatus {
+function statusOf(status: EngineCallState["status"]): VoiceCallStatus {
   switch (status) {
     case "idle":
     case "joining":
@@ -185,9 +156,10 @@ function statusOf(status: CallSnapshot["status"]): VoiceCallStatus {
  * what `VoiceCall` classes as `server`, the Problem's text carried as `error` either way, so
  * the call bar reads the same on a phone as in a browser.
  */
-function errorKindOf(kind: CallSnapshot["errorKind"]): VoiceCallState["errorKind"] {
+function errorKindOf(kind: EngineCallState["errorKind"]): VoiceCallState["errorKind"] {
   switch (kind) {
     case null:
+    case undefined:
       return null;
     case "offer":
     case "server":
@@ -201,8 +173,10 @@ function errorKindOf(kind: CallSnapshot["errorKind"]): VoiceCallState["errorKind
   }
 }
 
-function endedReasonOf(reason: CallSnapshot["endedReason"]): VoiceCallState["endedReason"] {
+function endedReasonOf(reason: EngineCallState["endedReason"]): VoiceCallState["endedReason"] {
   switch (reason) {
+    case undefined:
+      return null;
     case null:
     case "kicked":
     case "accessLost":
@@ -217,12 +191,12 @@ function endedReasonOf(reason: CallSnapshot["endedReason"]): VoiceCallState["end
  * The call's state as the app reads it, from the engine's snapshot. Voice alone in this stage:
  * no file, screen, or camera is ever offered or shown, so those fields are the idle state's.
  */
-export function stateOf(snapshot: CallSnapshot): VoiceCallState {
+export function stateOf(snapshot: EngineCallState): VoiceCallState {
   return {
     ...IDLE_CALL_STATE,
     status: statusOf(snapshot.status),
-    channelId: snapshot.channel,
-    session: snapshot.session,
+    channelId: snapshot.channel ?? null,
+    session: snapshot.session ?? null,
     muted: snapshot.muted,
     deafened: snapshot.deafened,
     held: snapshot.held,
@@ -237,14 +211,28 @@ export function stateOf(snapshot: CallSnapshot): VoiceCallState {
     canTransfer: false,
     files: NO_FILES,
     errorKind: errorKindOf(snapshot.errorKind),
-    retryAfterSeconds: snapshot.retryAfterSeconds,
-    error: snapshot.error,
+    retryAfterSeconds: snapshot.retryAfterSeconds ?? null,
+    error: snapshot.error ?? null,
     stateRefused:
-      snapshot.stateRefused === null
+      snapshot.stateRefused == null
         ? null
-        : { retryAfterSeconds: snapshot.stateRefused.retryAfterSeconds },
+        : { retryAfterSeconds: snapshot.stateRefused.retryAfterSeconds ?? null },
     endedReason: endedReasonOf(snapshot.endedReason),
   };
+}
+
+/** The engine's snapshot from the JSON it wrote; what is not that is a protocol error. */
+export function parseState(json: string): EngineCallState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new NativeCallProtocolError("state", json);
+  }
+  if (parsed === null || typeof parsed !== "object" || !("revision" in parsed)) {
+    throw new NativeCallProtocolError("state", parsed);
+  }
+  return parsed as EngineCallState;
 }
 
 /** What besides the options every call takes a `NativeCall` is made with. */
@@ -276,7 +264,9 @@ export function onPageWake(listener: () => void): void {
 /**
  * The user's call in a mobile app, carried by the phone's call engine: every command goes to the
  * `AspenCall` plugin for this deployment, and the state is the engine's, mirrored from whole
- * snapshots in the order of their revisions, so one that arrives late changes nothing. The page
+ * snapshots (the JSON the engine writes of its `CallState`, typed from `call_bridge_schema.json`
+ * as `EngineCallState`) in the order of their revisions, so one that arrives late changes
+ * nothing. The page
  * hears each snapshot as it is published and asks for the current one as it wakes, since a page
  * the system froze missed those meanwhile. The browser's media is never touched: the microphone
  * is the engine's, opened by the plugin as the user joins.
@@ -313,13 +303,13 @@ export class NativeCall implements Call {
       ((error) => {
         console.error(error);
       });
-    void AspenCall.addListener("state", (snapshot) => {
-      this.#take(snapshot);
+    void AspenCall.addListener("state", (published) => {
+      this.#take(published);
     });
     const read = () => {
       AspenCall.state({ origin: this.#origin }).then(
-        (snapshot) => {
-          this.#take(snapshot);
+        (published) => {
+          this.#take(published);
         },
         (error: unknown) => {
           this.#report(error);
@@ -341,19 +331,21 @@ export class NativeCall implements Call {
     };
   };
 
-  /** Shows `snapshot` when it is this deployment's and newer than the one shown. */
-  #take(snapshot: CallSnapshot): void {
-    if (snapshot.origin !== this.#origin) {
+  /** Shows the published snapshot when it is this deployment's and newer than the one shown. */
+  #take(published: PublishedState): void {
+    if (published.origin !== this.#origin) {
       return;
     }
-    if (this.#revision !== null && snapshot.revision <= this.#revision) {
-      return;
-    }
+    let snapshot: EngineCallState;
     let state: VoiceCallState;
     try {
+      snapshot = parseState(published.state);
       state = stateOf(snapshot);
     } catch (error) {
       this.#report(error);
+      return;
+    }
+    if (this.#revision !== null && snapshot.revision <= this.#revision) {
       return;
     }
     this.#revision = snapshot.revision;

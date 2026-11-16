@@ -50,9 +50,10 @@ The mobile apps' calls run natively, in the call engine (`voice_client/` at the 
 Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's WebRTC, HTTP, and
 WebSockets through interfaces each platform implements. The Android implementation is
 `app/src/main/java/com/aspen_chat/client/call/`, Kotlin, compiled into the app with the engine's
-generated Kotlin package (`com.aspen_chat.client.voice`). Nothing in the web view uses it yet: the
-Capacitor plugin that will command it and show its state, the call's sounds, the camera, and a DM
-call ringing the phone are later pieces.
+generated Kotlin package (`com.aspen_chat.client.voice`): the engine's platform, the system's call
+(Telecom), the routes, and the Capacitor plugin the web view commands it through and reads its state
+from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side). The call's sounds, the camera,
+and a DM call ringing the phone are later pieces.
 
 ### What the app packages, and where it comes from
 
@@ -69,7 +70,9 @@ writes the bindings, and says when the WebRTC library is missing. The app is Jav
 beside it, so `build.gradle` applies the Kotlin plugin, compiling to the same JVM target as the
 Java. When the WebRTC library or the bindings are absent, as on a machine that has built neither,
 `app/build.gradle` leaves the `call/` and `voice/` sources out of the build and says so, and the app
-builds as it did without them.
+builds as it did without them: `MainActivity` registers the plugin by its class name
+(`Class.forName`), so a build without the layer has no `AspenCall` plugin and the web view's calls
+run in the page as they do in a browser.
 
 ### The layer
 
@@ -89,7 +92,8 @@ engine) where Android allows:
 | `CallAudio.kt`          | The audio mode and the microphone                                            | `AudioManager` in `MODE_IN_COMMUNICATION` for the call (`configureForCall` and `release`, which `CallTelecom` drives; Telecom sets the same mode and holds the audio focus for the call itself), and the microphone as a track from WebRTC's audio device module                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallTelecom.kt`        | The system's side of the engine's call                                       | Follows the engine's snapshots: the call in Telecom, `CallService`, the audio mode, and `CallRoutes` attached for the call's length; Telecom's callbacks go to the engine. See The system's call below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `CallService.kt`        | The foreground service and the ongoing call's notification                   | A service of the kinds `phoneCall` and `microphone` for the call's length, posting a `CallStyle` notification (the call's name, In a call, the system's Hang up, a tap back into the app) as it starts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `CallRoutes.kt`         | Where the call plays                                                         | Telecom's endpoints for the call, each with a kind from its type; selection by kind through `requestEndpointChange`; the proximity sensor while the route is the earpiece                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `CallRoutes.kt`         | Where the call plays                                                         | Telecom's endpoints for the call, each with a kind from its type; selection by kind through `requestEndpointChange`, kept as the call's `chosen` kind and applied once Telecom lists the endpoints; the proximity sensor while the route is the earpiece                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `AspenCallPlugin.kt`    | The web view's way in                                                        | `AspenCall`: a `CallEngine` per deployment origin, made on first use; `join` asks for `RECORD_AUDIO` (Capacitor's permission callback), opens the microphone, names the call for Telecom, and joins; each snapshot's JSON (`CallSnapshots.listenJson`) is a `state` event and `state()`'s answer, untouched; the routes are `routes` events, `setRoute` and `clearRoute`; registered by name in `MainActivity`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Where it differs from iOS: the iOS layer keeps WebRTC's transceiver objects, whose lifetime is the
 connection's; Android's are read anew each time, as above. iOS's audio session is configured and
@@ -166,9 +170,13 @@ reads `AudioManager`'s devices, so it answers before a call too. Selection is by
 through Telecom's `requestEndpointChange`, never `AudioManager.setCommunicationDevice` beside
 Telecom, which would fight it for the device. While the current route is the earpiece a
 `PROXIMITY_SCREEN_OFF_WAKE_LOCK` is held, so the screen turns off at the ear. Listeners hear of
-every change on the main thread; outside a call the list is empty. The endpoints Telecom offers
-before a call (`getAvailableStartingCallEndpoints`), for a Speaker button shown before joining, are
-not read yet.
+every change on the main thread; outside a call the list is empty. A kind chosen before Telecom
+lists the call's endpoints, as the app chooses as a call starts, is kept (`chosen`) and applied once
+they arrive; Telecom's own moves afterwards stand, and `clear` or the call's end forgets it. The
+app's Speaker button reaches it through the plugin's `setRoute` and `clearRoute`, and reads the list
+through `routes` (`voice/native-calls.md`, Where the call plays); the web view's own audio has no
+route of its own. The endpoints Telecom offers before a call (`getAvailableStartingCallEndpoints`),
+for a Speaker button shown before joining, are not read yet.
 
 ### The proof
 
@@ -189,19 +197,30 @@ current, and selecting the loudspeaker (and the earpiece again, where the device
 call there; and leaving ends Telecom's call, stops the service, takes the notification down, empties
 the routes, and gives the audio mode back. What the browser must hear is what the device's
 microphone carried, which the device's own `media-source` statistics tell: sound, when a tone is
-played to it, or silence, as on an emulator whose host audio never reaches it.
-`scripts/check_mobile_call.py --platform android` at the repository's root runs it end to end, with
-the same deployment and browser the iOS check uses: a deployment of its own serving the call page
-(`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the voice
-server, and the script's helper at its own loopback (plain HTTP there, as a development build
+played to it, or silence, as on an emulator whose host audio never reaches it. `AspenCallPluginTest`
+drives the bridge itself: it launches `MainActivity`, which loads the web shell with the plugin
+registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page through the bridge's web
+view, as the app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON,
+idle, revision 0, of its origin) and the empty routes of no call, has malformed commands refused by
+name, joins the channel through the plugin and watches the `joining` and `connected` snapshots reach
+the page, moves the call to the loudspeaker (and the earpiece again, where the device has one) and
+watches the `routes` events say so as Telecom's current endpoint changes, clears the choice, mutes
+and unmutes, and leaves: the snapshots arrive in revision order with none twice, a fresh `state()`
+is the latest published, the renewed session token is kept, and the routes empty again.
+`scripts/check_mobile_call.py --platform android` at the repository's root runs both end to end,
+with the same deployment and browser the iOS check uses: a deployment of its own serving the call
+page (`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the
+voice server, and the script's helper at its own loopback (plain HTTP there, as a development build
 allows; media goes to the voice server's announced address over the network), Chromium as the second
 participant with a tone WAV as its microphone (`calls/second.ts`), and
-`gradlew connectedDebugAndroidTest` on this test alone. With `--avd` it starts the emulator
-headless, recording the machine's microphone (`-allow-host-audio`, without which the emulator
-records silence); the emulator's PulseAudio backend does not start against PipeWire's server
-(``Could not init `pa' audio driver``), so there its microphone is silent and the test checks the
-browser hears silence. The test reads its deployment, channel, user, refresh token, and the script's
-helper from the instrumentation's arguments
+`gradlew connectedDebugAndroidTest` on these two tests alone, judging their JUnit reports (two
+tests, none failed, erred, or skipped) and that each printed its own line, with `ANDROID_SERIAL` set
+to the emulator's serial so a phone plugged in beside it is never touched. With `--avd` it starts
+the emulator headless, recording the machine's microphone (`-allow-host-audio`, without which the
+emulator records silence); the emulator's PulseAudio backend does not start against PipeWire's
+server (``Could not init `pa' audio driver``), so there its microphone is silent and the test checks
+the browser hears silence. The test reads its deployment, channel, user, refresh token, and the
+script's helper from the instrumentation's arguments
 (`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is
 skipped without them, so the `android` job's `connectedDebugAndroidTest` runs it as a skip. CI's
 `android-call` job runs the check itself: it builds the servers, the engine for the emulator, and
@@ -216,7 +235,11 @@ call, so these are checked by hand on a device, with the call engine's test or w
 interface commands the engine:
 
 - [ ] The earpiece: the call plays at the ear, the screen turns off as the phone is raised to it and
-      comes back as it is lowered, and the Speaker route turns the screen back on.
+      comes back as it is lowered, and the Speaker route turns the screen back on; the app's Speaker
+      button does the same through the plugin.
+- [ ] A join with `RECORD_AUDIO` refused fails with `errorKind` `microphone` in the call bar (the
+      permission's prompt is Capacitor's; the emulator's test grants it beforehand), and one in a
+      channel without Speak joins to listen.
 - [ ] A Bluetooth headset: it is listed as `BLUETOOTH` with its name, a call joined with it
       connected starts on it, connecting it during a call moves the call to it, disconnecting it
       moves the call back, and with `BLUETOOTH_CONNECT` granted Telecom names every headset.

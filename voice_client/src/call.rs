@@ -28,7 +28,7 @@ use crate::peer_connection::{
 use crate::signalling::{Incoming, Signalling, signalling_url};
 use crate::state::{
     AudioSlot, CallObserver, CallState, CallStatus, EndedReason, ErrorKind, LocalSource,
-    Participant, Refusal, RemoteVideo, SessionEndReason, ShareAudio,
+    Participant, Refusal, RemoteVideo, SessionEndReason, ShareAudio, SourceRefusal,
 };
 use crate::transport::{Http, Socket, SocketFactory, TransportError};
 use std::collections::{HashMap, VecDeque};
@@ -797,13 +797,13 @@ impl Call {
             None
         };
         if let Some(detail) = refused {
-            self.state.source_refused = Some((
+            self.state.source_refused = Some(SourceRefusal {
                 source,
-                Refusal {
+                refusal: Refusal {
                     detail: detail.to_string(),
                     retry_after_seconds: None,
                 },
-            ));
+            });
             return;
         }
         self.state.source_refused = None;
@@ -1755,7 +1755,7 @@ impl Call {
             Some("send") => {
                 if let Some(at) = self.state.sources.iter().rposition(|s| !s.live) {
                     let source = self.state.sources.remove(at).source;
-                    self.state.source_refused = Some((source, refusal));
+                    self.state.source_refused = Some(SourceRefusal { source, refusal });
                 }
             }
             _ => {}
