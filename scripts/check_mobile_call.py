@@ -11,10 +11,11 @@ is sent each way between them and its bytes compared by hash (the browser's offe
 the phone's through the relay), the socket is cut and resumed, and the call is left; and the web
 view's bridge to it
 (`AspenCallPluginTests`, `AspenCallPluginTest`), in which the app's own page drives the `AspenCall`
-plugin through the Capacitor bridge, joins the same channel, and reads the engine's snapshots and
-routes as they reach it; and, on iOS, the rings' (`CallRingsTests`, against a stand-in deployment
-of their own), in which a call push is reported to CallKit and its answer joins the engine with the
-microphone. Each platform reaches the API server and the voice server at its own
+plugin through the Capacitor bridge, joins the same channel, reads the engine's snapshots and
+routes as they reach it, and shares the screen, which the browser decodes and hears the sound of;
+and, on iOS, the rings' (`CallRingsTests`, against a stand-in deployment of their own), in which a
+call push is reported to CallKit and its answer joins the engine with the microphone. Each platform
+reaches the API server and the voice server at its own
 loopback, `http://127.0.0.1`, which the engine takes in plain text as a debuggable build does, and
 media goes straight to the voice server's announced address over the network.
 
@@ -56,6 +57,8 @@ or neither) or for the phone's ABI (`--device`) and its bindings
 (`connectedDebugAndroidTest`), on a phone `CallDeviceTest` too, what only a phone can show, which
 needs the web shell copied in (`npx cap sync android` in `client/packages/mobile`) and
 `target/webrtc/libwebrtc.aar`.
+
+The servers' logs of the run are left as `target/mobile-call/api.log` and `voice.log`.
 
 `--record-trailing` records instead of checking: it runs the one test that moves a hole across the
 screen with the camera drawn in it (`testPictureFollowsAMovingHole`, `pictureFollowsAMovingHole`)
@@ -238,7 +241,8 @@ def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
     `POST /second-participant/show-video` has his page show others' video,
     `POST /second-participant/camera/start` and `/camera/stop` turn his fake camera on and off,
     `GET /second-participant/camera-sample?user=<id>` is a frame of that user's camera as his page
-    plays it (`CameraSample`, or `null`), `POST /second-participant/offer`
+    plays it (`CameraSample`, or `null`), `GET /second-participant/screen-sample?user=<id>` the same
+    of their shared screen, `POST /second-participant/offer`
     (`{"name", "size", "allowDirect"}`) has him offer a file and answers its id and SHA-256,
     `GET /second-participant/files` his page's files, `POST /second-participant/accept`
     (`{"offer", "mode"}`) has him accept one into memory,
@@ -301,6 +305,9 @@ def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
                 elif parsed.path == "/second-participant/camera-sample":
                     user = query.get("user", [""])[0]
                     self.answer(200, second.ask(f"sample {user}"))
+                elif parsed.path == "/second-participant/screen-sample":
+                    user = query.get("user", [""])[0]
+                    self.answer(200, second.ask(f"screen {user}"))
                 elif parsed.path == "/second-participant/files":
                     self.answer(200, second.ask("files"))
                 elif parsed.path == "/second-participant/received":
@@ -509,10 +516,10 @@ class Emulator:
         self.serial: str | None = None
 
     def start(self) -> None:
+        # Another emulator may be running (another check's, or one left up): the one started here
+        # is told apart by its serial and is the only one driven.
         before = set(emulators())
-        if before:
-            raise Failed(f"an emulator is running already ({', '.join(sorted(before))}); use it (no --avd) or stop it")
-        say(f"starting the emulator {self.avd}")
+        say(f"starting the emulator {self.avd}" + (f" beside {', '.join(sorted(before))}" if before else ""))
         log = open(WORK / "emulator.log", "w")
         self.process = subprocess.Popen(
             [str(sdk() / "emulator" / "emulator"), "-avd", self.avd, "-no-window", "-no-boot-anim", "-no-snapshot",
@@ -840,6 +847,9 @@ def main() -> None:
             finally:
                 second.leave()
                 server.shutdown()
+                # Both servers' whole logs, for a failure the stack's own excerpt is too short for.
+                for log in stack.work.glob("*.log"):
+                    shutil.copy(log, WORK / log.name)
         say("passed")
     except Failed as failure:
         say(f"FAILED: {failure}")

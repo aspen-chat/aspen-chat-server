@@ -7,11 +7,11 @@
  * `loudness`, since the browser's own level statistics read zero), `show` starts showing others'
  * video (`showVideo`), `camera on` and `camera off` turn Chromium's fake camera on and off,
  * `sample <user>` prints a `CameraSample` of that user's camera as the page plays it (or `null`),
- * `offer <json>` offers a file of `size` bytes as `name` (`{"name", "size", "allowDirect"}`) and
- * prints its id and the SHA-256 of what was offered, `files` prints the page's `FilesReport`,
- * `accept <offer> <mode>` accepts an offer into memory, `received <offer> <peer>` prints the
- * SHA-256 of the file received, or `null` while it has not all arrived, each printing `ok` or
- * the JSON, and `leave` leaves and exits.
+ * `screen <user>` the same of their shared screen, `offer <json>` offers a file of `size` bytes
+ * as `name` (`{"name", "size", "allowDirect"}`) and prints its id and the SHA-256 of what was
+ * offered, `files` prints the page's `FilesReport`, `accept <offer> <mode>` accepts an offer into
+ * memory, `received <offer> <peer>` prints the SHA-256 of the file received, or `null` while it
+ * has not all arrived, each printing `ok` or the JSON, and `leave` leaves and exits.
  *
  * ASPEN_CALL_SECOND='{"base": …, "channel": …, "session": <session>, "tone": "tone.wav"}' tsx calls/second.ts
  */
@@ -101,6 +101,13 @@ for await (const line of lines) {
     console.log(
       JSON.stringify(
         await page.evaluate((who) => window.aspenCall?.cameraSample(who) ?? null, user),
+      ),
+    );
+  } else if (command === "screen") {
+    const user = rest.join(" ").trim();
+    console.log(
+      JSON.stringify(
+        await page.evaluate((who) => window.aspenCall?.screenSample(who) ?? null, user),
       ),
     );
   } else if (command === "offer") {

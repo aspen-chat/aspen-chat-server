@@ -96,7 +96,11 @@ the `VoiceMedia` interface (`voiceMedia.ts`). It is loaded lazily (`lazyBrowserM
 ## Screen sharing
 
 `startScreenShare()` asks `VoiceMedia.getScreen()`: `getDisplayMedia` with audio, at the screen's
-own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
+own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`). `Call.hasScreenCapture` says
+whether the call can capture a screen at all (`VoiceMedia.hasScreenCapture`,
+`screenCaptureAvailable`: a browser with `getDisplayMedia`, so not a mobile browser; the mobile
+apps' native calls answer `true`, since the phone captures its own), and `ShareControl` is offered
+only where it is.
 
 | Source                    | Settings                                                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,6 +111,11 @@ own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
   resolution rather than frames when bandwidth runs short.
 - `stopScreenShare()` stops sending both. The share also ends when the browser's own stop control
   ends the track.
+- A share that could not start is `state.shareError` (`ShareFailure`: `denied`, the user declining
+  the picker, which the UI shows nothing of; `unsupported`; `failed`; or `unsent`, the voice server
+  refusing the share) and a `ScreenShareError` thrown, read from the browser's error by
+  `shareFailureOf`, until a share starts, `clearShareError()`, or the call ends; `ShareProblem`
+  shows it under the call bar and in the channel's header, as the camera's failures are shown.
 - `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share. A
   share sent from outside the browser is previewed from the voice server: `localScreen` is then the
   track of a `video` section of the user's own screen, watched while video is shown.

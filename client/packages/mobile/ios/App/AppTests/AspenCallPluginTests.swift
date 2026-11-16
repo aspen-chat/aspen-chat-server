@@ -16,8 +16,11 @@ import XCTest
 /// on (in software, `SyntheticVideoCapturer`) and sees its source in the snapshots, reports a
 /// hole for the preview and hears its shape back, moves to the other camera, watches a second
 /// participant's camera from a browser and hears its shape, has the system's picture in picture
-/// started on it and hears `pip`, has malformed video commands refused by name, and turns the
-/// camera off. `scripts/check_mobile_call.py` runs it with `CallEngineTests` and gives it the
+/// started on it and hears `pip`, has malformed video commands refused by name, turns the camera
+/// off, shares the screen (in software, `SyntheticScreenCapturer`, with a tone as its app audio)
+/// and sees its sources go on the capture connection, hears the preview's shape, has the browser
+/// decode the share and receive its sound, stops it, and has a declined picker come back as a
+/// `share` event. `scripts/check_mobile_call.py` runs it with `CallEngineTests` and gives it the
 /// same environment; without it, the join is skipped.
 final class AspenCallPluginTests: XCTestCase {
     private var keptPushState: String?
@@ -30,12 +33,13 @@ final class AspenCallPluginTests: XCTestCase {
     private static let recorder = """
     (() => {
       const plugin = window.Capacitor.registerPlugin("AspenCall");
-      const record = { states: [], routes: [], shapes: [], pips: [], results: {} };
+      const record = { states: [], routes: [], shapes: [], pips: [], shares: [], results: {} };
       window.__aspenCallTest = record;
       plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin }));
       plugin.addListener("routes", (routes) => record.routes.push(routes));
       plugin.addListener("shape", (shape) => record.shapes.push(shape));
       plugin.addListener("pip", (pip) => record.pips.push(pip));
+      plugin.addListener("share", (share) => record.shares.push(share));
       window.__aspenCallRun = (id, method, options) => {
         void plugin[method](options).then(
           (value) => { record.results[id] = { ok: value === undefined ? null : value }; },
@@ -56,6 +60,7 @@ final class AspenCallPluginTests: XCTestCase {
         CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
         CallEngine.camera.makeCapturer = { SyntheticVideoCapturer() }
         CallSounds.makePlayer = { try SoftwareSoundPlayer(url: $0) }
+        CallEngine.screen.makeCapturer = { SyntheticScreenCapturer() }
         (webView, bridgeViewController) = try await MainActor.run {
             let windows = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
@@ -122,18 +127,24 @@ final class AspenCallPluginTests: XCTestCase {
         // Choosing moves the session's route within the call's category: the loudspeaker is
         // the current route's output, and the receiver, which the simulator has no port for,
         // leaves the simulator on its loudspeaker with the choice standing; a device's receiver
-        // is on the checklist. Each choice reaches the page as a `routes` event.
+        // is on the checklist. Each choice reaches the page as a `routes` event: one after the
+        // command, since the app's own page, outside a call, lets the route go as it starts
+        // (`useFollowSpeakerphone`), which may follow the test's choice by a moment.
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
+        var routesSeen = try await routesCount()
         _ = try await run("setRoute", ["kind": "loudspeaker"])
-        try await untilTrue("the loudspeaker choice reaches the page", seconds: 5) {
-            (try? await self.latestRoutes())?["chosen"] as? String == "loudspeaker"
+        try await untilTrue("the loudspeaker choice reaches the page", seconds: 5, diagnosis: { [self] in
+            "routes recorded \((try? await evaluate("JSON.stringify(window.__aspenCallTest.routes)")) ?? "?")"
+        }) {
+            (try? await self.routesChosen(since: routesSeen))?.contains("loudspeaker") == true
         }
         let onLoudspeaker = session.currentRoute.outputs.map(\.portType.rawValue)
         XCTAssertEqual(onLoudspeaker, [AVAudioSession.Port.builtInSpeaker.rawValue])
+        routesSeen = try await routesCount()
         _ = try await run("setRoute", ["kind": "receiver"])
         try await untilTrue("the receiver choice reaches the page", seconds: 5) {
-            (try? await self.latestRoutes())?["chosen"] as? String == "receiver"
+            (try? await self.routesChosen(since: routesSeen))?.contains("receiver") == true
         }
         let onReceiver = session.currentRoute.outputs.map(\.portType.rawValue)
         let refused = try await run("setRoute", ["kind": "car"], expectingError: true)
@@ -336,13 +347,87 @@ final class AspenCallPluginTests: XCTestCase {
         }
         XCTAssertFalse(CallEngine.camera.isOn)
         _ = try await run("setTiles", ["tiles": []])
+
+        // The share from the page: the system's picker, here a capturer in software that consents
+        // at once, starts the capture, whose picture and tone the engine sends as external sources
+        // on a capture connection of their own (a second peer connection, from the share's
+        // factory); the preview is a hole like the camera's, and the browser, watching, decodes the
+        // picture and receives the sound on the share's audio section of the `{user}-share` stream.
+        XCTAssertEqual((connected["grants"] as? [String: Any])?["shareScreen"] as? Bool, true, "the channel lets the user share")
+        let ownUser = try XCTUnwrap(connected["user"] as? String)
+        _ = try await run("startScreenShare", ["origin": origin, "audio": true])
+        let sharesLive = { (snapshot: [String: Any]) -> Bool in
+            let sources = (snapshot["sources"] as? [[String: Any]]) ?? []
+            let live = { (name: String) in sources.contains { $0["source"] as? String == name && $0["live"] as? Bool == true && $0["external"] as? Bool == true } }
+            return live("screen") && live("screenAudio")
+        }
+        try await untilTrue("the share's sources are live", seconds: 30, diagnosis: { [self] in
+            // What the share came to, since the states are many.
+            let last = try? await evaluate(
+                "JSON.stringify((({ sources, sourceRefused, status, revision }) => ({ sources, sourceRefused, status, revision }))(window.__aspenCallTest.states.at(-1) ?? {}))")
+            let shares = try? await evaluate("JSON.stringify(window.__aspenCallTest.shares)")
+            let capture = await MainActor.run {
+                let synthetic = CallEngine.screen.capturer as? SyntheticScreenCapturer
+                let audio = CallEngine.peerConnections.shareAudio
+                return "active \(CallEngine.screen.isActive), on \(CallEngine.screen.isOn), frames fed \(synthetic?.framesSent ?? -1), audio buffers fed \(synthetic?.audioBuffersSent ?? -1); share audio device recording \(audio.isRecording), delivered \(audio.deliveredFrames) frames, dropped \(audio.droppedBuffers) buffers (\(audio.lastDrop))"
+            }
+            return "capture \(capture); last \(last ?? "?"); share events \(shares ?? "?")"
+        }) {
+            (try? await self.states())?.contains(where: sharesLive) == true
+        }
+        let sharing = try await untilState("the share's sources are live", seconds: 5, holds: sharesLive)
+        XCTAssertTrue(CallEngine.screen.isOn)
+        let shareSurface = try XCTUnwrap(((sharing["sources"] as? [[String: Any]]) ?? []).first { $0["source"] as? String == "screen" }?["track"] as? String)
+        let shareTile: [String: Any] = [
+            "tile": "share", "surface": shareSurface, "rect": ["x": 0, "y": 420, "width": 320, "height": 180], "visible": true,
+            "mirrored": false, "cover": false, "fullScreen": false, "pictureInPicture": false,
+        ]
+        _ = try await run("setTiles", ["tiles": [shareTile]])
+        let shareShape = try await untilShape("the share preview's shape reaches the page", seconds: 15) { $0["surface"] as? String == shareSurface }
+        XCTAssertEqual(shareShape["width"] as? Int, SyntheticScreenCapturer.width)
+        XCTAssertEqual(shareShape["height"] as? Int, SyntheticScreenCapturer.height)
+        XCTAssertEqual(shareShape["rotation"] as? Int, 0)
+        try await untilTrue("the browser sees the share", seconds: 30) {
+            ((try? await self.browserReport(helper))?["screens"] as? [String])?.contains(ownUser) == true
+        }
+        var shareSample: [String: Any]?
+        try await untilTrue("the browser decodes a picture of the share", seconds: 30) {
+            let sampled = try? await self.browserSample(helper, path: "second-participant/screen-sample", user: ownUser)
+            guard let sampled, (sampled["brightness"] as? Double ?? 0) > 20, (sampled["spread"] as? Double ?? 0) < 40 else {
+                return false
+            }
+            shareSample = sampled
+            return true
+        }
+        var shareAudioPackets = 0
+        try await untilTrue("the browser receives the share's sound", seconds: 30) {
+            shareAudioPackets = (try? await self.browserShareAudioPackets(helper, user: ownUser)) ?? 0
+            return shareAudioPackets > 20
+        }
+        _ = try await run("stopScreenShare", ["origin": origin])
+        _ = try await untilState("the share leaves the sources", seconds: 15) { snapshot in
+            (snapshot["revision"] as? Int ?? 0) > (sharing["revision"] as? Int ?? 0)
+                && !((snapshot["sources"] as? [[String: Any]]) ?? []).contains { ($0["source"] as? String)?.hasPrefix("screen") == true }
+        }
+        XCTAssertFalse(CallEngine.screen.isOn)
+        try await untilTrue("the browser sees the share go", seconds: 20) {
+            ((try? await self.browserReport(helper))?["screens"] as? [String])?.isEmpty == true
+        }
+        _ = try await run("setTiles", ["tiles": []])
+        // A picker the user dismisses: the plugin resolved at once, and the share's end comes back
+        // as a `share` event naming the refusal, with no source ever asked for.
+        CallEngine.screen.makeCapturer = { SyntheticScreenCapturer(declining: true) }
+        _ = try await run("startScreenShare", ["origin": origin, "audio": true])
+        let declined = try await untilRecorded("the declined picker reaches the page", in: "shares", seconds: 10) { $0["failure"] as? String == "denied" }
+        XCTAssertEqual(declined["origin"] as? String, origin)
+        XCTAssertFalse(CallEngine.screen.isActive)
         _ = try await run("leave", ["origin": origin])
         _ = try await untilState("the leave reaches the page", seconds: 15) { snapshot in
             (snapshot["revision"] as? Int ?? 0) > (watching["revision"] as? Int ?? 0) && snapshot["status"] as? String == "idle"
         }
         let direct = try await states().dropFirst(directFrom).compactMap { $0["revision"] as? Int }
         XCTAssertEqual(direct, direct.sorted(), "snapshots arrive in revision order: \(direct)")
-        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off, and left")
+        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off; shared the screen (\(shareShape["width"] ?? 0)×\(shareShape["height"] ?? 0), the browser decoding it at brightness \(shareSample?["brightness"] ?? 0) and receiving \(shareAudioPackets) packets of its sound), stopped it, had a declined picker reported, and left")
     }
 
     /// How far the native picture trails the page while a hole moves, for judging by eye: the page
@@ -525,6 +610,18 @@ final class AspenCallPluginTests: XCTestCase {
         try await evaluate("window.__aspenCallTest.routes.at(-1) ?? null") as? [String: Any]
     }
 
+    private func routesCount() async throws -> Int {
+        let count = try await evaluate("window.__aspenCallTest.routes.length")
+        return try XCTUnwrap(count as? Int)
+    }
+
+    /// The kinds chosen in the `routes` events recorded after the first `count`.
+    private func routesChosen(since count: Int) async throws -> [String] {
+        let evaluated = try await evaluate("window.__aspenCallTest.routes.slice(\(count))")
+        let recorded = try XCTUnwrap(evaluated as? [[String: Any]])
+        return recorded.compactMap { $0["chosen"] as? String }
+    }
+
     /// The first `shape` event the page recorded of which `holds`, waiting for it up to `seconds`.
     private func untilShape(_ what: String, seconds: Double, holds: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
         try await untilRecorded(what, in: "shapes", seconds: seconds, holds: holds)
@@ -560,14 +657,40 @@ final class AspenCallPluginTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    /// The browser's page's report (`CallReport` in `calls/page.ts`), from the helper.
+    private func browserReport(_ helper: URL) async throws -> [String: Any] {
+        let (data, _) = try await URLSession.shared.data(from: helper.appendingPathComponent("second-participant/report"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     /// How many video frames the browser's connection has decoded, from the helper's report of it.
     private func browserVideoFrames(_ helper: URL) async throws -> Int {
-        let (data, _) = try await URLSession.shared.data(from: helper.appendingPathComponent("second-participant/report"))
-        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let report = try await browserReport(helper)
         let streams = try XCTUnwrap(report["streams"] as? [[String: Any]])
         return streams
             .filter { $0["direction"] as? String == "inbound" && $0["kind"] as? String == "video" }
             .reduce(0) { $0 + (($1["framesDecoded"] as? NSNumber)?.intValue ?? 0) }
+    }
+
+    /// How many packets of `user`'s share's sound the browser has received: those of the inbound
+    /// audio stream whose section is in the stream `{user}-share`.
+    private func browserShareAudioPackets(_ helper: URL, user: String) async throws -> Int {
+        let report = try await browserReport(helper)
+        let sections = try XCTUnwrap(report["sections"] as? [[String: Any]])
+        let mids = Set(sections.filter { $0["stream"] as? String == "\(user)-share" && $0["kind"] as? String == "audio" }.compactMap { $0["mid"] as? String })
+        let streams = try XCTUnwrap(report["streams"] as? [[String: Any]])
+        return streams
+            .filter { $0["direction"] as? String == "inbound" && $0["kind"] as? String == "audio" && mids.contains($0["mid"] as? String ?? "") }
+            .reduce(0) { $0 + (($1["packets"] as? NSNumber)?.intValue ?? 0) }
+    }
+
+    /// A frame of `user`'s camera or screen as the browser plays it (`CameraSample`), from the
+    /// helper's `path`, or `nil` while there is none.
+    private func browserSample(_ helper: URL, path: String, user: String) async throws -> [String: Any]? {
+        var components = URLComponents(url: helper.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "user", value: user)]
+        let (data, _) = try await URLSession.shared.data(from: components.url!)
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     /// The first snapshot the page recorded of which `holds`, waiting for it up to `seconds`.
@@ -585,10 +708,18 @@ final class AspenCallPluginTests: XCTestCase {
         }
     }
 
-    private func untilTrue(_ what: String, seconds: Double, holds: @escaping () async -> Bool) async throws {
+    /// Waits for `holds`, up to `seconds`; past them the failure says `what`, and prints
+    /// `diagnosis` first, since the test stops at its first failure and what was seen would
+    /// otherwise be lost with it.
+    private func untilTrue(
+        _ what: String, seconds: Double, diagnosis: (() async -> String)? = nil, holds: @escaping () async -> Bool
+    ) async throws {
         let deadline = Date().addingTimeInterval(seconds)
         while await !holds() {
             if Date() > deadline {
+                if let diagnosis {
+                    print("call-plugin-test: \(what) did not happen: \(await diagnosis())")
+                }
                 XCTFail("\(what) did not happen within \(seconds) s")
                 throw Stopped()
             }

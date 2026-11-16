@@ -2,10 +2,14 @@ package com.aspen_chat.client.call
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.graphics.Rect
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import com.aspen_chat.client.MainActivity
 import com.aspen_chat.client.call.CallTestSupport.argument
 import com.aspen_chat.client.call.CallTestSupport.browserVideoFrames
@@ -13,6 +17,7 @@ import com.aspen_chat.client.call.CallTestSupport.http
 import com.aspen_chat.client.push.PushStore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
@@ -38,9 +43,12 @@ import org.junit.runner.RunWith
  * preview and hears its shape back while the surface view behind the page draws it in that hole,
  * moves to the other camera, watches a second participant's camera from a browser and hears its
  * shape, enters the picture-in-picture mode on it and hears `pip`, has malformed video commands
- * refused by name, turns the camera off, and leaves. `scripts/check_mobile_call.py --platform
- * android` runs it with `CallEngineTest` and gives it the same arguments; without them it is
- * skipped.
+ * refused by name, turns the camera off, shares the screen (accepting the system's media
+ * projection dialog, another app's window, through UI Automator) and sees its sources go on the
+ * capture connection with the service of the projection's kind, hears the preview's shape, has
+ * the browser decode the share and receive its sound, stops it, has a declined dialog rejected as
+ * `denied`, and leaves. `scripts/check_mobile_call.py --platform android` runs it with
+ * `CallEngineTest` and gives it the same arguments; without them it is skipped.
  */
 @RunWith(AndroidJUnit4::class)
 class AspenCallPluginTest {
@@ -228,6 +236,75 @@ class AspenCallPluginTest {
         assertTrue(!CallEngine.camera(context).isOn)
         run("setTiles", JSONObject().put("tiles", JSONArray()))
 
+        // The share from the page: the system's media projection dialog is accepted (it is the
+        // system's own window, reached through UI Automator), the capture starts, and the engine
+        // sends its picture and sound as external sources on a capture connection of their own (a
+        // second peer connection, from the share's factory) while the call's service runs with the
+        // projection's kind; the preview is a hole like the camera's, and the browser, watching,
+        // decodes the picture and receives the sound on the share's audio section of the
+        // `{user}-share` stream. The emulator plays nothing for the capture to hear, so the sound
+        // is silence, carried all the same.
+        assertTrue("the channel lets the user share", connected.getJSONObject("grants").getBoolean("shareScreen"))
+        val shareStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
+        acceptProjectionDialog()
+        val shareAnswer = shareStarted()
+        assertTrue("the consent resolved: $shareAnswer", !shareAnswer.has("error"))
+        // A mirrored display composes a frame only as the screen changes, so the page keeps
+        // something moving while it is shared, as a shared screen in use does.
+        evaluate(MOVING_BOX)
+        val sharesLive = { snapshot: JSONObject ->
+            val live = { name: String -> sourcesOf(snapshot).any { it.getString("source") == name && it.getBoolean("live") && it.getBoolean("external") } }
+            live("screen") && live("screenAudio")
+        }
+        awaitTrue("the share's sources are live", 30, diagnosis = {
+            val all = states()
+            val screen = CallEngine.screen(context)
+            val seen = (0 until all.length()).map { all.getJSONObject(it) }.filter { it.getLong("revision") >= connected.getLong("revision") }.joinToString(" | ") { state ->
+                "${state.getLong("revision")} ${state.getString("status")}: " +
+                    sourcesOf(state).joinToString(",") { "${it.getString("source")}${if (it.getBoolean("live")) "+" else "-"}${if (it.getBoolean("external")) "x" else ""}" } +
+                    (state.optJSONObject("sourceRefused")?.let { " refused ${it.getString("source")}: ${it.getJSONObject("refusal").getString("detail")}" } ?: "")
+            }
+            "capture active ${screen.isActive}, on ${screen.isOn}, frames captured ${screen.framesCaptured}; states $seen; " +
+                "share events ${evaluate("JSON.stringify(window.__aspenCallTest.shares)")}"
+        }) { (0 until states().length()).any { sharesLive(states().getJSONObject(it)) } }
+        val sharing = untilState("the share's sources are live", 5, sharesLive)
+        assertTrue(CallEngine.screen(context).isOn)
+        awaitTrue("the service runs with the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION != 0 }
+        val shareSurface = sourcesOf(sharing).first { it.getString("source") == "screen" }.getString("track")
+        val shareTile = tile("share", shareSurface, 0, 420, 320, 180, mirrored = false, cover = false, pictureInPicture = false)
+        run("setTiles", JSONObject().put("tiles", JSONArray().put(shareTile)))
+        val shareShape = untilRecorded("the share preview's shape reaches the page", "shapes", 15) { it.getString("surface") == shareSurface }
+        assertTrue("a picture: $shareShape", shareShape.getInt("width") > 0 && shareShape.getInt("height") > 0)
+        awaitTrue("the share preview is drawn", 15) { onActivity { CallEngine.video.renderer("share")?.firstFrameRendered } == true }
+        awaitTrue("the browser sees the share", 30) { browserScreens(helper).contains(user) }
+        var shareSample: JSONObject? = null
+        awaitTrue("the browser decodes a picture of the share", 30) {
+            val sampled = http("GET", "$helper/second-participant/screen-sample?user=$user")
+            val parsed = if (sampled == "null") null else JSONObject(sampled)
+            shareSample = parsed
+            parsed != null && parsed.getDouble("brightness") > 5
+        }
+        var shareAudioPackets = 0
+        awaitTrue("the browser receives the share's sound", 30) {
+            shareAudioPackets = browserShareAudioPackets(helper, user)
+            shareAudioPackets > 20
+        }
+        run("stopScreenShare", JSONObject().put("origin", api))
+        evaluate("document.getElementById('aspen-moving')?.remove(); 'removed'")
+        untilState("the share leaves the sources", 15) { snapshot ->
+            snapshot.getLong("revision") > sharing.getLong("revision") && sourcesOf(snapshot).none { it.getString("source").startsWith("screen") }
+        }
+        assertTrue(!CallEngine.screen(context).isOn)
+        awaitTrue("the browser sees the share go", 20) { browserScreens(helper).isEmpty() }
+        awaitTrue("the service drops the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION == 0 }
+        run("setTiles", JSONObject().put("tiles", JSONArray()))
+        // The dialog declined: the plugin rejects with `denied`, and no source is asked for.
+        val declinedStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
+        declineProjectionDialog()
+        val declined = declinedStarted()
+        assertTrue("declined: $declined", declined.optString("error").contains("not allowed"))
+        assertTrue(!CallEngine.screen(context).isActive)
+
         // Leaving: the page sees the call idle, in order, and a fresh read is the latest published.
         run("leave", JSONObject().put("origin", api))
         val left = untilState("the leave reaches the page", 15) { it.getLong("revision") > connected.getLong("revision") && it.getString("status") == "idle" }
@@ -246,7 +323,10 @@ class AspenCallPluginTest {
                 "routes $kinds, moved to $moved as the routes events said; listed $facings cameras, turned the camera on (${opened.getString("device")}, " +
                 "facing ${opened.getString("facing")}), heard its preview's shape ${selfShape.getInt("width")}×${selfShape.getInt("height")} at ${selfShape.getInt("rotation")}° " +
                 "for a hole laid out at $expectedBounds and drawn, $cameraMoved; watched $bob's camera (shape ${remoteShape.getInt("width")}×${remoteShape.getInt("height")}), " +
-                "entered the picture in picture on it and left it, had bad video commands refused, turned the camera off; a fresh read matched the latest",
+                "entered the picture in picture on it and left it, had bad video commands refused, turned the camera off; shared the screen " +
+                "(${shareShape.getInt("width")}×${shareShape.getInt("height")}, the browser decoding it at brightness ${shareSample?.optDouble("brightness")} " +
+                "and receiving $shareAudioPackets packets of its sound, silence here) with the service of the projection's kind, stopped it, " +
+                "had a declined dialog rejected; a fresh read matched the latest",
         )
     }
 
@@ -319,10 +399,20 @@ class AspenCallPluginTest {
         return outcome.getString("error")
     }
 
-    private fun outcome(method: String, options: JSONObject): JSONObject {
+    private fun outcome(method: String, options: JSONObject): JSONObject = outcomeLater(method, options)()
+
+    /**
+     * Runs the plugin's `method` and answers a function that waits for its outcome, for a method
+     * the test must answer a system dialog of before it settles.
+     */
+    private fun outcomeLater(method: String, options: JSONObject): () -> JSONObject {
         runs += 1
         val id = "run$runs"
         evaluate("window.__aspenCallRun(${JSONObject.quote(id)}, ${JSONObject.quote(method)}, $options)")
+        return { settled(id, method) }
+    }
+
+    private fun settled(id: String, method: String): JSONObject {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
         while (true) {
             val answer = evaluate("window.__aspenCallTest.results[${JSONObject.quote(id)}] ?? null")
@@ -390,6 +480,89 @@ class AspenCallPluginTest {
         }
     }
 
+    /**
+     * Answers the system's media projection dialog, which is another app's window: the whole
+     * screen where the dialog offers a choice (Android 14 and later offer one app first, its
+     * button then leading to an app picker), then its start button, whichever words this version
+     * gives it (Start, Share, Start now).
+     */
+    private fun acceptProjectionDialog() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val dialog = device.wait(Until.findObject(By.textContains("creen")), 15_000)
+        assertTrue("the media projection dialog appears: ${windowTexts(device)}", dialog != null)
+        val entireScreen = By.text(Pattern.compile("(?i).*entire screen.*"))
+        val oneApp = device.findObject(By.text(Pattern.compile("(?i).*(single|one) app.*")))
+        if (oneApp != null && device.findObject(entireScreen) == null) {
+            // The choice is a spinner reading the one-app option; opening it lists the screen.
+            oneApp.click()
+            val option = device.wait(Until.findObject(entireScreen), 5_000)
+            assertTrue("the dialog offers the whole screen: ${windowTexts(device)}", option != null)
+            option!!.click()
+            device.wait(Until.hasObject(By.text(Pattern.compile("(?i)^(?!.*(single|one) app).*"))), 2_000)
+        }
+        val startButton = By.clazz(Pattern.compile(".*Button")).text(Pattern.compile("(?i)^(start|share)(?! one app).*"))
+        val start = device.wait(Until.findObject(startButton), 10_000)
+        assertTrue("the dialog has a start button: ${windowTexts(device)}", start != null)
+        start!!.click()
+        device.wait(Until.gone(startButton), 10_000)
+    }
+
+    /** Declines the system's media projection dialog. */
+    private fun declineProjectionDialog() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val cancel = device.wait(Until.findObject(By.clickable(true).text(Pattern.compile("(?i)cancel.*"))), 15_000)
+        assertTrue("the media projection dialog has a cancel button: ${windowTexts(device)}", cancel != null)
+        cancel!!.click()
+    }
+
+    /** Every node of the screen's windows with text, as `class: text`, for a dialog that is not as expected. */
+    private fun windowTexts(device: UiDevice): String {
+        val out = java.io.ByteArrayOutputStream()
+        device.dumpWindowHierarchy(out)
+        return Regex("""<node[^>]*>""").findAll(out.toString()).mapNotNull { node ->
+            val attributes = node.value
+            val text = Regex("""\btext="([^"]*)"""").find(attributes)?.groupValues?.get(1) ?: ""
+            if (text.isEmpty()) {
+                null
+            } else {
+                val clazz = Regex("""\bclass="([^"]*)"""").find(attributes)?.groupValues?.get(1) ?: "?"
+                val clickable = Regex("""\bclickable="([^"]*)"""").find(attributes)?.groupValues?.get(1) ?: "?"
+                "$clazz${if (clickable == "true") "(clickable)" else ""}: $text"
+            }
+        }.joinToString("; ")
+    }
+
+    /** The foreground service types the call's service runs with now, or 0 without one. */
+    private fun serviceTypes(): Int = CallService.types
+
+    /** Whose screens the browser's page shows, from the helper's report. */
+    private fun browserScreens(helper: String): List<String> {
+        val screens = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("screens")
+        return (0 until screens.length()).map { screens.getString(it) }
+    }
+
+    /**
+     * How many packets of `user`'s share's sound the browser has received: those of the inbound
+     * audio stream whose section is in the stream `{user}-share`.
+     */
+    private fun browserShareAudioPackets(helper: String, user: String): Int {
+        val report = JSONObject(http("GET", "$helper/second-participant/report"))
+        val sections = report.getJSONArray("sections")
+        val mids = (0 until sections.length()).map { sections.getJSONObject(it) }
+            .filter { it.optString("stream") == "$user-share" && it.optString("kind") == "audio" }
+            .map { it.optString("mid") }
+            .toSet()
+        val streams = report.getJSONArray("streams")
+        var packets = 0
+        for (i in 0 until streams.length()) {
+            val stream = streams.getJSONObject(i)
+            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "audio" && mids.contains(stream.optString("mid"))) {
+                packets += stream.optInt("packets")
+            }
+        }
+        return packets
+    }
+
     private fun latestRoutes(): JSONObject? {
         val answer = evaluate("window.__aspenCallTest.routes.at(-1) ?? null")
         return if (answer == "null") null else JSONObject(answer)
@@ -439,11 +612,15 @@ class AspenCallPluginTest {
         }
     }
 
-    private fun awaitTrue(what: String, seconds: Long, holds: () -> Boolean) {
+    /**
+     * Waits for `holds`, up to `seconds`; past them the failure says `what`, with `diagnosis`
+     * of what was seen.
+     */
+    private fun awaitTrue(what: String, seconds: Long, diagnosis: (() -> String)? = null, holds: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
         while (!holds()) {
             if (System.nanoTime() > deadline) {
-                fail("$what did not happen within $seconds s")
+                fail("$what did not happen within $seconds s" + (diagnosis?.let { ": ${it()}" } ?: ""))
             }
             Thread.sleep(200)
         }
@@ -491,6 +668,24 @@ class AspenCallPluginTest {
     })()
         """.trimIndent()
 
+        /** A box the page keeps moving while the screen is shared, so the mirrored display has frames to compose. */
+        val MOVING_BOX = """
+            (() => {
+              const box = document.createElement("div");
+              box.id = "aspen-moving";
+              Object.assign(box.style, { position: "fixed", top: "200px", left: "0px", width: "200px", height: "200px", background: "#ffffff", zIndex: "99999", pointerEvents: "none" });
+              document.body.append(box);
+              const start = performance.now();
+              const step = (now) => {
+                if (!box.isConnected) return;
+                box.style.left = `${'$'}{((now - start) / 8) % 300}px`;
+                requestAnimationFrame(step);
+              };
+              requestAnimationFrame(step);
+              return "moving";
+            })()
+        """.trimIndent()
+
         /**
          * What the page records under `window.__aspenCallTest`: the plugin's events, each `state`
          * one read as the engine's JSON with its origin beside, and each command's outcome by name.
@@ -498,12 +693,13 @@ class AspenCallPluginTest {
         val RECORDER = """
             (() => {
               const plugin = window.Capacitor.registerPlugin("AspenCall");
-              const record = { states: [], routes: [], shapes: [], pips: [], results: {} };
+              const record = { states: [], routes: [], shapes: [], pips: [], shares: [], results: {} };
               window.__aspenCallTest = record;
               plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin }));
               plugin.addListener("routes", (routes) => record.routes.push(routes));
               plugin.addListener("shape", (shape) => record.shapes.push(shape));
               plugin.addListener("pip", (pip) => record.pips.push(pip));
+              plugin.addListener("share", (share) => record.shares.push(share));
               window.__aspenCallRun = (id, method, options) => {
                 void plugin[method](options).then(
                   (value) => { record.results[id] = { ok: value === undefined ? null : value }; },

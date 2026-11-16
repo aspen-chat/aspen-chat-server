@@ -13,6 +13,7 @@ import {
   allowLoopbackPlainText,
   browserVoiceMedia,
   type CallConnection,
+  type RemoteScreen,
   type Session,
   type TransferMode,
   type VoiceCallState,
@@ -115,9 +116,9 @@ export interface DelayReport {
 }
 
 /**
- * What a frame of someone's camera, as the browser plays it, looks like: its size, the mean of
- * its pixels' brightness (0 to 255), and the widest spread among its channels, which a picture
- * with anything in it has and a black or blank one lacks.
+ * What a frame of someone's camera or screen, as the browser plays it, looks like: its size,
+ * the mean of its pixels' brightness (0 to 255), and the widest spread among its channels, which
+ * a picture with anything in it has and a black or blank one lacks.
  */
 export interface CameraSample {
   readonly width: number;
@@ -140,6 +141,7 @@ declare global {
       report(): Promise<CallReport>;
       loudness(): Promise<number>;
       cameraSample(user: string): Promise<CameraSample | null>;
+      screenSample(user: string): Promise<CameraSample | null>;
       sync(streams: readonly string[], delayMs: number, seconds: number): Promise<SyncReport[]>;
       reference(delayMs: number, seconds: number): Promise<SyncReport>;
       /**
@@ -384,6 +386,63 @@ async function measure(
   }));
 }
 
+/** A frame of `shown`'s picture as the browser plays it (`CameraSample`), or `null`. */
+async function sample(shown: RemoteScreen | undefined): Promise<CameraSample | null> {
+  if (shown?.video.kind !== "track") {
+    return null;
+  }
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = new MediaStream([shown.video.track]);
+  document.body.append(video);
+  try {
+    await video.play();
+    const painted = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve(false);
+      }, 2000);
+      // The second frame, so the first paint's black is never read.
+      video.requestVideoFrameCallback(() => {
+        video.requestVideoFrameCallback(() => {
+          clearTimeout(timeout);
+          resolve(true);
+        });
+      });
+    });
+    if (!painted || video.videoWidth === 0) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (context === null) {
+      return null;
+    }
+    context.drawImage(video, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let sum = 0;
+    let spread = 0;
+    for (let at = 0; at < pixels.length; at += 4) {
+      const r = pixels[at] ?? 0;
+      const g = pixels[at + 1] ?? 0;
+      const b = pixels[at + 2] ?? 0;
+      sum += (r + g + b) / 3;
+      spread = Math.max(spread, Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+    }
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      brightness: sum / (pixels.length / 4),
+      spread,
+    };
+  } finally {
+    video.srcObject = null;
+    video.remove();
+  }
+}
+
 window.aspenCall = {
   async join(session, channel) {
     const sessionStore = new MemorySessionStore();
@@ -469,61 +528,12 @@ window.aspenCall = {
    * A frame of `user`'s camera as the browser plays it, drawn to a canvas and read back, or
    * `null` while the call shows no camera of theirs or no frame has arrived within two seconds.
    */
-  async cameraSample(user) {
-    const camera = call?.state.cameras.find((shown) => shown.user === user);
-    if (camera?.video.kind !== "track") {
-      return null;
-    }
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = new MediaStream([camera.video.track]);
-    document.body.append(video);
-    try {
-      await video.play();
-      const painted = await new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => {
-          resolve(false);
-        }, 2000);
-        // The second frame, so the first paint's black is never read.
-        video.requestVideoFrameCallback(() => {
-          video.requestVideoFrameCallback(() => {
-            clearTimeout(timeout);
-            resolve(true);
-          });
-        });
-      });
-      if (!painted || video.videoWidth === 0) {
-        return null;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const context = canvas.getContext("2d");
-      if (context === null) {
-        return null;
-      }
-      context.drawImage(video, 0, 0);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      let sum = 0;
-      let spread = 0;
-      for (let at = 0; at < pixels.length; at += 4) {
-        const r = pixels[at] ?? 0;
-        const g = pixels[at + 1] ?? 0;
-        const b = pixels[at + 2] ?? 0;
-        sum += (r + g + b) / 3;
-        spread = Math.max(spread, Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
-      }
-      return {
-        width: canvas.width,
-        height: canvas.height,
-        brightness: sum / (pixels.length / 4),
-        spread,
-      };
-    } finally {
-      video.srcObject = null;
-      video.remove();
-    }
+  cameraSample(user) {
+    return sample(call?.state.cameras.find((shown) => shown.user === user));
+  },
+  /** As `cameraSample`, of `user`'s shared screen. */
+  screenSample(user) {
+    return sample(call?.state.screens.find((shown) => shown.user === user));
   },
   /**
    * Measures each of `streams` as `measure` does, at once, on the call's connection. A stream

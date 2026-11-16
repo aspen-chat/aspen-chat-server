@@ -19,7 +19,7 @@ flowchart TB
     end
 
     capture["aspen-capture<br/>desktop/native/capture (Rust):<br/>game and window capture"]
-    ios["iOS app<br/>mobile/ios, with AspenNotificationService"]
+    ios["iOS app<br/>mobile/ios, with AspenNotificationService<br/>and AspenBroadcast"]
     android["Android app<br/>mobile/android, with its push handler"]
 
     app -- "workspace dependency" --> protocol
@@ -40,6 +40,9 @@ flowchart TB
 - The iOS notification service extension and Android's handler decrypt Web Push themselves, while
   the app is not running. See [Push](../architecture/push.md) and
   `client/docs/architecture/push.md`.
+- The iOS broadcast upload extension captures the screen for a call's share on iOS before 27, in a
+  process of its own, and hands the samples to the app over their App Group
+  (`client/docs/architecture/ios-app.md`, Sharing the screen).
 
 ## Schemas join the server and the client
 

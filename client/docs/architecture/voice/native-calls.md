@@ -64,11 +64,12 @@ types lack, is reported (`NativeCallProtocolError`) and shown nothing of.
 | `endedReason`                  | The same three names                                                                                                                                                                                                                                                                                                                                                                      |
 | `canCamera`                    | `grants.camera`                                                                                                                                                                                                                                                                                                                                                                           |
 | `canTransfer`                  | `grants.transferFiles`                                                                                                                                                                                                                                                                                                                                                                    |
-| `canShare`                     | `false`, whatever the grants say: screen sharing from the phone is a later stage                                                                                                                                                                                                                                                                                                          |
+| `canShare`                     | `grants.shareScreen`                                                                                                                                                                                                                                                                                                                                                                      |
 | `cameras`, `screens`           | The `videos` of other users (the user's own, their share watched for its preview, left out), each a `RemoteScreen` whose `id` is the engine's track and whose `video` is a `VideoSource` of the `native` kind naming that track as its surface, in the engine's order                                                                                                                     |
 | `localCamera`                  | The `camera` among `sources`, as a native surface, facing as the plugin said when it opened the camera (`LocalVideo.facing`, the page's own; the engine carries no facing); `null` when none is sent                                                                                                                                                                                      |
-| `sharingScreen`, `localScreen` | Whether a `screen` is among `sources`, and it as a native surface; never set in this stage, since the phone sends no share yet                                                                                                                                                                                                                                                            |
+| `sharingScreen`, `localScreen` | Whether a `screen` is among `sources` (the share's picture, an `external` source sent on the capture connection), and it as a native surface: the self preview is the track the phone captures, drawn as the camera's is                                                                                                                                                                  |
 | `cameraError`                  | `null` while a camera is sent; else `unsent` when `sourceRefused` names the camera (the voice server refused it); else the plugin's last refusal to open one (`LocalVideo.cameraFailure`: `denied`, `none`, or `failed`), kept until the camera opens, `clearCameraError`, or the call ends                                                                                               |
+| `shareError`                   | `null` while a screen is sent; else `unsent` when `sourceRefused` names the screen or its sound; else the plugin's last refusal to share (`LocalVideo.shareFailure`: `denied`, `unsupported`, or `failed`, from its rejection or its `share` event), kept until a share starts, `clearShareError`, or the call ends                                                                       |
 | `files`                        | `filesOf(files)`: each offer with its name as shown and saved (`plainFileName`) and `expiresAt` the engine's `expiresAtMs`, stamped on this device's clock; each transfer with its status, route, and ending by name, `file` `null` and `toDisk` on the receiving side, since a received file is always written where its receiver chose; `links`, `relayMbps`, and `failure` as they are |
 
 ## Commands
@@ -100,6 +101,27 @@ to choose from are the phone's, listed by the plugin's `cameras()` with each one
 system says it (`usePhoneCameras` in `useAudioDevices.ts`), so the flip button and the camera list
 work as in a browser.
 
+The share: `startScreenShare` asks the plugin (`startScreenShare` with `audio`), which asks the
+system for the screen through the system's own consent, the picker of what to share (so the page
+shows no picker of its own: `ShareControl` is offered on `hasScreenCapture`, which a native call
+answers `true`, and shares outright), captures it with the sound of other apps where the platform
+gives it, and hands the engine the picture and the sound as external sources
+(`start_external_source`, the engine's `screen` and `screenAudio` on the capture connection, a peer
+connection of the share's own, since a WebRTC factory has one audio capture for all its connections
+and the share's sound is a second one: `voice_client/README.md`, A share has a connection of its
+own). On Android the plugin resolves once the user has answered the media projection dialog,
+rejecting with `denied` when they decline; on iOS it resolves at once, the system's picker being the
+user's, and a share that does not come of it is told by the plugin's `share` event (`ShareEnded`:
+the origin and `denied`, `unsupported`, `failed`, or `null` for the user's own stop). Either way the
+share shows as `sharingScreen` and `localScreen` only once the engine's snapshot carries the
+`screen` source, which is once the capture runs; a refusal becomes `shareError` (and a
+`ScreenShareError` thrown from `startScreenShare`), the voice server's refusal `unsent` from the
+snapshot. `stopScreenShare` goes to the plugin's method of that name, and `clearShareError` to its
+own (also forgetting the page's own failure). A capture made by the browser (`prepared`) or sound
+from outside it (`audio`) has no place in a native call and is refused with
+`NativeCallUnavailableError`, as `startExternalScreenShare` is. How each platform captures the
+screen and its sound is `ios-app.md` and `android-builds.md`, Sharing the screen.
+
 What is shown is what is watched: `showVideo` counts the places showing video, and while there are
 any the engine is asked (`setWatched`) to watch every screen and camera another participant sends,
 in the participants' order (`watchedOf`), again whenever a snapshot changes that, and none when
@@ -109,8 +131,9 @@ since the engine keeps nothing to watch.
 What a native call has no counterpart for is never a silent no-op, and what it does differently the
 `Call` interface states as a capability the page reads, never by asking which platform it runs on:
 
-- Screen sharing (browser and external) rejects or throws `NativeCallUnavailableError`, naming what
-  is missing; the controls that would ask are hidden by the grant above.
+- A share made by the browser or sent from outside it rejects or throws
+  `NativeCallUnavailableError`, naming what is missing: the phone captures its own screen (Sharing
+  the screen below).
 - `setAudioDevices` takes the system's default microphone and speaker (the phone's one microphone is
   what is sent, and the route is where the call plays) and rejects either chosen by id, which the
   engine has no counterpart for, so `NativeCall.hasAudioDeviceChoice` is `false` (`VoiceCall`'s is
@@ -255,7 +278,8 @@ other sounds (the chime, the ringtone, a deployment lost) stay in the page.
 ## The stages
 
 The native call's bridge is built in stages, each adding to the same plugin and the same
-`NativeCall`; voice, video, the sounds, file transfers, and the phones' side of rings are in place:
+`NativeCall`; voice, video, the sounds, screen sharing, file transfers, and the phones' side of
+rings are in place:
 
 1. Voice: join, leave, mute, deafen, hold, server mutes, per-person volume, session endings, the
    routes.
@@ -263,7 +287,9 @@ The native call's bridge is built in stages, each adding to the same plugin and 
    `watch`, the camera (`startCamera`, `stopCamera`, `cameraError`, the flip), and `canCamera` from
    the snapshot's grants.
 3. The call's sounds in the engine (Sounds above).
-4. Screen sharing from the phone (`canShare`, `startScreenShare`).
+4. Screen sharing from the phone: `canShare` from the grants, `startScreenShare` and
+   `stopScreenShare` through the system's consent, the share's sources on the capture connection,
+   `shareError`, and `hasScreenCapture` (Sharing the screen above).
 5. File transfers in the engine (`canTransfer`, `files`, and the offer and transfer commands; Files
    above), whose two sound cues come with them.
 6. Rings: the engine's ring watch (`voice_client/src/ring.rs`) and each phone ringing natively from
@@ -279,10 +305,12 @@ The native call's bridge is built in stages, each adding to the same plugin and 
 - `src/api/nativeCall.test.ts` (Vitest, a fake plugin): every mapping, the files' among them,
   parsing, revision ordering, the re-read on waking, each forwarded command, the file commands, the
   volumes, the join's outcomes, the video (the videos as surfaces, the watching following what is
-  shown, the camera's start, facing, failures, choice, and stop), the capabilities
-  (`playsOwnSounds`, no `hasAudioDeviceChoice`, no `hasInputVolume`), and the rejections.
-  `src/api/audioRoute.test.tsx` reads the outputs off the typed routes and has the speakerphone
-  choice applied to a call that exists and withdrawn only where it was applied;
+  shown, the camera's start, facing, failures, choice, and stop), the share (the grant, the
+  capability, the start with its sound and the share from the snapshot, nothing asked outside a
+  call, the plugin's refusal and its `share` event as `shareError`, and the stop), the capabilities
+  (`playsOwnSounds`, `hasScreenCapture`, no `hasAudioDeviceChoice`, no `hasInputVolume`), and the
+  rejections. `src/api/audioRoute.test.tsx` reads the outputs off the typed routes and has the
+  speakerphone choice applied to a call that exists and withdrawn only where it was applied;
   `src/api/filesBridge.test.ts` picks and releases a file and names a chosen place;
   `test/sync.test.ts` in the protocol package checks that the sync never tells a call without
   `hasInputVolume` the microphone's volume; `src/features/voice/callSounds.test.ts` that
