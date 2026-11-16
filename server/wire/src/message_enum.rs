@@ -678,7 +678,7 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         created_at: chrono::DateTime<Utc>,
     },
-    // Someone in a call. `muted` and `deafened` follow the voice server's reports.
+    // Someone in a call. `muted`, `deafened`, and `held` follow the voice server's reports.
     #[message_gen(no_commands)]
     VoiceParticipant {
         #[message_gen(id = "client_authoritative")]
@@ -696,6 +696,11 @@ enum MessageEnumSource {
         // Whether they are sharing a screen, window, or game into the call.
         #[message_gen(server_authoritative = "mutable")]
         sharing_screen: bool,
+        // Whether their call is on hold: a phone call has their device, and nothing of theirs
+        // reaches the call, nor anything of the call them. `muted` and `deafened` are their own
+        // choices and stand beside it.
+        #[message_gen(server_authoritative = "mutable", default)]
+        held: bool,
     },
     // Someone a DM's call is ringing: everyone in the DM who was not in the call when it
     // started, until they join it or decline it, or `until` passes, which every client

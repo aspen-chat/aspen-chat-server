@@ -10,16 +10,28 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    voice_server estimate-capacity
    ```
 
-   This measures the CPU, reads the machine's memory, network, and port range, and prints a
-   capacity.
+   This reads the machine's cores (and any container CPU quota), memory (and any container limit),
+   network, and `media_threads`. It then measures what forwarding costs on this CPU: for a few
+   seconds each, a media thread of its own carries calls of simulated people over loopback, first
+   audio streams, then video streams, then whole calls of the size it assumes (six people, a fifth
+   of them sharing a screen with its sound). From the CPU time and memory that thread used, it works
+   out how many people each of CPU, memory, and bandwidth out holds, keeps back 30% of each, and
+   prints the smallest as the capacity. It also prints the largest call one media thread holds.
+   `--call-size`, `--screen-share`, `--audio-kbps`, `--screen-kbps`, and `--margin` change what it
+   assumes, and `--json` prints it all as JSON.
+
+   The measurement runs beside whatever else the machine is doing. Run it before starting the voice
+   server, or the server's calls skew it.
 
    It reads the network card's speed, which is not the internet connection's. On a machine at home,
    or anywhere the connection is slower than the card, run a speed test on the machine, and give its
    upload as `[rtc] upload_mbps` in `voice_server.toml` (or `--link-mbps`) before measuring. Each
    participant takes about 3 Mbit/s of upload when everyone sends video.
 
-   It prints no capacity when it cannot measure the workers' CPU time, which it reads from `/proc`:
-   run it where `/proc` is mounted and readable.
+   It prints no capacity when it cannot measure its media thread's CPU time, which it reads from
+   `/proc/self/task`: run it where `/proc` is mounted and readable. It warns when fewer than 95% of
+   its packets arrived, since the measuring thread was then short of CPU and the estimate may be
+   high, and when `media_threads` is below the number of cores.
 
 2. Where an API server runs, register it:
 
@@ -162,11 +174,11 @@ but the deployment's own machines remains the main defence (see
 
 Clients reach a voice server in three ways, and all must be open to them:
 
-| Traffic                          | Protocol and port                                                  | Notes                                                         |
-| -------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
-| Signalling and the latency check | HTTPS: `GET /health` and the WebSocket `GET /ws`                   | Through a TLS proxy (below).                                  |
-| Media                            | UDP (and TCP where UDP is blocked), `[rtc] min_port` to `max_port` | Clients send media to `announced_address`, over IPv4 or IPv6. |
-| File transfers                   | UDP `[transfer] port` (3478)                                       | STUN, and the TURN relay.                                     |
+| Traffic                          | Protocol and port                                                             | Notes                                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Signalling and the latency check | HTTPS: `GET /health` and the WebSocket `GET /ws`                              | Through a TLS proxy (below).                                                                     |
+| Media                            | UDP and TCP, `[rtc] min_port` and one port more for each further media thread | Clients send media to `announced_address`, over IPv4 or IPv6, and over TCP where UDP is blocked. |
+| File transfers                   | UDP `[transfer] port` (3478)                                                  | STUN, and the TURN relay.                                                                        |
 
 ### Signalling
 
@@ -192,6 +204,12 @@ The server warns at startup when it listens on loopback with no trusted proxies.
   IPv4. Give `announced_address` only the IPv4 address there.
 - Open the media and file transfer ports over both families. See
   [IPv4 and IPv6](../configuration/voice-server.md#ipv4-and-ipv6).
+
+Each media thread receives on one UDP port and one TCP port, from `min_port` up: a server with 8
+media threads and `min_port = 40000` takes 40000 to 40007. Opening the whole of `min_port` to
+`max_port` leaves room to add threads later. The server logs the ports it took at startup
+(`media listening, over UDP and TCP`), and refuses to start when the range holds fewer ports than
+`media_threads`. See [Media threads](../configuration/voice-server.md#media-threads).
 
 ### File transfers
 

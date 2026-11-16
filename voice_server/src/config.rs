@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use aspen_limits::RuleTable;
 use aspen_sockets::EVERY_INTERFACE;
 use serde::Deserialize;
@@ -45,10 +46,10 @@ pub struct VoiceServerConfig {
     pub rtc: RtcConfig,
     #[serde(default)]
     pub transfer: TransferConfig,
-    /// mediasoup workers, each a process carrying some of the calls. Defaults to the number
-    /// of CPUs.
-    #[serde(default = "default_workers")]
-    pub workers: usize,
+    /// Media threads, each carrying some of the calls on one UDP and one TCP port per media
+    /// address (`[rtc] min_port` and the ports after it). Defaults to the number of CPUs.
+    #[serde(default = "default_media_threads")]
+    pub media_threads: usize,
     #[serde(default)]
     pub metrics: MetricsConfig,
     /// What `voice_server.toml` says about limits; `rate_limits` is the result.
@@ -225,8 +226,11 @@ pub struct RtcConfig {
     /// pair its own host candidates with a loopback peer, so media never connects.
     #[serde(deserialize_with = "aspen_config_values::list")]
     pub announced_address: Vec<String>,
+    /// The first media thread's port, over UDP and TCP; each thread after it takes the next.
     #[default = 40000]
     pub min_port: u16,
+    /// The highest port a media thread may take: the server refuses to start with more threads
+    /// than `min_port` to `max_port` holds.
     #[default = 40999]
     pub max_port: u16,
     /// The most this machine's internet connection carries out, in Mbit/s, as a speed test
@@ -277,8 +281,66 @@ impl TransferConfig {
     }
 }
 
-fn default_workers() -> usize {
+fn default_media_threads() -> usize {
     num_cpus::get().max(1)
+}
+
+impl RtcConfig {
+    /// The ports `threads` media threads take, refused when `min_port` to `max_port` does not
+    /// hold them all.
+    pub fn media_ports(&self, threads: usize) -> anyhow::Result<std::ops::RangeInclusive<u16>> {
+        anyhow::ensure!(
+            self.min_port <= self.max_port,
+            "rtc.min_port is above rtc.max_port"
+        );
+        let last = u16::try_from(threads.max(1) - 1)
+            .ok()
+            .and_then(|extra| self.min_port.checked_add(extra))
+            .filter(|last| *last <= self.max_port);
+        let Some(last) = last else {
+            anyhow::bail!(
+                "{threads} media threads need ports {} to {}, past rtc.max_port ({}); raise \
+                 max_port or set fewer media_threads",
+                self.min_port,
+                u32::from(self.min_port) + threads as u32 - 1,
+                self.max_port
+            );
+        };
+        Ok(self.min_port..=last)
+    }
+}
+
+impl MediaAddress {
+    /// The address for the media threads: the announced host name, if that is what is
+    /// announced, looked up now for an address of the interface's family.
+    pub fn resolved(&self) -> anyhow::Result<voice_media::MediaAddress> {
+        let announced = match &self.announced {
+            None => None,
+            Some(text) => Some(match text.parse::<IpAddr>() {
+                Ok(ip) => ip,
+                Err(_) => {
+                    use std::net::ToSocketAddrs as _;
+                    (text.as_str(), 0)
+                        .to_socket_addrs()
+                        .with_context(|| {
+                            format!("rtc.announced_address {text} could not be looked up")
+                        })?
+                        .map(|addr| addr.ip())
+                        .find(|ip| ip.is_ipv4() == self.ip.is_ipv4())
+                        .with_context(|| {
+                            format!(
+                                "rtc.announced_address {text} has no {} address",
+                                family(self.ip)
+                            )
+                        })?
+                }
+            }),
+        };
+        Ok(voice_media::MediaAddress {
+            ip: self.ip,
+            announced,
+        })
+    }
 }
 
 /// The port the HTTP server listens on when `listen_addr` is unset.
@@ -493,8 +555,8 @@ fn sources() -> Result<config::Config, config::ConfigError> {
 pub struct MediaConfig {
     #[serde(default)]
     pub rtc: RtcConfig,
-    #[serde(default = "default_workers")]
-    pub workers: usize,
+    #[serde(default = "default_media_threads")]
+    pub media_threads: usize,
 }
 
 pub fn load_media_config() -> Result<MediaConfig, config::ConfigError> {

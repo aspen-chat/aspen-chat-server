@@ -1,0 +1,31 @@
+[package]
+name = "voice_media"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The voice server's media: threads that each hold the WebRTC connections of the calls given to them, through str0m, and forward what each participant sends to the others."
+
+[dependencies]
+aspen_sockets = { version = "0.1.0", path = "../sockets" }
+libc = "0.2"
+# AWS-LC, the crypto rustls uses in this workspace too; no OpenSSL.
+str0m = { version = "0.25.0", default-features = false, features = ["aws-lc-rs"] }
+tikv-jemalloc-ctl = { version = "0.7", optional = true }
+tokio = { version = "1.51.1", features = ["sync"] }
+tracing = "0.1.41"
+uuid = "1.16.0"
+voice_protocol = { path = "../voice_protocol" }
+
+[features]
+# The synthetic client (`peer`), for tests, the capacity estimate, and the bench.
+peer = ["tokio/net", "tokio/time", "tokio/macros", "tokio/rt", "tokio/io-util"]
+# Counts what each media thread holds through jemalloc's per-thread statistics
+# (`Census::allocated_bytes`), for a process whose global allocator is jemalloc.
+jemalloc = ["dep:tikv-jemalloc-ctl"]
+
+[dev-dependencies]
+voice_media = { path = ".", features = ["peer"] }
+anyhow = "1.0.102"
+axum = "0.8.4"
+serde_json = "1.0.140"
+tokio = { version = "1.51.1", features = ["full"] }

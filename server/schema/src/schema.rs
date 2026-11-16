@@ -1018,6 +1018,7 @@ diesel::table! {
         muted -> Bool,
         deafened -> Bool,
         sharing_screen -> Bool,
+        held -> Bool,
     }
 }
 

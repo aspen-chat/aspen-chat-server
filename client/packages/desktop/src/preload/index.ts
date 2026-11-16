@@ -94,7 +94,8 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
   gameCapture: {
     kinds: () => ipcRenderer.invoke("voice:capture-kinds"),
     start: (options: unknown) => ipcRenderer.invoke("voice:capture-start", options),
-    startAudio: (audio: unknown) => ipcRenderer.invoke("voice:capture-start-audio", audio),
+    startAudio: (options: unknown) => ipcRenderer.invoke("voice:capture-start-audio", options),
+    answer: (offer: unknown) => ipcRenderer.invoke("voice:capture-answer", offer),
     stop: () => ipcRenderer.invoke("voice:capture-stop"),
     onEnded: (listener: () => void) => {
       const handler = () => {

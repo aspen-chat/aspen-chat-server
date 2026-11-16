@@ -15,16 +15,17 @@ import { parseReply, type Answer, type Reply } from "./captureReplies";
 /**
  * Game capture through libobs, for the renderer. The helper `aspen-capture` (the Rust
  * crate in `native/capture`) captures a game or window, encodes it to H.264, and sends it
- * as SRTP straight to the voice server; the shell never touches the video. On Linux it captures
- * only one application's sound (`startAudio`), since there the picture comes from the
- * browser's own screen share. The helper is a
- * process of its own, spawned on first use and spoken to over its pipes: one JSON request per
- * line on its stdin, one JSON reply per line on its stdout (the requests are described at the
- * top of the crate's `main.rs`). The helper answers every request, one it cannot read with a
- * failure, and a line that is not a reply is logged (`captureReplies.ts`). One capture runs at
- * a time, for one renderer, and only of a kind the helper listed (`captureKinds.ts`). Without
- * the helper on disk (a build without libobs) the bridge reports no capture kinds and the app
- * shows no game option.
+ * straight to the voice server over a WebRTC connection of its own, the capture connection,
+ * whose offers the renderer passes in (the first with `start` or `startAudio`, each later one
+ * with `answer`) and whose answers it passes back; the shell never touches the video. On Linux
+ * it captures only one application's sound (`startAudio`), since there the picture comes from
+ * the browser's own screen share. The helper is a process of its own, spawned on first use and
+ * spoken to over its pipes: one JSON request per line on its stdin, one JSON reply per line on
+ * its stdout (the requests are described at the top of the crate's `main.rs`). The helper answers
+ * every request, one it cannot read with a failure, and a line that is not a reply is logged
+ * (`captureReplies.ts`). One capture runs at a time, for one renderer, and only of a kind the
+ * helper listed (`captureKinds.ts`). Without the helper on disk (a build without libobs) the
+ * bridge reports no capture kinds and the app shows no game option.
  */
 
 export interface CaptureTarget {
@@ -70,22 +71,17 @@ export interface CaptureCatalogue {
   testMedia: string | null;
 }
 
-/** Where the helper sends its SRTP, as the voice server answered `produceRtp`. */
-export interface RtpTarget {
-  ip: string;
-  port: number;
-  ssrc: number;
-  payloadType: number;
-  srtpCryptoSuite: string;
-  srtpKeyBase64: string;
-}
-
-/** The sound of one application, sent as Opus to its RTP target. */
+/** The sound of one application, sent as Opus on the capture connection. */
 export interface AudioOptions {
   kind: string;
   settings?: string;
-  rtp: RtpTarget;
   bitrateKbps?: number;
+}
+
+/** A capture of one application's sound alone, and the capture connection's first offer. */
+export interface AudioStartOptions {
+  audio: AudioOptions;
+  offer: string;
 }
 
 export interface StartOptions {
@@ -95,14 +91,16 @@ export interface StartOptions {
   height?: number;
   fps?: number;
   bitrateKbps?: number;
-  rtp: RtpTarget;
-  /** The application's audio: its source and where to send it, when wanted and available. */
+  /** The voice server's first offer of the capture connection. */
+  offer: string;
+  /** The application's audio, sent on the same connection, when wanted and available. */
   audio?: AudioOptions;
 }
 
 export const CAPTURE_KINDS_CHANNEL = "voice:capture-kinds";
 export const CAPTURE_START_CHANNEL = "voice:capture-start";
 export const CAPTURE_START_AUDIO_CHANNEL = "voice:capture-start-audio";
+export const CAPTURE_ANSWER_CHANNEL = "voice:capture-answer";
 export const CAPTURE_STOP_CHANNEL = "voice:capture-stop";
 /** Sent to the renderer whose capture ended without it asking: the helper died. */
 export const CAPTURE_ENDED_CHANNEL = "voice:capture-ended";
@@ -131,6 +129,14 @@ function bundledLibobs(): string | null {
   return (
     candidates.find((candidate) => existsSync(join(candidate, "bin", "64bit", "obs.dll"))) ?? null
   );
+}
+
+/** The capture connection's answer a reply carries, which a start and an `answer` must. */
+function answerOf(reply: Answer): string {
+  if (reply.type !== "done" || reply.answer === undefined) {
+    throw new Error(`the capture helper answered an offer with "${reply.type}" and no answer`);
+  }
+  return reply.answer;
 }
 
 class CaptureHost {
@@ -235,21 +241,35 @@ class CaptureHost {
     return catalogue;
   }
 
-  async start(sender: WebContents, options: StartOptions): Promise<void> {
+  /** Starts a capture; answers with the capture connection's answer to the first offer. */
+  async start(sender: WebContents, options: StartOptions): Promise<string> {
     if (!startOffered(this.#offered, options)) {
       throw new Error(`capture of a kind not offered (${options.kind})`);
     }
-    await this.#request({ type: "start", options: { ...options, ...this.#dirs } });
+    const started = await this.#request({ type: "start", options: { ...options, ...this.#dirs } });
     this.#own(sender);
+    return answerOf(started);
   }
 
   /** Captures one application's sound alone, the picture coming from the browser's screen share. */
-  async startAudio(sender: WebContents, audio: AudioOptions): Promise<void> {
-    if (!audioOffered(this.#offered, audio)) {
-      throw new Error(`capture of a kind not offered (${audio.kind})`);
+  async startAudio(sender: WebContents, options: AudioStartOptions): Promise<string> {
+    if (!audioOffered(this.#offered, options.audio)) {
+      throw new Error(`capture of a kind not offered (${options.audio.kind})`);
     }
-    await this.#request({ type: "startAudio", options: { audio, ...this.#dirs } });
+    const started = await this.#request({
+      type: "startAudio",
+      options: { ...options, ...this.#dirs },
+    });
     this.#own(sender);
+    return answerOf(started);
+  }
+
+  /** Answers a later offer of the running capture's connection, which only its owner may. */
+  async answer(sender: WebContents, offer: string): Promise<string> {
+    if (this.#owner !== sender) {
+      throw new Error("no capture of this window is running");
+    }
+    return answerOf(await this.#request({ type: "answer", offer }));
   }
 
   /** Makes `sender` the capture's owner, stopping it when that renderer goes away. */
@@ -298,8 +318,11 @@ export function serveGameCapture(): void {
   ipcMain.handle(CAPTURE_START_CHANNEL, (event, options: StartOptions) =>
     host.start(event.sender, options),
   );
-  ipcMain.handle(CAPTURE_START_AUDIO_CHANNEL, (event, audio: AudioOptions) =>
-    host.startAudio(event.sender, audio),
+  ipcMain.handle(CAPTURE_START_AUDIO_CHANNEL, (event, options: AudioStartOptions) =>
+    host.startAudio(event.sender, options),
+  );
+  ipcMain.handle(CAPTURE_ANSWER_CHANNEL, (event, offer: string) =>
+    host.answer(event.sender, offer),
   );
   ipcMain.handle(CAPTURE_STOP_CHANNEL, (event) => host.stop(event.sender));
   app.on("will-quit", () => {

@@ -2,8 +2,8 @@
 
 While in a call, a participant holding Transfer files may offer a file to everyone else in it. Each
 participant who accepts starts one transfer between the two of them, over a WebRTC data channel of
-their own, encrypted end to end. The bytes never touch mediasoup, storage, or the API server. Design
-notes: [file-transfers-design-notes.md](file-transfers-design-notes.md).
+their own, encrypted end to end. The bytes never touch the voice server's media threads, storage, or
+the API server. Design notes: [file-transfers-design-notes.md](file-transfers-design-notes.md).
 
 ## Where it lives
 
@@ -94,7 +94,8 @@ ICE servers name every one, an IPv6 address in brackets; a client uses those it 
 
 - The relay forwards only between its own live allocations (`LivePorts`), so never to a port of its
   range on the machine that no allocation holds. Every relayed transfer is relayed at both ends.
-- Its ports may not overlap the media range or the STUN port. The server refuses to start otherwise.
+- Its ports may not overlap the media threads' (`[rtc] min_port` to `max_port`) or the STUN port.
+  The server refuses to start otherwise.
 - It is looped back inside the server, so it needs no hairpin NAT.
 - Every allocation is announced at one address (`relay_address`): the IPv4 media address's when
   there is one, else the IPv6 one's, whichever family the client reached TURN over. A request for an

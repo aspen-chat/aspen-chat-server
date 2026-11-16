@@ -1359,6 +1359,23 @@ describe("RecordStore voice", () => {
       muted: true,
       sharingScreen: true,
     });
+    // A record without `held`, from a deployment that predates holds, is not held; a hold
+    // comes and goes leaving the rest as it was.
+    expect(store.channelVoice(general.id).participants[0]?.held).toBe(false);
+    for (const held of [true, false]) {
+      store.applyEvent({
+        serverEvent: "voiceParticipant",
+        type: "update",
+        session: session.id,
+        user: me.id,
+        held,
+      });
+      expect(store.channelVoice(general.id).participants[0]).toMatchObject({
+        muted: true,
+        sharingScreen: true,
+        held,
+      });
+    }
     store.applyEvent({
       serverEvent: "voiceParticipant",
       type: "delete",

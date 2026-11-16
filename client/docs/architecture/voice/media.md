@@ -1,9 +1,49 @@
 # Media
 
-Code: `VoiceCall` in `packages/protocol/src/voice.ts`. Browser media (`getUserMedia`, a hidden
-`<audio>` element per consumer) is in `browserMedia.ts`, behind the `VoiceMedia` interface
-(`voiceMedia.ts`). It is loaded lazily so the protocol package stays importable in Node, and tests
-pass a fake.
+Code: `VoiceCall` in `packages/protocol/src/voice.ts`. Browser media (`getUserMedia`, the call's
+`RTCPeerConnection`, a hidden `<audio>` element per received sound) is in `browserMedia.ts`, behind
+the `VoiceMedia` interface (`voiceMedia.ts`). It is loaded lazily (`lazyBrowserMedia` in
+`platform.ts`) so the protocol package stays importable in Node, and tests pass a fake.
+
+## The call's connection
+
+- A call holds one peer connection (`VoiceMedia.createConnection`), which carries everything the
+  user sends and receives: every media section on one transport (`bundlePolicy: "max-bundle"`,
+  `rtcpMuxPolicy: "require"`). It is made before `identify`, so the offer that follows `ready` has a
+  connection to answer.
+- The voice server makes every offer, and the call only answers. An `offer` frame carries the
+  connection (`call`), a `revision`, the SDP, and `sections`, what each media section carries by its
+  mid: one of this client's sources (`sending`), an audio slot (`audioSlot`), another participant's
+  video (`video`), or a share's sound (`shareAudio`).
+- Offers are answered one at a time, in the order they came (`#negotiation`); the server waits for
+  each answer before its next offer.
+- A revision already answered, which the server restates after a [resume](joining.md#resuming), is
+  answered again with the answer kept for it (`#answered`), never applied a second time. A
+  `sections` frame, which a resume brings where no offer is outstanding, only says again what each
+  section carries.
+- The server offers Opus, VP8, and H.264 (constrained baseline) on the call connection. Its offers
+  set each section's own format parameters: a sent video's encoder starts at 10 Mbps
+  (`x-google-start-bitrate`), and a share's sound is stereo at 128 kbps without DTX.
+- An offer the browser cannot apply fails a join in progress as this device's (`CallSetupError`, see
+  [joining](joining.md#joining)); in a call, the call is rejoined, since nothing more can be
+  negotiated on that connection.
+
+## Sending
+
+- Each source is asked for with `send {source}`. The server's next offer adds a `sending` section
+  for it, which the call sets `sendonly` with the source's track before it creates the answer. Once
+  the answer is applied, a video's encoding is bounded (`#encode`, `setParameters`): the camera to 4
+  Mbps at 30 fps (`CAMERA_ENCODING`), a screen to 25 Mbps at 60 fps (`SCREEN_ENCODING`). These are
+  ceilings; the browser's bandwidth estimate decides what is spent.
+- A `sending` frame says the server receives the source's media and sends it on. Until it comes the
+  source is pending (`#pending`).
+- `stopSending` ends a source: its sender's track is taken off at once, and the server takes the
+  section away in its next offer.
+- Moving to another microphone or camera replaces the sender's track (`replaceTrack`), with no new
+  offer.
+- A refused `send` (a non-fatal `error` with `refused: "send"`) names the request, not the source,
+  so whatever is still pending stops: the camera, with `cameraError: "unsent"`; the share; the
+  microphone, with `error` set.
 
 ## The microphone
 
@@ -20,30 +60,57 @@ pass a fake.
   meanwhile, though the system shows the microphone in use.
 - `VoiceCall.setInputVolume` changes the gain of the open microphone at once, and every microphone
   opens at it. `AspenSync` applies the preference as it changes.
+- The microphone is asked for once `ready` arrives, when the user may speak (Speak). It has no
+  encoding of its own to bound.
 
-## Consuming
+## Receiving
 
-Every `newConsumer` the server announces is consumed:
-
-- Audio plays through a hidden element.
-- A screen's video is a `RemoteScreen` in `state.screens`, for the app to render.
-- Others' cameras are `state.cameras`, apart from `state.screens`.
+- **Audio slots.** The connection carries one audio slot section for each other microphone in the
+  call, up to `ready`'s `audioSlots` (16). It never loses a slot during the call, and has at least
+  one. The voice server fills them with whoever is loudest, a muted microphone last, and says whom
+  each carries in a `slots` frame, sent before the offer that moves a slot into its new speaker's
+  stream (`#slots`). A slot that changes speaker keeps its section and its track, and nothing of the
+  new speaker arrives on it before the client has answered that offer.
+- **Each section is in the stream it plays in sync with.** A person's audio slot and camera are in
+  one stream, a screen and its sound in another, as each offer's SDP says (`a=msid`), and the
+  browser synchronizes the audio and video of each. A section an offer stops is kept by the server
+  and may come back in a later offer carrying someone or something else, in another stream; the call
+  reads what every section carries from each offer afresh, and a sound section carrying the same
+  person keeps playing with only its gain set again.
+- **A share's sound** comes in a `shareAudio` section of its own while its screen is watched
+  (below), never to the sharer themself.
+- Each audio slot and share's sound plays by its mid through `VoiceMedia.play` once its section is
+  answered, and stops (`VoiceMedia.stop`) when an offer takes the section away. How loud each is
+  follows whom it carries (see [participants and volume](participants-and-volume.md)).
+- **Video only while something shows it.** `showVideo()` returns a function that undoes it; while
+  any call of it stands (the call stage, while mounted; see [the call screen](call-screen.md)), the
+  call sends `watch` listing every screen and camera others send, as `ready` and `sources` say, up
+  to `ready`'s `maxWatchedVideo`, and the preview of its own share sent from outside the browser.
+  With none standing it watches nothing, and no video is received. A `watch` the same as the last is
+  not sent again.
+- The server adds a `video` section for each video watched and sends it once it has a keyframe. A
+  screen is a `RemoteScreen` in `state.screens`, a camera in `state.cameras`, each in the order it
+  arrived, its `id` the section's mid. Each keeps its place while its section stays.
+- `sources` lists a source only once its media has reached the server, so a camera or screen is
+  watched only once there is something to show.
 
 ## Screen sharing
 
 `startScreenShare()` asks `VoiceMedia.getScreen()`: `getDisplayMedia` with audio, at the screen's
 own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 
-| Producer                  | Settings                                                                                                                                            |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `screen` (the picture)    | One layer, up to 25 Mbps at 60 fps, starting at 10 Mbps (`SCREEN_ENCODING`, `SCREEN_VIDEO_CODEC`). The network's bandwidth estimate brings it down. |
-| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX (`SCREEN_AUDIO_CODEC`).                                                                                         |
+| Source                    | Settings                                                                                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screen` (the picture)    | One layer, up to 25 Mbps at 60 fps (`SCREEN_ENCODING`), starting at 10 Mbps as the offer says. The connection's bandwidth estimate brings it down. |
+| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX, as the offer's section says.                                                                                  |
 
 - Its `contentHint` option marks a picture that moves, such as a game, so the encoder gives up
   resolution rather than frames when bandwidth runs short.
-- `stopScreenShare()` closes both producers. The share also ends when the browser's own stop control
+- `stopScreenShare()` stops sending both. The share also ends when the browser's own stop control
   ends the track.
-- `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share.
+- `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share. A
+  share sent from outside the browser is previewed from the voice server: `localScreen` is then the
+  track of a `video` section of the user's own screen, watched while video is shown.
 - In Electron, `getDisplayMedia` only works because the main process answers it in
   `setDisplayMediaRequestHandler` (`packages/desktop/src/main/index.ts`), with a picker. See
   [the screen picker](../screen-sharing-and-game-capture/screen-picker.md).
@@ -55,7 +122,7 @@ own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 
 - `startCamera()` asks `VoiceMedia.getCamera()` for the camera chosen in Settings (`video.input`, a
   device preference), up to 1080p at 30 frames a second (`CAMERA_QUALITY`).
-- It is produced as `camera`, up to 4 Mbps (`CAMERA_ENCODING`).
+- It is sent as `camera`, up to 4 Mbps at 30 fps (`CAMERA_ENCODING`).
 - The user sees it as `state.localCamera`. It moves to another camera when the choice changes and
   stays on: the camera in use is let go before the next opens, since a phone opens one camera at a
   time (iOS ends the first one's track when a second opens). Only the latest of overlapping moves

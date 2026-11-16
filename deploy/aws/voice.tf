@@ -1,5 +1,5 @@
 # The voice servers, each a machine of its own with an address of its own: people's devices
-# send media straight to it, over a range of UDP ports no load balancer carries. Signalling
+# send media straight to it, over UDP and TCP ports no load balancer carries. Signalling
 # alone goes through the load balancer, which holds the certificate for its name.
 
 locals {

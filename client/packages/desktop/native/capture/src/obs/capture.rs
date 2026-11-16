@@ -364,8 +364,8 @@ unsafe fn start_output(
     ))
 }
 
-/// Starts capturing: the source, sized into the output, encoded, and sent as SRTP to the
-/// target. Answers with the id of the encoder the picture goes through. One capture at a time;
+/// Starts capturing: the source, sized into the output, encoded, and sent on the capture
+/// connection (`rtp`). Answers with the id of the encoder the picture goes through. One capture at a time;
 /// a second call while one runs is an error.
 pub fn start_capture(options: StartOptions) -> Result<&'static str> {
     ensure_started(
@@ -385,15 +385,13 @@ pub fn start_capture(options: StartOptions) -> Result<&'static str> {
         .clamp(MIN_BITRATE_KBPS, 100_000);
     let bitrate = i64::from(bitrate_kbps);
     let sender = RtpSender::start(
-        &options.rtp,
         StreamKind::Video,
         Arc::new(EncoderFeedback),
         MIN_BITRATE_KBPS,
         bitrate_kbps,
     )?;
     let audio_sender = match &options.audio {
-        Some(audio) => Some(RtpSender::start(
-            &audio.rtp,
+        Some(_) => Some(RtpSender::start(
             StreamKind::Audio,
             Arc::new(EncoderFeedback),
             MIN_BITRATE_KBPS,
@@ -589,8 +587,8 @@ unsafe fn create_audio(
     }
 }
 
-/// Starts capturing the application's sound alone, encoded as Opus and sent as SRTP to its
-/// target. One capture at a time, with or without a picture.
+/// Starts capturing the application's sound alone, encoded as Opus and sent on the capture
+/// connection (`rtp`). One capture at a time, with or without a picture.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn start_audio_capture(options: AudioStart) -> Result<()> {
     ensure_started(
@@ -607,7 +605,6 @@ pub fn start_audio_capture(options: AudioStart) -> Result<()> {
     let serial = SESSIONS_STARTED.fetch_add(1, Ordering::SeqCst);
     let output_name = cstring(&format!("aspen-output-{serial}"))?;
     let sender = RtpSender::start(
-        &options.audio.rtp,
         StreamKind::Audio,
         Arc::new(EncoderFeedback),
         MIN_BITRATE_KBPS,

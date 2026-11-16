@@ -5,7 +5,7 @@
 //! the server hold an unbounded pile of everyone else's frames for it. A frame that would pass
 //! the bound hangs the socket up instead, and the client, finding its socket closed, rejoins.
 
-use axum::extract::ws::Utf8Bytes;
+use bytes::Bytes;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, watch};
@@ -28,19 +28,19 @@ struct Shared {
 /// The sending side, cloned wherever the socket's participant is reached.
 #[derive(Clone)]
 pub struct Outbox {
-    frames: mpsc::UnboundedSender<Utf8Bytes>,
+    frames: mpsc::UnboundedSender<Bytes>,
     shared: Arc<Shared>,
 }
 
 /// The writer's side.
 pub struct OutboxReader {
-    frames: mpsc::UnboundedReceiver<Utf8Bytes>,
+    frames: mpsc::UnboundedReceiver<Bytes>,
     shared: Arc<Shared>,
 }
 
 /// A frame as it is written to every socket it goes to, so a frame for many is serialized once.
-pub fn frame_text(message: &ServerMessage) -> Utf8Bytes {
-    serde_json::to_string(message)
+pub fn frame_text(message: &ServerMessage) -> Bytes {
+    serde_json::to_vec(message)
         .expect("frames serialize")
         .into()
 }
@@ -72,7 +72,7 @@ impl Outbox {
 
     /// Queues a frame already serialized. Nothing is queued once the socket is hung up; a frame
     /// that would pass the bound hangs it up.
-    pub fn send_text(&self, text: Utf8Bytes) {
+    pub fn send_text(&self, text: Bytes) {
         if *self.shared.hung_up.borrow() {
             return;
         }
@@ -109,7 +109,7 @@ impl Outbox {
 
 impl OutboxReader {
     /// The next frame to write, or `None` once every sender is gone and the queue is empty.
-    pub async fn recv(&mut self) -> Option<Utf8Bytes> {
+    pub async fn recv(&mut self) -> Option<Bytes> {
         let text = self.frames.recv().await?;
         self.shared.queued.fetch_sub(text.len(), Ordering::AcqRel);
         Some(text)
@@ -123,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn a_reader_that_falls_too_far_behind_is_hung_up() {
         let (outbox, mut reader) = Outbox::new(64);
-        let frame = |n: usize| Utf8Bytes::from("x".repeat(n));
+        let frame = |n: usize| Bytes::from("x".repeat(n));
         outbox.send_text(frame(40));
         outbox.send_text(frame(20));
         // Taking a frame out makes room again.

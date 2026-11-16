@@ -166,6 +166,11 @@ export interface VoiceParticipantState {
   readonly muted: boolean;
   readonly sharingScreen: boolean;
   readonly deafened: boolean;
+  /**
+   * On hold: a phone call has their device, and nothing of theirs reaches the call, nor anything
+   * of the call them. `muted` and `deafened` are their own choices beside it.
+   */
+  readonly held: boolean;
   readonly speaking: boolean;
   /** When they last started speaking, as `now()` reported it; `null` if never seen speaking. */
   readonly lastSpokeAt: number | null;

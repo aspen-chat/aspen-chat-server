@@ -569,6 +569,7 @@ pub(super) async fn apply_report(
                             user,
                             muted: false,
                             deafened: false,
+                            held: false,
                             sharing_screen: false,
                             sign_in,
                         };
@@ -602,6 +603,7 @@ pub(super) async fn apply_report(
                         user,
                         muted,
                         deafened,
+                        held,
                         sharing_screen,
                         ..
                     } => {
@@ -613,6 +615,7 @@ pub(super) async fn apply_report(
                                 user,
                                 muted,
                                 deafened,
+                                held,
                                 sharing_screen,
                                 sign_in: None,
                             },
@@ -1075,6 +1078,7 @@ async fn record_participant(
         muted: joined.muted,
         deafened: joined.deafened,
         sharing_screen: joined.sharing_screen,
+        held: joined.held,
     };
     let inserted = diesel::insert_into(voice_participant::table)
         .values(&row)
@@ -1103,7 +1107,7 @@ async fn record_participant(
     Ok(true)
 }
 
-/// Records a participant's mute, deafen, and sharing state as `now` gives it.
+/// Records a participant's mute, deafen, hold, and sharing state as `now` gives it.
 async fn record_state(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -1121,6 +1125,7 @@ async fn record_state(
             voice_participant::muted.eq(now.muted),
             voice_participant::deafened.eq(now.deafened),
             voice_participant::sharing_screen.eq(now.sharing_screen),
+            voice_participant::held.eq(now.held),
         ))
         .execute(conn)
         .await?;
@@ -1135,6 +1140,7 @@ async fn record_state(
                 muted: Some(now.muted),
                 deafened: Some(now.deafened),
                 sharing_screen: Some(now.sharing_screen),
+                held: Some(now.held),
             }),
         )
         .await?;
@@ -1184,10 +1190,11 @@ async fn apply_snapshot(
                 repairs += 1;
             }
             Some(row)
-                if (row.muted, row.deafened, row.sharing_screen)
+                if (row.muted, row.deafened, row.held, row.sharing_screen)
                     != (
                         participant.muted,
                         participant.deafened,
+                        participant.held,
                         participant.sharing_screen,
                     ) =>
             {

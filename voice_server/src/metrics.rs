@@ -5,24 +5,24 @@ use crate::limits::Limits;
 use crate::rooms::Rooms;
 use std::sync::Arc;
 
-/// Samples the census, the mediasoup workers' CPU time, and whether limits are suspended.
+/// Samples the census, the media threads' CPU time, and whether limits are suspended.
 pub fn spawn_samplers(rooms: Arc<Rooms>, limits: Arc<Limits>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(aspen_metrics::SAMPLE_INTERVAL);
         loop {
             interval.tick().await;
-            let census = rooms.census();
+            let census = rooms.census().await;
             for (name, value) in [
                 (aspen_metrics::voice::ROOMS, census.rooms),
                 (aspen_metrics::voice::PARTICIPANTS, census.participants),
-                (aspen_metrics::voice::PRODUCERS, census.producers),
-                (aspen_metrics::voice::CONSUMERS, census.consumers),
-                (aspen_metrics::voice::TRANSPORTS, census.transports),
+                (aspen_metrics::voice::CONNECTIONS, census.connections),
+                (aspen_metrics::voice::SECTIONS, census.sections),
             ] {
                 metrics::gauge!(name).set(value as f64);
             }
-            for (worker, seconds) in worker_cpu_seconds() {
-                metrics::gauge!(aspen_metrics::voice::WORKER_CPU, "worker" => worker).set(seconds);
+            for (thread, seconds) in media_thread_cpu_seconds() {
+                metrics::gauge!(aspen_metrics::voice::MEDIA_THREAD_CPU, "thread" => thread)
+                    .set(seconds);
             }
             let suspended = limits.suspension().current().is_some();
             metrics::gauge!(aspen_metrics::voice::RATE_LIMITS_SUSPENDED).set(if suspended {
@@ -34,10 +34,12 @@ pub fn spawn_samplers(rooms: Arc<Rooms>, limits: Arc<Limits>) {
     });
 }
 
-/// CPU seconds (user and system) of each mediasoup worker. The workers are threads of this
-/// process named `mediasoup-worker-{id}`, which Linux shortens to fifteen characters, so each is
-/// labelled by its thread id. Empty where `/proc` is unavailable.
-pub(crate) fn worker_cpu_seconds() -> Vec<(String, f64)> {
+/// What every media thread's name begins with (`voice_media`'s `aspen-media-{index}`).
+pub(crate) const MEDIA_THREAD_NAME: &str = "aspen-media-";
+
+/// CPU seconds (user and system) of each media thread of this process, labelled by its name.
+/// Empty where `/proc` is unavailable.
+pub(crate) fn media_thread_cpu_seconds() -> Vec<(String, f64)> {
     // SAFETY: `sysconf` reads a constant of the running system.
     let ticks_per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks_per_second <= 0 {
@@ -51,15 +53,13 @@ pub(crate) fn worker_cpu_seconds() -> Vec<(String, f64)> {
         .filter_map(|task| {
             let path = task.path();
             let name = std::fs::read_to_string(path.join("comm")).ok()?;
-            if !name.starts_with("mediasoup-worke") {
+            let name = name.trim();
+            if !name.starts_with(MEDIA_THREAD_NAME) {
                 return None;
             }
             let stat = std::fs::read_to_string(path.join("stat")).ok()?;
             let ticks = user_and_system_ticks(&stat)?;
-            Some((
-                task.file_name().to_string_lossy().into_owned(),
-                ticks as f64 / ticks_per_second as f64,
-            ))
+            Some((name.to_owned(), ticks as f64 / ticks_per_second as f64))
         })
         .collect()
 }
@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn cpu_ticks_are_read_after_the_thread_name() {
-        let stat = "1234 (mediasoup-worke) S 1 1234 1234 0 -1 4194560 100 0 0 0 250 75 0 0 20 0 1 0 100 0 0";
+        let stat =
+            "1234 (aspen-media-0) S 1 1234 1234 0 -1 4194560 100 0 0 0 250 75 0 0 20 0 1 0 100 0 0";
         assert_eq!(user_and_system_ticks(stat), Some(325));
         // A name with spaces and parentheses does not shift the fields.
         let odd = "1234 (a (b) c) S 1 1234 1234 0 -1 4194560 100 0 0 0 7 3 0 0 20 0 1 0 100 0 0";
@@ -103,7 +104,7 @@ mod tests {
 
     #[test]
     fn this_process_threads_can_be_read() {
-        // No mediasoup workers run in tests, so nothing is found, but reading must not fail.
-        let _ = super::worker_cpu_seconds();
+        // No media threads run in this test, so nothing is found, but reading must not fail.
+        let _ = super::media_thread_cpu_seconds();
     }
 }

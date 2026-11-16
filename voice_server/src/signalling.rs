@@ -1,5 +1,6 @@
 //! One client's WebSocket: frames in are dispatched to the rooms, frames out come from the
-//! participant's outbox. The first frame must be `identify` with a valid join token. Every
+//! participant's outbox. The first frame must be `identify` with a valid join token, or
+//! `resume` with the secret a participant was given, to take it back. Every
 //! route and frame is limited (`limits`). The server pings every `PING_INTERVAL` and closes a
 //! socket it has heard nothing from, pongs included, for `IDLE_TIMEOUT`, and one whose outbox
 //! overflows (`outbox`), so a client that stops reading is let go.
@@ -7,7 +8,6 @@
 use crate::limits::{Caller, HEALTH, Limits, PendingSocket, SIGNALLING};
 use crate::outbox::{OUTBOX_BYTES, Outbox};
 use crate::rooms::{RoomError, Rooms};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::middleware::Next;
@@ -21,6 +21,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
 use voice_protocol::token::{JoinClaims, TokenError, key_of, verify, verify_shared};
+use yawc::close::CloseCode;
+use yawc::frame::{Frame, OpCode};
+use yawc::{DeflatePool, HttpWebSocket, IncomingUpgrade, Options};
 
 /// The paths of this server's two routes: the router serves them and `limit_http` finds each
 /// one's limits by them.
@@ -36,6 +39,9 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a closing socket is given to write what is queued for it before it is dropped.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
+/// Frames shorter than this go uncompressed: deflate rarely shrinks a few dozen bytes, and a
+/// socket that only ever sends small frames never takes a compressor.
+const COMPRESS_FROM_BYTES: usize = 256;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -46,6 +52,26 @@ pub struct AppState {
     pub rooms: Arc<Rooms>,
     pub limits: Arc<Limits>,
     pub used_tokens: Arc<UsedTokens>,
+    /// The deflate state every socket borrows a message at a time (`socket_options`).
+    pub deflate: DeflatePool,
+}
+
+/// How each signalling socket is set up. Frames are compressed (permessage-deflate), which a
+/// browser negotiates on its own: an offer is about a kilobyte per section and repeats most of
+/// it section to section, so it deflates to about a ninth, and a call whose slots change speaker
+/// sends one to each listener every few seconds. Neither side keeps deflate state between
+/// messages, and what a socket compresses with is borrowed from `pool` for one message, so an
+/// idle socket costs a few kilobytes rather than the few hundred its own deflate state would;
+/// each offer is compressed whole, which loses little against one compressed after the last.
+pub fn socket_options(max_message_bytes: usize, pool: &DeflatePool) -> Options {
+    Options::default()
+        .with_low_latency_compression()
+        .server_no_context_takeover()
+        .client_no_context_takeover()
+        .with_deflate_pool(pool.clone())
+        .with_compression_threshold(COMPRESS_FROM_BYTES)
+        .with_limits(max_message_bytes, max_message_bytes)
+        .with_utf8()
 }
 
 /// The join tokens this server has accepted that have not yet expired, by nonce. A token
@@ -121,17 +147,24 @@ pub async fn upgrade(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    ws: WebSocketUpgrade,
+    ws: IncomingUpgrade,
 ) -> Response {
     let ip = client_ip(&state, peer, &headers);
     let Some(pending) = state.limits.pending_socket(ip) else {
         crate::metrics::http_refused(SIGNALLING);
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let max = state.limits.max_message_bytes;
-    ws.max_message_size(max)
-        .max_frame_size(max)
-        .on_upgrade(move |socket| handle(socket, state, ip, pending))
+    let options = socket_options(state.limits.max_message_bytes, &state.deflate);
+    let Ok((response, upgraded)) = ws.upgrade(options) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    tokio::spawn(async move {
+        match upgraded.await {
+            Ok(socket) => handle(socket, state, ip, pending).await,
+            Err(e) => info!(error = %e, "a signalling socket's upgrade did not complete"),
+        }
+    });
+    response.into_response()
 }
 
 fn now() -> i64 {
@@ -156,7 +189,7 @@ async fn close(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>) {
     }
 }
 
-async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
+async fn handle(socket: HttpWebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut inbox) = Outbox::new(OUTBOX_BYTES);
     // Frames for the client are written by their own task so room work never waits on a
@@ -165,17 +198,19 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         let mut ping =
             tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
         loop {
-            let message = tokio::select! {
+            let frame = tokio::select! {
                 text = inbox.recv() => match text {
-                    Some(text) => Message::Text(text),
+                    Some(text) => Frame::text(text),
                     None => break,
                 },
-                _ = ping.tick() => Message::Ping(Default::default()),
+                _ = ping.tick() => Frame::ping(Vec::new()),
             };
-            if sink.send(message).await.is_err() {
+            if sink.send(frame).await.is_err() {
                 break;
             }
         }
+        // Closing the sink ends the stream alone, so the close frame goes first.
+        let _ = sink.send(Frame::close(CloseCode::Normal, "")).await;
         let _ = sink.close().await;
     });
 
@@ -183,15 +218,16 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         Ok(Some(Received::Frame(frame))) => {
             let kind = frame.kind();
             match frame {
-                ClientMessage::Identify { token } => Some((kind, token)),
+                ClientMessage::Identify { token } => Some((kind, First::Identify(token))),
+                ClientMessage::Resume { secret } => Some((kind, First::Resume(secret))),
                 _ => None,
             }
         }
         _ => None,
     };
-    let Some((identify, token)) = first else {
+    let Some((first_kind, first)) = first else {
         outbox.send(&ServerMessage::Error {
-            detail: "the first frame must be identify".to_string(),
+            detail: "the first frame must be identify or resume".to_string(),
             fatal: true,
             retry_after_seconds: None,
             refused: None,
@@ -199,66 +235,100 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         close(outbox, writer).await;
         return;
     };
-    let at = now();
-    let claims = match check_token(&state, &token, at).await.and_then(|claims| {
-        if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
-            Ok(claims)
-        } else {
-            Err(TokenError::Used)
+    let fatal = |detail: String, retry_after_seconds: Option<u64>| ServerMessage::Error {
+        detail,
+        fatal: true,
+        retry_after_seconds,
+        refused: None,
+    };
+    let seat = match first {
+        First::Identify(token) => {
+            let at = now();
+            let claims = match check_token(&state, &token, at).await.and_then(|claims| {
+                if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
+                    Ok(claims)
+                } else {
+                    Err(TokenError::Used)
+                }
+            }) {
+                Ok(claims) => claims,
+                Err(e) => {
+                    outbox.send(&fatal(e.to_string(), None));
+                    close(outbox, writer).await;
+                    return;
+                }
+            };
+            let caller = Caller {
+                ip: Some(ip),
+                user: Some(claims.user),
+                channel: Some(claims.channel),
+            };
+            if let Err(wait) = state.limits.check_frame(first_kind, &caller) {
+                let seconds = wait.as_secs().max(1);
+                outbox.send(&fatal(
+                    format!("too many {first_kind} frames; try again in {seconds}s"),
+                    Some(seconds),
+                ));
+                close(outbox, writer).await;
+                return;
+            }
+            // Identified: the socket no longer counts against its address's unidentified ones.
+            drop(pending);
+            match state
+                .rooms
+                .join(
+                    claims.channel,
+                    claims.user,
+                    outbox.clone(),
+                    (&claims).into(),
+                )
+                .await
+            {
+                Ok(seat) => seat,
+                Err(e) => {
+                    warn!(error = e.to_string(), "join failed");
+                    outbox.send(&fatal(e.to_string(), None));
+                    close(outbox, writer).await;
+                    return;
+                }
+            }
         }
-    }) {
-        Ok(claims) => claims,
-        Err(e) => {
-            outbox.send(&ServerMessage::Error {
-                detail: e.to_string(),
-                fatal: true,
-                retry_after_seconds: None,
-                refused: None,
-            });
-            close(outbox, writer).await;
-            return;
+        First::Resume(secret) => {
+            // Limited by address before the secret is looked up, so secrets cannot be guessed
+            // at any speed.
+            let caller = Caller {
+                ip: Some(ip),
+                user: None,
+                channel: None,
+            };
+            if let Err(wait) = state.limits.check_frame(first_kind, &caller) {
+                let seconds = wait.as_secs().max(1);
+                outbox.send(&fatal(
+                    format!("too many {first_kind} frames; try again in {seconds}s"),
+                    Some(seconds),
+                ));
+                close(outbox, writer).await;
+                return;
+            }
+            drop(pending);
+            match state.rooms.resume(&secret, outbox.clone()) {
+                Ok(seat) => seat,
+                Err(e) => {
+                    outbox.send(&fatal(e.to_string(), None));
+                    close(outbox, writer).await;
+                    return;
+                }
+            }
         }
     };
-    // Identified: the socket no longer counts against its address's unidentified ones.
-    drop(pending);
-    let (user, channel) = (claims.user, claims.channel);
+    let (user, channel) = (seat.user, seat.channel);
     let caller = Caller {
         ip: Some(ip),
         user: Some(user),
         channel: Some(channel),
     };
-    if let Err(wait) = state.limits.check_frame(identify, &caller) {
-        outbox.send(&ServerMessage::Error {
-            detail: format!(
-                "too many {identify} frames; try again in {}s",
-                wait.as_secs().max(1)
-            ),
-            fatal: true,
-            retry_after_seconds: Some(wait.as_secs().max(1)),
-            refused: None,
-        });
-        close(outbox, writer).await;
-        return;
-    }
-    let seat = match state
-        .rooms
-        .join(channel, user, outbox.clone(), (&claims).into())
-        .await
-    {
-        Ok(seat) => seat,
-        Err(e) => {
-            warn!(error = e.to_string(), "join failed");
-            outbox.send(&ServerMessage::Error {
-                detail: e.to_string(),
-                fatal: true,
-                retry_after_seconds: None,
-                refused: None,
-            });
-            close(outbox, writer).await;
-            return;
-        }
-    };
 
+    let mut left = false;
     loop {
         let frame = tokio::select! {
             frame = next_frame(&mut stream) => frame,
@@ -301,11 +371,15 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             }
             None => break,
         };
+        if matches!(frame, ClientMessage::Leave) {
+            left = true;
+            break;
+        }
         let kind = frame.kind();
         crate::metrics::frame(kind);
-        // Muting and deafening always go through; only lifting them is limited.
-        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened }
-            if state.rooms.quietens(seat, muted, deafened));
+        // Muting, deafening, and holding always go through; only lifting them is limited.
+        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened, held }
+            if state.rooms.quietens(seat, muted, deafened, held));
         let limited = if quietens {
             Ok(())
         } else {
@@ -325,51 +399,30 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             continue;
         }
         let result = match frame {
-            ClientMessage::Identify { .. } => {
+            ClientMessage::Identify { .. } | ClientMessage::Resume { .. } => {
                 Err(RoomError::BadParameters("already identified".to_string()))
             }
-            ClientMessage::SetCapabilities { rtp_capabilities } => {
-                state.rooms.set_capabilities(seat, rtp_capabilities).await
-            }
-            ClientMessage::CreateTransport { direction } => {
-                state.rooms.create_transport(seat, direction).await
-            }
-            ClientMessage::ConnectTransport {
-                transport_id,
-                dtls_parameters,
-            } => {
-                state
-                    .rooms
-                    .connect_transport(seat, &transport_id, dtls_parameters)
-                    .await
-            }
-            ClientMessage::Produce { source, .. } | ClientMessage::ProduceRtp { source }
-                if !state.rooms.grants(seat).may_produce(source) =>
-            {
+            ClientMessage::Answer {
+                connection,
+                revision,
+                sdp,
+            } => state.rooms.answer(seat, connection, revision, sdp),
+            ClientMessage::Send { source, .. } if !state.rooms.grants(seat).may_send(source) => {
                 Err(RoomError::NotPermitted(source))
             }
-            ClientMessage::Produce {
-                transport_id,
-                kind,
-                source,
-                rtp_parameters,
-            } => {
-                state
-                    .rooms
-                    .produce(seat, &transport_id, kind, source, rtp_parameters)
-                    .await
+            ClientMessage::Send { source, external } => state.rooms.send(seat, source, external),
+            ClientMessage::StopSending { source } => state.rooms.stop_sending(seat, source),
+            ClientMessage::Watch { video } => state.rooms.watch(seat, video),
+            ClientMessage::Silence { voices, shares } => state.rooms.silence(seat, voices, shares),
+            ClientMessage::SetReceiving { mid, receiving } => {
+                state.rooms.set_receiving(seat, mid, receiving)
             }
-            ClientMessage::ProduceRtp { source } => state.rooms.produce_rtp(seat, source, ip).await,
-            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(seat, ip).await,
-            ClientMessage::CloseProducer { producer_id } => {
-                state.rooms.close_producer(seat, &producer_id).await
-            }
-            ClientMessage::ResumeConsumer { consumer_id } => {
-                state.rooms.resume_consumer(seat, &consumer_id).await
-            }
-            ClientMessage::SetState { muted, deafened } => {
-                state.rooms.set_state(seat, muted, deafened).await
-            }
+            ClientMessage::RestartIce { connection } => state.rooms.restart_ice(seat, connection),
+            ClientMessage::SetState {
+                muted,
+                deafened,
+                held,
+            } => state.rooms.set_state(seat, muted, deafened, held).await,
             ClientMessage::OfferFile { .. } if !state.rooms.grants(seat).transfer_files => {
                 Err(RoomError::TransferNotPermitted)
             }
@@ -399,7 +452,8 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 peer,
                 reason,
             } => state.rooms.end_transfer(seat, offer, peer, reason).await,
-            ClientMessage::Leave => break,
+            // Taken before the limits, so a leave always goes through.
+            ClientMessage::Leave => Ok(()),
         };
         if let Err(e) = result {
             outbox.send(&ServerMessage::Error {
@@ -410,8 +464,8 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             });
         }
     }
-    info!(user = user.to_string(), "socket closed");
-    state.rooms.leave_seat(seat).await;
+    info!(user = user.to_string(), left, "socket closed");
+    state.rooms.socket_closed(seat, left).await;
     close(outbox, writer).await;
 }
 
@@ -433,6 +487,12 @@ async fn check_token(state: &AppState, token: &str, at: i64) -> Result<JoinClaim
             None => Err(TokenError::Malformed),
         },
     }
+}
+
+/// The frame a socket opens with.
+enum First {
+    Identify(String),
+    Resume(String),
 }
 
 /// What a socket sent.
@@ -469,25 +529,28 @@ fn read_frame(text: &str) -> Option<Received> {
     }
 }
 
-/// What the client sent next, or `None` once the socket is closed, sends something that is not
-/// a JSON object, or goes `IDLE_TIMEOUT` without sending anything.
-async fn next_frame(stream: &mut futures_util::stream::SplitStream<WebSocket>) -> Option<Received> {
+/// What the client sent next, or `None` once the socket is closed or fails, sends something that
+/// is not a JSON object, or goes `IDLE_TIMEOUT` without sending anything. yawc answers pings
+/// itself, and reassembles fragmented messages before they come here.
+async fn next_frame(
+    stream: &mut futures_util::stream::SplitStream<HttpWebSocket>,
+) -> Option<Received> {
     loop {
         let Ok(next) = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await else {
             info!("a signalling socket went silent");
             return None;
         };
-        match next? {
-            Ok(Message::Text(text)) => {
-                let received = read_frame(&text);
+        let frame = next?;
+        match frame.opcode() {
+            OpCode::Text => {
+                let received = read_frame(frame.as_str());
                 if received.is_none() {
                     warn!("a client sent text that is not a JSON object");
                 }
                 return received;
             }
-            Ok(Message::Binary(_)) => return None,
-            Ok(Message::Close(_)) | Err(_) => return None,
-            Ok(Message::Ping(_) | Message::Pong(_)) => {}
+            OpCode::Binary | OpCode::Close => return None,
+            OpCode::Ping | OpCode::Pong | OpCode::Continuation => {}
         }
     }
 }
@@ -512,10 +575,7 @@ mod tests {
         // A type added later, and a value added later to a type known now.
         for (text, kind) in [
             (r#"{"type":"raiseHand","raised":true}"#, Some("raiseHand")),
-            (
-                r#"{"type":"produceRtp","source":"whiteboard"}"#,
-                Some("produceRtp"),
-            ),
+            (r#"{"type":"send","source":"whiteboard"}"#, Some("send")),
             (r#"{"kind":"leave"}"#, None),
             (r#"{"type":7}"#, None),
         ] {

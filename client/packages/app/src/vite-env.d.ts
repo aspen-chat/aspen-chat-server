@@ -28,16 +28,6 @@ interface ImportMetaEnv {
   readonly VITE_ALLOW_LOOPBACK_HTTP?: string;
 }
 
-/** Where an external sender delivers SRTP, as the voice server describes it. */
-interface RtpTargetShape {
-  ip: string;
-  port: number;
-  ssrc: number;
-  payloadType: number;
-  srtpCryptoSuite: string;
-  srtpKeyBase64: string;
-}
-
 /** An audio source and the applications it can be pointed at, as the capture helper lists them. */
 interface AudioKindShape {
   kind: string;
@@ -49,7 +39,6 @@ interface AudioKindShape {
 interface AudioOptionsShape {
   kind: string;
   settings?: string;
-  rtp: RtpTargetShape;
   bitrateKbps?: number;
 }
 
@@ -134,6 +123,7 @@ interface AspenDesktopBridge {
       applicationAudio: AudioKindShape | null;
       testMedia: string | null;
     }>;
+    /** Starts a capture on the capture connection `offer` offers; resolves to its answer. */
     start(options: {
       kind: string;
       settings?: string;
@@ -141,11 +131,13 @@ interface AspenDesktopBridge {
       height?: number;
       fps?: number;
       bitrateKbps?: number;
-      rtp: RtpTargetShape;
+      offer: string;
       audio?: AudioOptionsShape;
-    }): Promise<void>;
+    }): Promise<string>;
     /** Captures one application's sound alone, the picture coming from the browser's screen share. */
-    startAudio(audio: AudioOptionsShape): Promise<void>;
+    startAudio(options: { audio: AudioOptionsShape; offer: string }): Promise<string>;
+    /** Answers a later offer of the running capture's connection. */
+    answer(offer: string): Promise<string>;
     stop(): Promise<void>;
     /** The capture ended without being asked to: the helper process died. */
     onEnded(listener: () => void): () => void;

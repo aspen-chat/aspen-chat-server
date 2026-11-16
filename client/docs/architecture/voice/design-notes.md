@@ -8,31 +8,55 @@ See [joining and leaving](joining.md).
 
 - **The microphone opens before any server is tried.** A refusal of the microphone is the user's
   device, not a server's fault, so no server is blamed for it.
-- **A join waits for the send transport's ICE and DTLS to connect.** The server accepting the
-  producer says nothing about whether media flows, so a transport that fails or times out is the
-  server's failure and the next candidate is tried.
-- **A server is reported only for a failure known to be its own.** Loading the device, making the
-  transports, and producing the microphone run in the browser, and fail the same against every
-  server, so reporting them would count healthy servers toward the failure threshold and tell the
-  user a server failed. Media that does not connect may be the user's network as much as the server,
-  and is still reported: the client cannot tell which, and a server announcing an address nobody
-  reaches is found no other way.
+- **A join waits for the peer connection's ICE and DTLS to connect.** The server answering `ready`
+  says nothing about whether media flows, so a connection that fails or times out is the server's
+  failure and the next candidate is tried.
+- **A server is reported only for a failure known to be its own.** Making the peer connection and
+  applying the server's offers run in the browser, and fail the same against every server, so
+  reporting them would count healthy servers toward the failure threshold and tell the user a server
+  failed. Media that does not connect may be the user's network as much as the server, and is still
+  reported: the client cannot tell which, and a server announcing an address nobody reaches is found
+  no other way.
 - **A refused request is not reported as the server's failure.** A refusal (such as going too fast)
   is the user's to wait out, unlike a timeout, so no other server is tried.
-- **The microphone producer uses `stopTracks: false`.** The call, not the transport, decides when
-  the track stops, so the microphone stays open across a move between calls or a rejoin and the move
-  is quick.
-- **The mediasoup `Device` is kept by its router capabilities.** Every call on a voice server shares
-  them, so loading the `Device` once rather than for every call saves time on each join.
+- **The call holds the microphone's track apart from the connection.** Closing a call's connection
+  leaves the track open, so the microphone stays open across a move between calls or a rejoin and
+  the move is quick.
+- **A closed socket is resumed before anything is rejoined.** The peer connection does not need the
+  socket, so a socket lost while the network blips costs no media, and the voice server keeps the
+  call for twenty seconds. A rejoin would close the connection and negotiate a new one, a gap in
+  everything the user sends and hears. The attempts wait random, growing times, so a server's whole
+  call does not come back at one moment.
+- **A lost connection keeps asking for ICE restarts.** A network change recovers with new ICE
+  credentials on the same connection. A restart tried while the network is still away fails in its
+  turn, and a browser never checks a failed generation again, so a connection asks once for each
+  `ICE_RESTART_INTERVAL_MS` it stays lost, and the one asked for after the network returns is what
+  reconnects. Only one still lost after `ICE_RECOVERY_LIMIT_MS` is rejoined.
 
 ## Media
 
 See [media](media.md).
 
-- **Screen shares start at 10 Mbps** rather than climbing from a few hundred kbps. The network's
-  bandwidth estimate, not a guess of ours, brings it down.
-- **Screen audio is declared stereo.** mediasoup-client sends mono unless told, and a listener
-  decodes whatever the producer declares.
+- **The voice server makes every offer.** What the call wants changed is asked for, and the server
+  offers it, never two at once on a connection, so neither side handles offers that collide. The
+  call answers in order, one at a time, and answers a restated revision with the answer it already
+  sent, since applying it again would renegotiate nothing new.
+- **One connection carries both ways.** One ICE and DTLS handshake per person, one set of
+  candidates, and one thing to restart when the network changes. A change to what the user sends may
+  wait behind one to what they receive, which is rare once what is received is bounded.
+- **What is received is bounded, whatever the size of the call.** A section per remote source would
+  make every join's offer grow with the call and be sent to everyone in it. Audio slots, filled with
+  whoever is loudest, cap the voices received at `audioSlots`, and the slots frame, not the packets,
+  says whom each carries, since the phones' WebRTC libraries do not expose contributing sources.
+  Video is received only as watched, so a client never decodes video it would discard.
+- **Video is watched only while something shows it.** The call stage holds `showVideo` while it is
+  mounted, so a phone's battery and anyone's bandwidth are spent only on video on screen.
+- **Screen shares start at 10 Mbps** rather than climbing from a few hundred kbps. The voice
+  server's offer says so (`x-google-start-bitrate`), and the browser's bandwidth estimate, not a
+  guess of ours, brings it down.
+- **A share's sound is offered stereo without DTX.** A browser sends Opus mono unless the remote
+  description asks for stereo, and DTX's silence detection would cut quiet music; the offer sets
+  both on the share's section alone, so the microphone keeps DTX.
 - **`contentHint` marks moving pictures.** For a game, the encoder then gives up resolution rather
   than frames when bandwidth runs short.
 - **`browserMedia.ts` is loaded lazily behind `VoiceMedia`.** The protocol package stays importable

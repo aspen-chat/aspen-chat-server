@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>voice_media call</title>
+<pre id="status">joining</pre>
+<script>
+  // ?role=speak sends the microphone; any other role only listens.
+  const role = new URLSearchParams(location.search).get("role") ?? "listen";
+  const pc = new RTCPeerConnection();
+  const tracks = {};
+  const slots = {};
+  const sections = new Map();
+  const players = new Map();
+  let me;
+
+  pc.ontrack = (event) => {
+    const mid = event.transceiver.mid;
+    const audio = new Audio();
+    audio.srcObject = new MediaStream([event.track]);
+    audio.play().catch(() => {});
+    players.set(mid, audio);
+  };
+
+  async function answer(offer) {
+    for (const section of offer.sections) sections.set(section.mid, section);
+    await pc.setRemoteDescription({ type: "offer", sdp: offer.sdp });
+    // The sections the server offers for what this page sends: each takes its track.
+    for (const section of offer.sections) {
+      if (section.carries !== "sending") continue;
+      const transceiver = pc.getTransceivers().find((t) => t.mid === section.mid);
+      const track = tracks[section.source];
+      if (!transceiver || !track) continue;
+      transceiver.direction = "sendonly";
+      await transceiver.sender.replaceTrack(track);
+    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await fetch(`/answer/${me.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: offer.revision, sdp: pc.localDescription.sdp }),
+    });
+  }
+
+  async function listen() {
+    for (;;) {
+      const events = await (await fetch(`/events/${me.id}`)).json();
+      for (const event of events) {
+        if (event.type === "offer") await answer(event);
+        if (event.type === "slots")
+          for (const a of event.assignments)
+            slots[a.slot] = { user: a.user, since: performance.now() };
+      }
+    }
+  }
+
+  /** Each audio slot: who the server says it carries, its receiver's statistics, and the
+   * contributing sources the browser reports. */
+  window.slotStats = async () => {
+    const out = { me: me?.user, connection: pc.connectionState, slots: {} };
+    const stats = await pc.getStats();
+    for (const t of pc.getTransceivers()) {
+      const section = sections.get(t.mid);
+      if (section?.carries !== "audioSlot") continue;
+      let inbound;
+      stats.forEach((s) => {
+        if (s.type === "inbound-rtp" && s.mid === t.mid) inbound = s;
+      });
+      out.slots[section.slot] = {
+        mid: t.mid,
+        user: slots[section.slot]?.user ?? null,
+        packets: inbound?.packetsReceived ?? 0,
+        lost: inbound?.packetsLost ?? 0,
+        samples: inbound?.totalSamplesReceived ?? 0,
+        concealed: inbound?.concealedSamples ?? 0,
+        audioLevel: inbound?.audioLevel ?? 0,
+        ssrc: inbound?.ssrc ?? null,
+        csrc: t.receiver.getContributingSources().map((c) => c.source),
+      };
+    }
+    return out;
+  };
+
+  (async () => {
+    me = await (await fetch("/join", { method: "POST" })).json();
+    if (role === "speak") {
+      const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tracks.microphone = media.getAudioTracks()[0];
+      await fetch(`/send/${me.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "microphone" }),
+      });
+    }
+    listen();
+    setInterval(async () => {
+      document.getElementById("status").textContent = JSON.stringify(
+        await window.slotStats(),
+        null,
+        1,
+      );
+    }, 1000);
+  })();
+</script>

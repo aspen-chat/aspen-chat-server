@@ -4,22 +4,35 @@
  * Joining asks the API server for an offer (a token and the candidate voice servers), measures
  * the latency to each candidate, and tries them nearest first: a signalling socket is opened,
  * the token presented, and if the server does not answer `ready` in time the failure is
- * reported to the API server and the next candidate is tried. Once in, the mediasoup device is
- * loaded from the router's capabilities, a send and a receive transport are created, the
- * microphone is produced, and every consumer the server announces is played.
+ * reported to the API server and the next candidate is tried. Once in, the voice server offers
+ * the call's one peer connection and the call answers every offer it makes: the server is the
+ * only side that offers. Whatever the call wants changed (a source to send, the video to watch,
+ * an ICE restart) it asks for, and the server offers the change. The connection receives an
+ * audio slot for each other microphone, up to `ready`'s `audioSlots`, which the server fills
+ * with whoever is loudest and says whom each carries (`slots`), and a section for each video it
+ * watches (`showVideo`).
  *
- * A call ended because its server was lost or removed is rejoined on its own after a random
- * delay of up to a second, so the participants of a lost call do not all hit the API server at
- * once. A call ended for being idle, or by the user, is not. The browser's media APIs and the
- * mediasoup device sit behind `VoiceMedia` (`voiceMedia.ts`), so the flow runs and is tested
- * without them.
+ * A signalling socket that closes on its own is resumed with `ready`'s secret, the peer
+ * connection and its media going on meanwhile; a call whose socket cannot be resumed, or ended
+ * because its server was lost or removed, is rejoined on its own after a random delay of up to
+ * a second, so the participants of a lost call do not all hit the API server at once. A call
+ * ended for being idle, or by the user, is not. The browser's media APIs sit behind
+ * `VoiceMedia` (`voiceMedia.ts`), so the flow runs and is tested without them.
  */
 
 import { DEFAULT_DEVICE, type DeviceChoice } from "./preferences";
 import type { components } from "./generated/openapi";
-import type { Grants, ServerMessage } from "./generated/voiceSignal";
+import type {
+  ClientMessage,
+  Grants,
+  MediaSource,
+  Section,
+  ServerMessage,
+  WatchedVideo,
+} from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
+import { compareIds } from "./order";
 import { ApiProblemError } from "./problem";
 import {
   type FileSink,
@@ -34,75 +47,67 @@ export { VoiceServerError };
 import { InsecureAddressError, securelyReached } from "./urls";
 import { type RankedCandidate, rankCandidates, signallingUrl } from "./voiceCandidates";
 import type {
+  CallConnection,
+  CallTransceiver,
   ExternalAudio,
+  ExternalSender,
   ExternalShare,
-  RtpTarget,
   ScreenCapture,
-  TransportParams,
-  VoiceDevice,
   VoiceMedia,
-  VoiceTransport,
 } from "./voiceMedia";
 
 type VoiceJoinOffer = components["schemas"]["VoiceJoinOffer"];
 type VoiceServerCandidate = components["schemas"]["VoiceServerCandidate"];
+type Offer = Extract<ServerMessage, { type: "offer" }>;
+type Ready = Extract<ServerMessage, { type: "ready" }>;
 
-/** How long the media transport has to connect once the server has accepted the call. */
+/** How long the peer connection has to connect once the server has accepted the call. */
 export const CONNECT_TIMEOUT_MS = 15_000;
+/**
+ * How often a connection lost mid-call asks for an ICE restart, and how long it may stay lost
+ * before the call is rejoined. Eight restarts in half a minute stay within the voice server's
+ * limit on `restartIce`.
+ */
+export const ICE_RESTART_INTERVAL_MS = 4_000;
+export const ICE_RECOVERY_LIMIT_MS = 30_000;
 /** How long a candidate has to answer a latency ping. */
 export const PING_TIMEOUT_MS = 3_000;
-/** How long a candidate has to answer `identify` with `ready`. */
+/** How long a candidate has to answer `identify` or `resume` with `ready`. */
 export const READY_TIMEOUT_MS = 6_000;
-
 /**
- * How a screen share's own sound is encoded: stereo (a browser decodes Opus as mono unless the
- * producer says otherwise), without discontinuous transmission, which cuts quiet passages of
- * music, and at 128 kbps, where cymbals and other dense sound stay clean.
+ * How many times a signalling socket that closed on its own is opened again to resume, before
+ * the call is rejoined instead. Each waits a random time of up to `RESUME_DELAY_MAX_MS` more
+ * than the one before; all of them end well inside the server's twenty seconds of grace.
  */
-export /** The camera this client sends: its track, and the producer once the voice server has it. */
-interface CameraSend {
-  track: MediaStreamTrack;
-  producer: {
-    id: string;
-    close(): void;
-    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
-  } | null;
-}
-
-/**
- * A camera is sent as one layer allowed up to 4 Mbps at 30 frames a second, which a 1080p camera
- * fills well. The encoder starts at 10 Mbps (in kbps here), as a share does, so nothing of ours
- * holds it back; the browser still sizes the picture to its bandwidth estimate, which climbs over
- * the first seconds of a camera, and gives up resolution rather than frames where bandwidth runs
- * short, which suits a face.
- */
-const CAMERA_ENCODING = { maxBitrate: 4_000_000, maxFramerate: 30 };
-const CAMERA_VIDEO_CODEC = { videoGoogleStartBitrate: 10_000 };
+export const RESUME_ATTEMPTS = 3;
+export const RESUME_DELAY_MAX_MS = 1_000;
 
 /** The two sounds a participant sends, whose volumes are set apart: their voice, and their stream's. */
 export type AudioSource = "microphone" | "screenAudio";
 
-function isAudioSource(source: string): source is AudioSource {
-  return source === "microphone" || source === "screenAudio";
+/**
+ * How a sent video is encoded, set on its sender once its section is answered: a ceiling the
+ * encoder may spend up to, never a target, since it spends only what the picture needs and the
+ * connection's bandwidth estimate brings it down. The voice server's offers say what the
+ * encoder starts at (`x-google-start-bitrate`) and, for a share's sound, stereo without
+ * discontinuous transmission at 128 kbps.
+ */
+interface Encoding {
+  readonly maxBitrate: number;
+  readonly maxFramerate: number;
 }
 
 /**
- * A shared screen is sent at the best quality the network carries: one layer allowed up to
- * 25 Mbps at 60 frames a second, the ceiling rather than a target, since the encoder spends only
- * what the picture needs and the connection's bandwidth estimate brings it down.
+ * A camera is sent as one layer allowed up to 4 Mbps at 30 frames a second, which a 1080p
+ * camera fills well; the browser sizes the picture to its bandwidth estimate, which climbs over
+ * the first seconds of a camera, and gives up resolution rather than frames where bandwidth
+ * runs short, which suits a face.
  */
-const SCREEN_ENCODING = { maxBitrate: 25_000_000, maxFramerate: 60 };
-/**
- * The encoder starts at 10 Mbps (in kbps here) rather than the browser's few hundred kbps, which
- * it climbs from slowly, so a share is sharp from its first seconds.
- */
-const SCREEN_VIDEO_CODEC = { videoGoogleStartBitrate: 10_000 };
+const CAMERA_ENCODING: Encoding = { maxBitrate: 4_000_000, maxFramerate: 30 };
 
-const SCREEN_AUDIO_CODEC = {
-  opusStereo: true,
-  opusDtx: false,
-  opusMaxAverageBitrate: 128_000,
-} as const;
+/** A shared screen is allowed up to 25 Mbps at 60 frames a second. */
+const SCREEN_ENCODING: Encoding = { maxBitrate: 25_000_000, maxFramerate: 60 };
+
 /** The most a lost call waits before rejoining. */
 export const REJOIN_DELAY_MAX_MS = 1_000;
 /**
@@ -116,6 +121,13 @@ export const DEAD_SERVER_RETRY_MS = 60_000;
 
 export type VoiceCallStatus = "idle" | "joining" | "connected" | "rejoining" | "failed";
 
+/** What the user asked of their own state in the call. */
+interface Asked {
+  readonly muted: boolean;
+  readonly deafened: boolean;
+  readonly held: boolean;
+}
+
 export interface VoiceCallState {
   readonly status: VoiceCallStatus;
   /** The channel being joined or in, `null` when idle. */
@@ -123,6 +135,14 @@ export interface VoiceCallState {
   readonly session: string | null;
   readonly muted: boolean;
   readonly deafened: boolean;
+  /**
+   * Whether the call is on hold (`setHeld`), as a phone puts it while a phone call has its
+   * audio: the voice server sends none of the user's media and none to them, and their mute and
+   * deafen stay as they are for when it ends.
+   */
+  readonly held: boolean;
+  /** The others in the call the voice server says are on hold, in id order. */
+  readonly onHold: readonly string[];
   /**
    * Whether a moderator's mute of the user stands in the call's community, which keeps them
    * muted in every call there, whatever they ask, until a moderator lifts it.
@@ -142,13 +162,17 @@ export interface VoiceCallState {
   files: FilesState;
   /** Whether this client is sending a screen, window, or game into the call. */
   sharingScreen: boolean;
-  /** The video this client is sending, for a local preview; `null` when not sharing. */
+  /**
+   * The video this client is sending, for a local preview; `null` when not sharing. A share
+   * sent from outside the browser is previewed from the voice server, while video is shown
+   * (`showVideo`).
+   */
   localScreen: MediaStreamTrack | null;
-  /** The screens other participants are sharing, in the order they arrived. */
+  /** The screens other participants are sharing, while video is shown, in the order they arrived. */
   screens: readonly RemoteScreen[];
   /** This client's camera while it is on, for its own tile; `null` when off. */
   localCamera: MediaStreamTrack | null;
-  /** The cameras other participants have on, in the order they arrived. */
+  /** The cameras other participants have on, while video is shown, in the order they arrived. */
   cameras: readonly RemoteScreen[];
   /**
    * Why the camera last failed to turn on, until it turns on, the user dismisses it
@@ -187,7 +211,8 @@ export interface VoiceCallState {
 /** A screen another participant is sharing, or their camera, as a playable video track. */
 export interface RemoteScreen {
   readonly user: string;
-  readonly consumerId: string;
+  /** The media section carrying it, unique in the call for as long as it is shown. */
+  readonly id: string;
   readonly track: MediaStreamTrack;
 }
 
@@ -198,7 +223,7 @@ export interface VoiceCallOptions {
   fetch?: typeof globalThis.fetch;
   setTimeout?: typeof globalThis.setTimeout;
   now?: () => number;
-  /** Uniform in [0, 1); seeds the rejoin delay. */
+  /** Uniform in [0, 1); seeds the rejoin and resume delays. */
   random?: () => number;
   /**
    * How loud each other user should be to this one, their voice (`microphone`) and the sound of
@@ -217,6 +242,8 @@ const IDLE: VoiceCallState = {
   session: null,
   muted: false,
   deafened: false,
+  held: false,
+  onHold: [],
   serverMuted: false,
   canSpeak: false,
   canShare: false,
@@ -285,9 +312,9 @@ export class VoiceRequestRefused extends Error {
 }
 
 /**
- * This device could not set the call up: the browser lacks WebRTC or a codec the voice server's
- * router needs, or could not make a transport or send the microphone. `cause` is what it threw.
- * No voice server is at fault, so none is reported and no other is tried.
+ * This device could not set the call up: the browser lacks WebRTC or a codec the voice server
+ * offers, or could not apply an offer. `cause` is what it threw. No voice server is at fault,
+ * so none is reported and no other is tried.
  */
 export class CallSetupError extends Error {
   constructor(cause: unknown) {
@@ -327,6 +354,40 @@ function failure(
   };
 }
 
+/** A source this client asked to send from the browser: its track and how it is encoded. */
+interface Sent {
+  track: MediaStreamTrack | null;
+  readonly encoding: Encoding | null;
+}
+
+/** Received audio playing: an audio slot, or the sound of someone's share. */
+type Heard =
+  | { readonly carries: "audioSlot"; readonly slot: number }
+  | {
+      readonly carries: "shareAudio";
+      readonly user: string;
+    };
+
+/** A `silence` naming no one, as the voice server starts each place in a call. */
+const NO_SILENCE = JSON.stringify([[], []]);
+
+function sameHeard(a: Heard, b: Heard): boolean {
+  return a.carries === "audioSlot"
+    ? b.carries === "audioSlot" && a.slot === b.slot
+    : b.carries === "shareAudio" && a.user === b.user;
+}
+
+/** The answer sent to one revision of a connection's offers, sent again if it is offered again. */
+interface Answered {
+  readonly revision: number;
+  readonly sdp: string;
+}
+
+/** The two video sources a participant shows others. */
+function isVideo(source: MediaSource): source is "screen" | "camera" {
+  return source === "screen" || source === "camera";
+}
+
 export class VoiceCall {
   readonly #client: AspenClient;
   readonly #media: VoiceMedia;
@@ -338,26 +399,65 @@ export class VoiceCall {
   readonly #listeners = new Set<VoiceCallListener>();
   #state: VoiceCallState = IDLE;
   #signal: Signal | null = null;
-  #sendTransport: VoiceTransport | null = null;
-  #recvTransport: VoiceTransport | null = null;
+  /** The signalling URL of the server the call is on, which a resume opens again. */
+  #signalUrl: string | null = null;
+  #lastReady: Ready | null = null;
+  #connection: CallConnection | null = null;
+  /**
+   * Offers are applied one at a time, in the order they came: each waits for the one before to
+   * be answered, as the server waits for each answer before its next offer.
+   */
+  #negotiation: Promise<void> = Promise.resolve();
+  #answered: { call: Answered | null; capture: Answered | null } = { call: null, capture: null };
+  /** What each section of the call connection carries, by mid, as its latest offer said. */
+  #sections = new Map<string, Section>();
+  /** The received audio playing, by its section's mid, which is also its id in `VoiceMedia`. */
+  readonly #heard = new Map<string, Heard>();
+  /** Whom each audio slot carries, as `slots` said; `null` leaves it silent. */
+  readonly #slots = new Map<number, string | null>();
+  /** The sources this client asked to send from the browser. */
+  readonly #sent = new Map<MediaSource, Sent>();
+  /** Sources asked for that the server has not yet said are sent on (`sending`). */
+  readonly #pending = new Set<MediaSource>();
+  /** What each participant sends, this client included, as `ready` and `sources` say. */
+  readonly #sources = new Map<string, Set<MediaSource>>();
+  /** How many places show video now (`showVideo`); none, and none is watched. */
+  #videoShown = 0;
+  /** The last `watch` sent, as JSON, so an unchanged one is not sent again. */
+  #watching = "[]";
+  /** Who is in the call besides this client, as `ready` and `participantJoined` say. */
+  readonly #participants = new Set<string>();
+  /**
+   * The volumes `setUserVolume` set, by user and source, standing over `userVolume` until
+   * `refreshVolumes` reads it again.
+   */
+  readonly #volumes = new Map<string, number>();
+  /** The last `silence` sent, as JSON, so an unchanged one is not sent again. */
+  #silencing = NO_SILENCE;
+  /** Whether the connection has failed and an ICE restart was asked for, until it connects. */
+  #restarting = false;
+  /** Rejects the join in progress when an offer cannot be applied. */
+  #setupFailed: ((error: unknown) => void) | null = null;
   #microphone: MediaStreamTrack | null = null;
   /**
-   * The mute and deafen the user last asked for. In a call, `muted` and `deafened` show the
-   * voice server's word, except that they show the user silenced the moment they ask to be:
-   * muting and deafening take effect at once (the microphone's track is disabled here too, and
-   * the server never refuses them), while unmuting and undeafening show only once the server
-   * says it did them, so a refused one never shows the user audible when they are not.
-   * Outside a call it is the state itself.
+   * The mute, deafen, and hold the user last asked for. In a call, `muted`, `deafened`, and
+   * `held` show the voice server's word, except that they show the user silenced the moment
+   * they ask to be: muting, deafening, and holding take effect at once (the microphone's track
+   * is disabled here too, and the server never refuses them), while lifting them shows only
+   * once the server says it did, so a refused one never shows the user audible when they are
+   * not. Outside a call it is the state itself.
    */
-  #asked = { muted: false, deafened: false };
+  #asked: Asked = { muted: false, deafened: false, held: false };
   #screen: ScreenCapture | null = null;
-  #screenProducers: { id: string; close(): void }[] = [];
-  /** The external sound of the browser screen share, and the RTP producer it feeds. */
-  #screenAudio: { producerId: string; audio: ExternalAudio } | null = null;
-  #microphoneProducer: {
-    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
-    close(): void;
-  } | null = null;
+  /** A share sent from outside the browser. */
+  #externalShare: ExternalShare | null = null;
+  /**
+   * The sender holding the capture connection: the external share, or the outside sound of a
+   * browser screen share.
+   */
+  #captureSender: ExternalSender | null = null;
+  /** Settles the start of the capture sender once it answers its first offer, or fails to. */
+  #captureStarted: { resolve: () => void; reject: (error: unknown) => void } | null = null;
   #devices: { input: DeviceChoice; output: DeviceChoice; camera: DeviceChoice } = {
     input: DEFAULT_DEVICE,
     output: DEFAULT_DEVICE,
@@ -365,13 +465,9 @@ export class VoiceCall {
   };
   /** The gain the microphone is sent at, from `setInputVolume`. */
   #inputVolume = 1;
-  #camera: CameraSend | null = null;
+  #camera: { track: MediaStreamTrack } | null = null;
   /** Counts moves of the camera to another, so a move overtaken by a later one gives way. */
   #cameraSwaps = 0;
-  #external: { producerIds: string[]; share: ExternalShare } | null = null;
-  /** The consumer carrying the call's own preview of an external share. */
-  #previewConsumerId: string | null = null;
-  readonly #consumers = new Map<string, { close(): void; user: string; source: string }>();
   readonly #userVolume: (userId: string, source: AudioSource) => number;
   /** Increments on every join and leave so a stale async step can notice and bail. */
   #generation = 0;
@@ -388,7 +484,7 @@ export class VoiceCall {
     this.#random = options.random ?? Math.random;
     this.#files = new FileTransfers({
       send: (frame) => {
-        this.#signal?.send(frame);
+        this.#send(frame);
       },
       onChange: () => {
         this.#set({ files: this.#files.state });
@@ -414,12 +510,16 @@ export class VoiceCall {
   #set(patch: Partial<VoiceCallState>): void {
     this.#state = { ...this.#state, ...patch };
     if (this.#state.status !== "connected") {
-      this.#asked = { muted: this.#state.muted, deafened: this.#state.deafened };
+      this.#asked = this.#shown();
     }
     this.#holdMicrophone();
     for (const listener of Array.from(this.#listeners)) {
       listener();
     }
+  }
+
+  #send(frame: ClientMessage): void {
+    this.#signal?.send(frame);
   }
 
   /** Joins a channel's call, leaving any current one first. */
@@ -477,6 +577,25 @@ export class VoiceCall {
   }
 
   /**
+   * Shows other participants' video, and the preview of a share sent from outside the browser,
+   * until the function returned is called: the call watches every screen and camera in it, as
+   * many as the voice server gives sections for, while anything shows them. Nothing showing
+   * them, none is received.
+   */
+  showVideo(): () => void {
+    this.#videoShown += 1;
+    this.#updateWatch();
+    let shown = true;
+    return () => {
+      if (shown) {
+        shown = false;
+        this.#videoShown -= 1;
+        this.#updateWatch();
+      }
+    };
+  }
+
+  /**
    * Offers a file to everyone else in the call for `validForSeconds`. Every acceptance then
    * starts sending on its own, whether or not the user is watching. `allowDirect` lets
    * receivers connect directly, which could expose this device's address to them.
@@ -516,6 +635,15 @@ export class VoiceCall {
     this.#ask({ ...this.#asked, deafened });
   }
 
+  setHeld(held: boolean): void {
+    this.#ask({ ...this.#asked, held });
+  }
+
+  /** The mute, deafen, and hold the state shows now. */
+  #shown(): Asked {
+    return { muted: this.#state.muted, deafened: this.#state.deafened, held: this.#state.held };
+  }
+
   /**
    * Follows a moderator's mute of the user in the call's community being made or lifted, as
    * its event says; the voice server applies it to the call itself.
@@ -534,10 +662,11 @@ export class VoiceCall {
   }
 
   /**
-   * Asks for `asked` as the user's mute and deafen. Outside a call it simply is the state; in
-   * one, whatever it silences shows at once and whatever it lifts waits for the voice server.
+   * Asks for `asked` as the user's mute, deafen, and hold. Outside a call it simply is the
+   * state; in one, whatever it silences shows at once and whatever it lifts waits for the voice
+   * server.
    */
-  #ask(asked: { muted: boolean; deafened: boolean }): void {
+  #ask(asked: Asked): void {
     if (this.#state.status !== "connected") {
       this.#set({ ...asked, stateRefused: null });
       return;
@@ -546,28 +675,28 @@ export class VoiceCall {
     this.#set({
       muted: this.#state.muted || asked.muted,
       deafened: this.#state.deafened || asked.deafened,
+      held: this.#state.held || asked.held,
       stateRefused: null,
     });
     this.#sendState();
   }
 
-  /** Keeps the microphone's track silent while the user is shown muted. */
+  /** Keeps the microphone's track silent while the user is shown muted or on hold. */
   #holdMicrophone(): void {
-    const enabled = !this.#state.muted;
+    const enabled = !this.#state.muted && !this.#state.held;
     if (this.#microphone !== null && this.#microphone.enabled !== enabled) {
       this.#microphone.enabled = enabled;
     }
   }
 
   /**
-   * Shares the screen: asks the browser for a capture and produces the picture as `screen` and
-   * any audio the browser captured with it as `screenAudio`. Ends on its own when the user
-   * stops the capture from the browser's own control. `prepared` shares a capture already
-   * made instead of asking the browser. `audio` replaces the browser's sound with sound from
-   * outside it, fed to an RTP producer of source `screenAudio`. `contentHint` tells the encoder
-   * what the picture is: `motion` (a game or video) keeps the frame rate and gives up
-   * resolution when bandwidth runs short, where the browser's default for a screen keeps the
-   * resolution and drops frames.
+   * Shares the screen: asks the browser for a capture and sends the picture as `screen` and any
+   * audio the browser captured with it as `screenAudio`. Ends on its own when the user stops
+   * the capture from the browser's own control. `prepared` shares a capture already made
+   * instead of asking the browser. `audio` replaces the browser's sound with sound sent from
+   * outside it, as `screenAudio`. `contentHint` tells the encoder what the picture is: `motion`
+   * (a game or video) keeps the frame rate and gives up resolution when bandwidth runs short,
+   * where the browser's default for a screen keeps the resolution and drops frames.
    */
   async startScreenShare(
     options: {
@@ -577,24 +706,23 @@ export class VoiceCall {
     } = {},
   ): Promise<void> {
     const { prepared, audio, contentHint } = options;
-    const transport = this.#sendTransport;
     const signal = this.#signal;
     // Nothing is shared outside a call, into a call that does not allow it, or twice.
     if (
       this.#state.status !== "connected" ||
       !this.#state.canShare ||
-      transport === null ||
       signal === null ||
       this.#screen !== null ||
-      this.#external !== null
+      this.#externalShare !== null
     ) {
       prepared?.video.stop();
       prepared?.audio?.stop();
       return;
     }
+    const generation = this.#generation;
     const capture = prepared ?? (await this.#media.getScreen());
     // The picker took time; the call may have moved on or another share started meanwhile.
-    if (this.#sendTransport !== transport || this.#sharing()) {
+    if (generation !== this.#generation || this.#sharing()) {
       capture.video.stop();
       capture.audio?.stop();
       return;
@@ -613,91 +741,53 @@ export class VoiceCall {
         this.stopScreenShare();
       }
     });
-    try {
-      this.#screenProducers.push(
-        await transport.produce({
-          track: capture.video,
-          appData: { source: "screen" },
-          encodings: [SCREEN_ENCODING],
-          codecOptions: SCREEN_VIDEO_CODEC,
-        }),
-      );
-      if (audio !== undefined) {
-        const produced = await this.#produceRtp(signal, "screenAudio");
-        if (this.#screen !== capture) {
-          signal.send({ type: "closeProducer", producerId: produced.producerId });
-          return;
-        }
-        this.#screenAudio = { producerId: produced.producerId, audio };
-        await audio.start(produced.target);
-      } else if (capture.audio !== null) {
-        this.#screenProducers.push(
-          await transport.produce({
-            track: capture.audio,
-            appData: { source: "screenAudio" },
-            codecOptions: SCREEN_AUDIO_CODEC,
-          }),
-        );
-      }
-    } catch (error) {
-      this.stopScreenShare();
-      throw error;
+    this.#startSending("screen", { track: capture.video, encoding: SCREEN_ENCODING });
+    if (audio !== undefined) {
+      const started = this.#startCapture(audio);
+      this.#pending.add("screenAudio");
+      this.#send({ type: "send", source: "screenAudio", external: true });
+      await started;
+    } else if (capture.audio !== null) {
+      this.#startSending("screenAudio", { track: capture.audio, encoding: null });
     }
-  }
-
-  /** Asks the voice server for a producer fed from outside the browser, and where to send it. */
-  async #produceRtp(
-    signal: Signal,
-    source: "screen" | "screenAudio",
-  ): Promise<{ producerId: string; target: RtpTarget }> {
-    const produced = this.#reply(signal, "rtpProduced", (f) => f.source === source);
-    signal.send({ type: "produceRtp", source });
-    const frame = await produced;
-    return {
-      producerId: frame.producerId,
-      target: {
-        ip: frame.ip,
-        port: frame.port,
-        ssrc: frame.ssrc,
-        payloadType: frame.payloadType,
-        srtpCryptoSuite: frame.srtpCryptoSuite,
-        srtpKeyBase64: frame.srtpKeyBase64,
-      },
-    };
   }
 
   /**
-   * Shares something produced outside the browser: the voice server makes an RTP producer for
-   * it and the share sends there. The preview comes back from the server as a consumer of the
-   * call's own producer, so `localScreen` fills in once media flows.
+   * Shares something sent from outside the browser: the voice server offers it a connection of
+   * its own (the capture connection), whose offers `share` answers. Resolves once it has
+   * answered the first, and rejects with what it threw when it could not, the share then
+   * stopped. Its preview comes back from the server, so `localScreen` fills in once media
+   * flows, while video is shown.
    */
-  async startExternalScreenShare(share: ExternalShare): Promise<void> {
-    const signal = this.#signal;
+  startExternalScreenShare(share: ExternalShare): Promise<void> {
     if (
       this.#state.status !== "connected" ||
       !this.#state.canShare ||
-      signal === null ||
+      this.#signal === null ||
       this.#screen !== null ||
-      this.#external !== null
+      this.#externalShare !== null
     ) {
-      return;
+      return Promise.resolve();
     }
-    const video = await this.#produceRtp(signal, "screen");
-    const audio = share.audio ? await this.#produceRtp(signal, "screenAudio") : null;
-    if (this.#signal !== signal) {
-      return;
-    }
-    this.#external = {
-      producerIds: [video.producerId, ...(audio === null ? [] : [audio.producerId])],
-      share,
-    };
+    this.#externalShare = share;
+    const started = this.#startCapture(share);
     this.#set({ sharingScreen: true });
-    try {
-      await share.start({ video: video.target, audio: audio?.target ?? null });
-    } catch (error) {
-      this.stopScreenShare();
-      throw error;
+    this.#pending.add("screen");
+    this.#send({ type: "send", source: "screen", external: true });
+    if (share.audio) {
+      this.#pending.add("screenAudio");
+      this.#send({ type: "send", source: "screenAudio", external: true });
     }
+    this.#updateWatch();
+    return started;
+  }
+
+  /** Makes `sender` the capture connection's, settled as `#captureStarted` says. */
+  #startCapture(sender: ExternalSender): Promise<void> {
+    this.#captureSender = sender;
+    return new Promise((resolve, reject) => {
+      this.#captureStarted = { resolve, reject };
+    });
   }
 
   /** Whether a browser capture is being shared; read after an await, where narrowing is stale. */
@@ -707,89 +797,74 @@ export class VoiceCall {
 
   /** Stops sharing the screen, if sharing. Safe to call at any time. */
   stopScreenShare(): void {
-    const external = this.#external;
+    const sender = this.#captureSender;
+    if (sender !== null) {
+      this.#captureSender = null;
+      this.#answered.capture = null;
+      // A share stopped before its sender started has nothing to report.
+      this.#captureStarted?.resolve();
+      this.#captureStarted = null;
+      sender.stop();
+    }
+    const external = this.#externalShare;
     if (external !== null) {
-      this.#external = null;
-      external.share.stop();
-      for (const producerId of external.producerIds) {
-        this.#signal?.send({ type: "closeProducer", producerId });
+      this.#externalShare = null;
+      this.#stopSending("screen");
+      if (external.audio) {
+        this.#stopSending("screenAudio");
       }
       this.#set({ sharingScreen: false, localScreen: null });
+      this.#updateWatch();
     }
     const capture = this.#screen;
     if (capture === null) {
       return;
     }
     this.#screen = null;
-    const screenAudio = this.#screenAudio;
-    if (screenAudio !== null) {
-      this.#screenAudio = null;
-      screenAudio.audio.stop();
-      this.#signal?.send({ type: "closeProducer", producerId: screenAudio.producerId });
-    }
-    for (const producer of this.#screenProducers) {
-      producer.close();
-      this.#signal?.send({ type: "closeProducer", producerId: producer.id });
-    }
-    this.#screenProducers = [];
+    this.#stopSending("screen");
+    this.#stopSending("screenAudio");
     capture.video.stop();
     capture.audio?.stop();
     this.#set({ sharingScreen: false, localScreen: null });
   }
 
   /**
-   * Turns the camera on: opens the chosen camera and produces it as `camera`, at up to 1080p and
-   * 30 frames a second (`CAMERA_QUALITY`, `CAMERA_ENCODING`). Ends on its own if the camera goes
-   * away. Nothing happens outside a call, in one that does not allow it, or while it is on. A
-   * failure is kept as `cameraError` and thrown as a `CameraError`.
+   * Turns the camera on: opens the chosen camera and sends it as `camera`, at up to 1080p and
+   * 30 frames a second (`CAMERA_ENCODING`). Ends on its own if the camera goes away. Nothing
+   * happens outside a call, in one that does not allow it, or while it is on. A failure to open
+   * it is kept as `cameraError` and thrown as a `CameraError`; the voice server refusing it sets
+   * `cameraError` to `unsent`.
    */
   async startCamera(): Promise<void> {
-    const transport = this.#sendTransport;
     if (
       this.#state.status !== "connected" ||
       !this.#state.canCamera ||
-      transport === null ||
+      this.#signal === null ||
       this.#camera !== null
     ) {
       return;
     }
+    const generation = this.#generation;
     let track: MediaStreamTrack;
     try {
       track = await this.#media.getCamera(this.#devices.camera);
     } catch (error) {
       const failure = error instanceof CameraError ? error : new CameraError("failed", error);
-      if (this.#sendTransport === transport) {
+      if (generation === this.#generation) {
         this.#set({ cameraError: failure.failure });
       }
       throw failure;
     }
     // Opening the camera took time; the call may have moved on, or it was turned on meanwhile.
-    if (this.#sendTransport !== transport || this.#cameraOn()) {
+    if (generation !== this.#generation || this.#cameraOn()) {
       track.stop();
       return;
     }
-    const camera: CameraSend = { track, producer: null };
+    const camera = { track };
     this.#camera = camera;
     this.#set({ localCamera: track, cameraError: null });
     this.#endWithTrack(camera, track);
-    try {
-      camera.producer = await transport.produce({
-        track,
-        appData: { source: "camera" },
-        encodings: [CAMERA_ENCODING],
-        codecOptions: CAMERA_VIDEO_CODEC,
-      });
-      if (this.#camera !== camera) {
-        camera.producer.close();
-        this.#signal?.send({ type: "closeProducer", producerId: camera.producer.id });
-      }
-    } catch (error) {
-      this.stopCamera();
-      if (this.#sendTransport === transport) {
-        this.#set({ cameraError: "unsent" });
-      }
-      throw new CameraError("unsent", error);
-    }
+    this.#startSending("camera", { track, encoding: CAMERA_ENCODING });
   }
 
   /** Dismisses the reason the camera last failed. */
@@ -809,10 +884,7 @@ export class VoiceCall {
       return;
     }
     this.#camera = null;
-    if (camera.producer !== null) {
-      camera.producer.close();
-      this.#signal?.send({ type: "closeProducer", producerId: camera.producer.id });
-    }
+    this.#stopSending("camera");
     camera.track.stop();
     this.#set({ localCamera: null });
   }
@@ -821,7 +893,7 @@ export class VoiceCall {
    * Turns the camera off when `track` ends on its own (the camera unplugged, or taken by the
    * system), while `track` is the one it sends; a track it has moved on from ends harmlessly.
    */
-  #endWithTrack(camera: CameraSend, track: MediaStreamTrack): void {
+  #endWithTrack(camera: { track: MediaStreamTrack }, track: MediaStreamTrack): void {
     track.addEventListener("ended", () => {
       if (this.#camera === camera && camera.track === track) {
         this.stopCamera();
@@ -838,8 +910,7 @@ export class VoiceCall {
    */
   async #swapCamera(): Promise<void> {
     const camera = this.#camera;
-    const producer = camera?.producer;
-    if (camera == null || producer == null) {
+    if (camera === null) {
       return;
     }
     this.#cameraSwaps += 1;
@@ -865,7 +936,7 @@ export class VoiceCall {
     camera.track = track;
     this.#endWithTrack(camera, track);
     try {
-      await producer.replaceTrack({ track });
+      await this.#replaceSent("camera", track);
     } catch {
       if (this.#camera === camera) {
         this.stopCamera();
@@ -880,8 +951,7 @@ export class VoiceCall {
 
   /**
    * The devices voice chat uses, from the user's preferences. Takes effect at once, in a call
-   * or not: the microphone producer swaps to the new input and playback moves to the new
-   * output.
+   * or not: the microphone sent swaps to the new input and playback moves to the new output.
    */
   async setAudioDevices(devices: {
     input: DeviceChoice;
@@ -896,18 +966,17 @@ export class VoiceCall {
     if (!sameChoice(devices.output, previous.output)) {
       await this.#media.setOutput(devices.output);
     }
-    if (!sameChoice(devices.input, previous.input) && this.#microphoneProducer !== null) {
-      const producer = this.#microphoneProducer;
+    const sent = this.#sent.get("microphone");
+    if (!sameChoice(devices.input, previous.input) && sent !== undefined) {
       const track = await this.#media.getMicrophone(devices.input, this.#inputVolume);
       // The call may have ended or been rejoined while the microphone opened.
-      const current: typeof producer | null = this.#microphoneProducer;
-      if (current !== producer) {
+      if (this.#sent.get("microphone") !== sent) {
         track.stop();
         return;
       }
       // Silent from its first sample when the user is muted.
-      track.enabled = !this.#state.muted;
-      await producer.replaceTrack({ track });
+      track.enabled = !this.#state.muted && !this.#state.held;
+      await this.#replaceSent("microphone", track);
       this.#microphone?.stop();
       this.#microphone = track;
       this.#holdMicrophone();
@@ -923,13 +992,13 @@ export class VoiceCall {
     this.#media.setInputVolume(gain);
   }
 
-  /** Sets every consumer's gain again from `userVolume`, after what it answers has changed. */
+  /** Sets every received sound's gain again from `userVolume`, after what it answers has changed. */
   refreshVolumes(): void {
-    for (const [consumerId, consumer] of this.#consumers) {
-      if (isAudioSource(consumer.source)) {
-        this.#media.setVolume(consumerId, this.#userVolume(consumer.user, consumer.source));
-      }
+    this.#volumes.clear();
+    for (const mid of this.#heard.keys()) {
+      this.#applyVolume(mid);
     }
+    this.#updateSilence();
   }
 
   /**
@@ -937,21 +1006,122 @@ export class VoiceCall {
    * is heard right now; the preference behind it is the caller's to keep.
    */
   setUserVolume(userId: string, gain: number, source: AudioSource = "microphone"): void {
-    for (const [consumerId, consumer] of this.#consumers) {
-      if (consumer.user === userId && consumer.source === source) {
-        this.#media.setVolume(consumerId, gain);
+    this.#volumes.set(`${userId} ${source}`, gain);
+    for (const [mid, heard] of this.#heard) {
+      if (this.#heardUser(heard) === userId && this.#heardSource(heard) === source) {
+        this.#media.setVolume(mid, gain);
       }
+    }
+    this.#updateSilence();
+  }
+
+  /** How loud `userId`'s `source` is heard: what `setUserVolume` set, else `userVolume`. */
+  #volumeOf(userId: string, source: AudioSource): number {
+    return this.#volumes.get(`${userId} ${source}`) ?? this.#userVolume(userId, source);
+  }
+
+  /**
+   * Tells the voice server whom this client plays at nothing (blocked, or turned all the way
+   * down), when that changed: it then sends none of their voice or their share's sound, so none
+   * plays even for the moment before a slot's volume follows its new occupant.
+   */
+  #updateSilence(): void {
+    if (this.#signal === null) {
+      return;
+    }
+    const silenced = (source: AudioSource) =>
+      [...this.#participants].filter((user) => this.#volumeOf(user, source) === 0).sort(compareIds);
+    const voices = silenced("microphone");
+    const shares = silenced("screenAudio");
+    const key = JSON.stringify([voices, shares]);
+    if (key !== this.#silencing) {
+      this.#silencing = key;
+      this.#send({ type: "silence", voices, shares });
     }
   }
 
+  /** Shows `user` as on hold or not, as the voice server says they are. */
+  #setOnHold(user: string, held: boolean): void {
+    if (this.#state.onHold.includes(user) === held) {
+      return;
+    }
+    const onHold = held
+      ? [...this.#state.onHold, user].sort(compareIds)
+      : this.#state.onHold.filter((other) => other !== user);
+    this.#set({ onHold });
+  }
+
+  /** Whose sound a received section carries now; `null` for a silent slot. */
+  #heardUser(heard: Heard): string | null {
+    return heard.carries === "audioSlot" ? (this.#slots.get(heard.slot) ?? null) : heard.user;
+  }
+
+  #heardSource(heard: Heard): AudioSource {
+    return heard.carries === "audioSlot" ? "microphone" : "screenAudio";
+  }
+
+  /** Sets a received sound's gain from `userVolume`, for whoever it carries now. */
+  #applyVolume(mid: string): void {
+    const heard = this.#heard.get(mid);
+    if (heard === undefined) {
+      return;
+    }
+    const user = this.#heardUser(heard);
+    this.#media.setVolume(mid, user === null ? 1 : this.#volumeOf(user, this.#heardSource(heard)));
+  }
+
   #sendState(): void {
-    if (this.#signal !== null && this.#state.status === "connected") {
-      this.#signal.send({
+    if (this.#state.status === "connected") {
+      this.#send({
         type: "setState",
         muted: this.#asked.muted,
         deafened: this.#asked.deafened,
+        held: this.#asked.held,
       });
     }
+  }
+
+  /** Asks the voice server to receive `source` from the browser, sent as `sent` says. */
+  #startSending(source: MediaSource, sent: Sent): void {
+    this.#sent.set(source, sent);
+    this.#pending.add(source);
+    this.#send({ type: "send", source });
+  }
+
+  /** Ends sending `source`, if it is sent; the server takes its section away in its next offer. */
+  #stopSending(source: MediaSource): void {
+    const browser = this.#sent.get(source);
+    this.#sent.delete(source);
+    const transceiver = this.#sendingTransceiver(source);
+    if (browser !== undefined && transceiver !== null) {
+      void transceiver.sender.replaceTrack(null).catch(() => undefined);
+    }
+    this.#pending.delete(source);
+    this.#send({ type: "stopSending", source });
+  }
+
+  /** Sends `track` as `source` from now on, without renegotiating. */
+  async #replaceSent(source: MediaSource, track: MediaStreamTrack): Promise<void> {
+    const sent = this.#sent.get(source);
+    if (sent === undefined) {
+      return;
+    }
+    sent.track = track;
+    await this.#sendingTransceiver(source)?.sender.replaceTrack(track);
+  }
+
+  /** The transceiver of the call connection's section that `source` is sent on, once offered. */
+  #sendingTransceiver(source: MediaSource): CallTransceiver | null {
+    for (const [mid, section] of this.#sections) {
+      if (section.carries === "sending" && section.source === source) {
+        return this.#transceiver(mid);
+      }
+    }
+    return null;
+  }
+
+  #transceiver(mid: string): CallTransceiver | null {
+    return this.#connection?.getTransceivers().find((t) => t.mid === mid) ?? null;
   }
 
   /**
@@ -985,9 +1155,10 @@ export class VoiceCall {
 
   /**
    * Rejoins the current channel after a random pause of at most `REJOIN_DELAY_MAX_MS`. With
-   * `serverSilent`, the server went away without a word (its socket closed), so the API server
-   * may still offer it, not yet knowing it is gone: a rejoin that fails to reach the offered
-   * servers then waits `DEAD_SERVER_RETRY_MS` and asks for an offer once more before giving up.
+   * `serverSilent`, the server went away without a word (its socket closed and would not
+   * resume), so the API server may still offer it, not yet knowing it is gone: a rejoin that
+   * fails to reach the offered servers then waits `DEAD_SERVER_RETRY_MS` and asks for an offer
+   * once more before giving up.
    */
   #rejoin({ serverSilent = false }: { serverSilent?: boolean } = {}): void {
     const channelId = this.#state.channelId;
@@ -1029,6 +1200,52 @@ export class VoiceCall {
   }
 
   /**
+   * Takes the call's place back after its signalling socket closed on its own: the voice server
+   * keeps it, media flowing, for twenty seconds, and a socket presenting `ready`'s secret takes
+   * it back. The server then restates every connection's offer, and what this client asked for
+   * while it was away (mute, video watched) is asked for again. A server that cannot be
+   * reached again, or refuses the secret, leaves the call to be rejoined.
+   */
+  #resume(): void {
+    const url = this.#signalUrl;
+    const secret = this.#lastReady?.resume;
+    const generation = this.#generation;
+    if (url === null || secret === undefined) {
+      this.#rejoin({ serverSilent: true });
+      return;
+    }
+    const attempt = (left: number, delayMs: number) => {
+      this.#setTimeout(() => {
+        if (generation !== this.#generation) {
+          return;
+        }
+        this.#identify(url, { type: "resume", secret }, generation)
+          .then(() => {
+            this.#watching = "";
+            this.#updateWatch();
+            this.#sendState();
+          })
+          .catch((error: unknown) => {
+            if (generation !== this.#generation) {
+              return;
+            }
+            // A socket that opened and was refused will not take the call back; one that did
+            // not open may be a network still coming back.
+            if (left > 1 && !(error instanceof VoiceRequestRefused) && !this.#refused) {
+              attempt(left - 1, delayMs + Math.floor(this.#random() * RESUME_DELAY_MAX_MS));
+            } else {
+              this.#rejoin({ serverSilent: true });
+            }
+          });
+      }, delayMs);
+    };
+    attempt(RESUME_ATTEMPTS, 0);
+  }
+
+  /** Whether the last `identify` or `resume` was answered with a fatal `error`. */
+  #refused = false;
+
+  /**
    * Releases everything the call holds. `keepMicrophone` leaves the microphone open for the
    * next attempt or call, which then does not wait on the browser to open it again.
    */
@@ -1043,27 +1260,35 @@ export class VoiceCall {
     ) {
       this.#set({ screens: [], cameras: [], cameraError: null });
     }
-    for (const consumer of this.#consumers.values()) {
-      consumer.close();
+    for (const mid of this.#heard.keys()) {
+      this.#media.stop(mid);
     }
-    for (const id of this.#consumers.keys()) {
-      this.#media.stop(id);
-    }
-    this.#consumers.clear();
-    this.#sendTransport?.close();
-    this.#recvTransport?.close();
-    this.#sendTransport = null;
-    this.#recvTransport = null;
+    this.#heard.clear();
+    this.#slots.clear();
+    this.#sections.clear();
+    this.#sent.clear();
+    this.#pending.clear();
+    this.#sources.clear();
+    this.#watching = "[]";
+    this.#participants.clear();
+    this.#silencing = NO_SILENCE;
+    this.#restarting = false;
+    this.#answered = { call: null, capture: null };
+    this.#negotiation = Promise.resolve();
+    this.#setupFailed = null;
+    this.#connection?.close();
+    this.#connection = null;
     if (!keepMicrophone) {
       this.#microphone?.stop();
       this.#microphone = null;
     }
-    this.#microphoneProducer = null;
     if (this.#signal !== null) {
       this.#signal.send({ type: "leave" });
       this.#signal.close();
       this.#signal = null;
     }
+    this.#signalUrl = null;
+    this.#lastReady = null;
   }
 
   async #connect(channelId: string, generation: number): Promise<void> {
@@ -1113,8 +1338,7 @@ export class VoiceCall {
         return;
       }
       try {
-        const signal = await this.#identify(candidate, offer.token, channelId, generation);
-        await this.#establish(signal, generation);
+        await this.#establish(candidate, offer.token, channelId, generation);
         return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -1127,12 +1351,12 @@ export class VoiceCall {
           throw error;
         }
         // Whatever is not known to be the server's own (the browser without WebRTC or a codec
-        // the router needs, a transport or producer it could not make) is this device's, and
-        // would meet every server alike: none is reported and no other is tried.
+        // the server offers, an offer it could not apply) is this device's, and would meet
+        // every server alike: none is reported and no other is tried.
         if (!(error instanceof VoiceServerError)) {
-          throw new CallSetupError(error);
+          throw error instanceof CallSetupError ? error : new CallSetupError(error);
         }
-        // Whatever the attempt set up (socket, transports) is released before the next
+        // Whatever the attempt set up (socket, connection) is released before the next
         // candidate builds its own; the microphone is kept for it.
         this.#teardown({ keepMicrophone: true });
         await this.#reportFailure(candidate.id);
@@ -1186,14 +1410,62 @@ export class VoiceCall {
       .catch(() => undefined);
   }
 
-  /** Opens a socket to the candidate and presents the token; resolves once `ready` arrives. */
-  async #identify(
+  /**
+   * Makes the call's peer connection, joins through the candidate, and resolves once the
+   * connection is up and the microphone asked for.
+   */
+  async #establish(
     candidate: VoiceServerCandidate,
     token: string,
     channelId: string,
     generation: number,
-  ): Promise<Signal> {
-    const signal = new Signal(signallingUrl(candidate), this.#Socket);
+  ): Promise<void> {
+    // Made before identifying, so the offer that follows `ready` has a connection to answer.
+    let connection: CallConnection;
+    try {
+      connection = await this.#media.createConnection();
+    } catch (error) {
+      throw new CallSetupError(error);
+    }
+    if (generation !== this.#generation) {
+      connection.close();
+      throw new Error("superseded");
+    }
+    this.#connection = connection;
+    connection.addEventListener("connectionstatechange", () => {
+      this.#connectionChanged(connection);
+    });
+    const setupFailed = new Promise<never>((_, reject) => {
+      this.#setupFailed = reject;
+    });
+    // Nothing waits on it once the join is over; a failure then rejoins (`#negotiationFailed`).
+    setupFailed.catch(() => undefined);
+    await this.#identify(signallingUrl(candidate), { type: "identify", token }, generation);
+    this.#set({ session: this.#lastReady?.session ?? null, channelId });
+    if (this.#state.canSpeak) {
+      if (this.#microphone === null) {
+        throw new Error("microphone missing");
+      }
+      this.#startSending("microphone", { track: this.#microphone, encoding: null });
+    }
+    // The server accepting the call says nothing about media: ICE runs after the signalling,
+    // and fails when the server announces an address this browser cannot reach.
+    await Promise.race([this.#awaitConnected(connection), setupFailed]);
+    if (generation !== this.#generation) {
+      throw new Error("superseded");
+    }
+    this.#setupFailed = null;
+    this.#set({ status: "connected", error: null });
+    this.#sendState();
+  }
+
+  /**
+   * Opens a socket to `url` and presents `first` (`identify` with a token, or `resume` with a
+   * secret); resolves once `ready` arrives, with the socket the call's.
+   */
+  async #identify(url: string, first: ClientMessage, generation: number): Promise<void> {
+    this.#refused = false;
+    const signal = new Signal(url, this.#Socket);
     const ready = signal.next((f) => f.type === "ready" || (f.type === "error" && f.fatal));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
@@ -1203,9 +1475,10 @@ export class VoiceCall {
     });
     try {
       await signal.open();
-      signal.send({ type: "identify", token });
+      signal.send(first);
       const frame = await Promise.race([ready, timeout]);
       if (frame.type !== "ready") {
+        this.#refused = true;
         // Turned away for joining too fast is a refusal to wait out, not the server failing.
         if (frame.type === "error" && frame.retryAfterSeconds != null) {
           throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds);
@@ -1217,20 +1490,39 @@ export class VoiceCall {
         throw new Error("superseded");
       }
       this.#signal = signal;
+      this.#signalUrl = url;
       this.#lastReady = frame;
       this.#files.reset(frame);
-      this.#set({ session: frame.session, channelId });
+      this.#sources.clear();
+      this.#participants.clear();
+      for (const participant of frame.participants) {
+        this.#participants.add(participant.user);
+        this.#sources.set(participant.user, new Set(participant.sources.map((s) => s.source)));
+      }
+      this.#set({
+        onHold: frame.participants
+          .filter((participant) => participant.held === true)
+          .map((participant) => participant.user)
+          .sort(compareIds),
+      });
       signal.onClose = () => {
-        // The server went away without a word: treat it as lost and rejoin.
+        // The socket closed without a word: the server keeps the call a while for a resume.
         if (this.#signal === signal && this.#state.status === "connected") {
           this.#signal = null;
-          this.#rejoin({ serverSilent: true });
+          this.#resume();
         }
       };
       signal.onFrame = (f) => {
         this.#onFrame(f);
       };
-      return signal;
+      // What is shown already (a call rejoined, or another joined from the call screen) is
+      // watched from what `ready` says is sent, and whom the user silenced is said: a new place
+      // in a call silences no one, and a resumed one keeps what was said before.
+      this.#updateWatch();
+      if (first.type === "identify") {
+        this.#silencing = NO_SILENCE;
+      }
+      this.#updateSilence();
     } catch (error) {
       signal.close();
       throw error;
@@ -1239,62 +1531,17 @@ export class VoiceCall {
     }
   }
 
-  /** Loads the device, sets up both transports, and produces the microphone. */
-  async #establish(signal: Signal, generation: number): Promise<void> {
-    const ready = this.#lastReady;
-    if (ready === null) {
-      throw new Error("ready frame missing");
-    }
-    const device = await this.#loadedDevice(ready.routerRtpCapabilities);
-    signal.send({ type: "setCapabilities", rtpCapabilities: device.rtpCapabilities });
-    // Both transports are asked for at once; the server answers each by its direction.
-    const send = this.#awaitTransport(signal, "send");
-    const recv = this.#awaitTransport(signal, "recv");
-    signal.send({ type: "createTransport", direction: "send" });
-    signal.send({ type: "createTransport", direction: "recv" });
-    const [sendParams, recvParams] = await Promise.all([send, recv]);
-    if (generation !== this.#generation) {
-      throw new Error("superseded");
-    }
-    this.#sendTransport = this.#wire(device.createSendTransport(sendParams), signal, sendParams.id);
-    this.#recvTransport = this.#wire(device.createRecvTransport(recvParams), signal, recvParams.id);
-    if (this.#state.canSpeak) {
-      if (this.#microphone === null) {
-        throw new Error("microphone missing");
-      }
-      // The call owns the microphone's track, which outlives the transport when the user
-      // moves to another call.
-      this.#microphoneProducer = await this.#sendTransport.produce({
-        track: this.#microphone,
-        appData: { source: "microphone" },
-        stopTracks: false,
-      });
-      // The server accepting the producer says nothing about media: ICE runs after the
-      // signalling, and fails when the server announces an address this browser cannot reach.
-      // A listener sends nothing, so its transports connect with the first consumer, and a
-      // server it cannot reach shows only then.
-      await this.#awaitConnected(this.#sendTransport);
-    }
-    if (generation !== this.#generation) {
-      throw new Error("superseded");
-    }
-    this.#set({ status: "connected", error: null });
-    this.#sendState();
-  }
-
-  /** Resolves once the transport's ICE and DTLS are up; rejects when they fail or time out. */
-  #awaitConnected(transport: VoiceTransport): Promise<void> {
-    if (transport.connectionState === "connected") {
+  /** Resolves once the connection's ICE and DTLS are up; rejects when they fail or time out. */
+  #awaitConnected(connection: CallConnection): Promise<void> {
+    if (connection.connectionState === "connected") {
       return Promise.resolve();
-    }
-    if (transport.connectionState === "failed" || transport.connectionState === "closed") {
-      return Promise.reject(new VoiceServerError("media could not reach the voice server"));
     }
     return new Promise((resolve, reject) => {
       const timer = this.#setTimeout(() => {
         reject(new VoiceServerError("media could not reach the voice server in time"));
       }, CONNECT_TIMEOUT_MS);
-      transport.on("connectionstatechange", (state) => {
+      connection.addEventListener("connectionstatechange", () => {
+        const state = connection.connectionState;
         if (state === "connected") {
           clearTimeout(timer);
           resolve();
@@ -1306,123 +1553,293 @@ export class VoiceCall {
     });
   }
 
-  #lastReady: Extract<ServerMessage, { type: "ready" }> | null = null;
-
   /**
-   * The device loaded for the last router, kept by its capabilities. Loading probes what the
-   * browser can send and receive, which takes a while, and every call on a voice server (and
-   * every voice server of one version) answers the same capabilities, so moving between calls
-   * loads it once.
+   * Follows the connection mid-call. One that is disconnected or has failed asks for new ICE
+   * credentials every `ICE_RESTART_INTERVAL_MS` until it connects: a restart tried while the
+   * network is still away fails in its turn, and a browser never checks a failed generation
+   * again, so the one asked for after the network returns is what reconnects. One that fails at
+   * once asks at once; one disconnected first waits an interval, since a network that returns
+   * quickly brings the connection back without one. One still not connected
+   * `ICE_RECOVERY_LIMIT_MS` after it went is rejoined from scratch rather than left silent.
    */
-  #device: { capabilities: string; device: Promise<VoiceDevice> } | null = null;
-
-  /** A device loaded with the router's capabilities, the one kept when they match. */
-  #loadedDevice(routerRtpCapabilities: unknown): Promise<VoiceDevice> {
-    const capabilities = JSON.stringify(routerRtpCapabilities);
-    if (this.#device?.capabilities !== capabilities) {
-      const device = this.#media.createDevice().then(async (created) => {
-        await created.load({ routerRtpCapabilities });
-        return created;
-      });
-      this.#device = { capabilities, device };
-      // A device that failed to load is not kept for the next call.
-      device.catch(() => {
-        if (this.#device?.device === device) {
-          this.#device = null;
-        }
-      });
+  #connectionChanged(connection: CallConnection): void {
+    if (connection !== this.#connection || this.#state.status !== "connected") {
+      return;
     }
-    return this.#device.device;
-  }
-
-  /**
-   * The server's answer to a request: the next frame of `type` that `matches`. An `error` frame
-   * arriving first refuses it (`VoiceRequestRefused`), since the server answers a request it
-   * will not honour with one, and no answer within `READY_TIMEOUT_MS` is the server's failure.
-   * Error frames do not say which request they answer, so one refuses every request waiting
-   * for an answer when it comes.
-   */
-  #reply<T extends ServerMessage["type"]>(
-    signal: Signal,
-    type: T,
-    matches: (frame: Extract<ServerMessage, { type: T }>) => boolean = () => true,
-  ): Promise<Extract<ServerMessage, { type: T }>> {
-    const isAnswer = (frame: ServerMessage): frame is Extract<ServerMessage, { type: T }> =>
-      frame.type === type && matches(frame as Extract<ServerMessage, { type: T }>);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = this.#setTimeout(() => {
-        reject(new VoiceServerError("the voice server did not answer in time"));
-      }, READY_TIMEOUT_MS);
-    });
-    const answer = signal
-      .next((frame) => isAnswer(frame) || frame.type === "error")
-      .then((frame) => {
-        if (frame.type === "error") {
-          throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds ?? null);
-        }
-        if (!isAnswer(frame)) {
-          throw new VoiceServerError("unexpected frame");
-        }
-        return frame;
-      });
-    return Promise.race([answer, timeout]).finally(() => {
-      clearTimeout(timer);
-    });
-  }
-
-  async #awaitTransport(signal: Signal, direction: "send" | "recv"): Promise<TransportParams> {
-    const frame = await this.#reply(signal, "transportCreated", (f) => f.direction === direction);
-    return {
-      id: frame.id,
-      iceParameters: frame.iceParameters,
-      iceCandidates: frame.iceCandidates,
-      dtlsParameters: frame.dtlsParameters,
-    };
-  }
-
-  /** Bridges a transport's connect and produce requests to the signalling socket. */
-  #wire(transport: VoiceTransport, signal: Signal, transportId: string): VoiceTransport {
-    transport.on("connectionstatechange", (state) => {
-      // Media lost mid-call, with the socket still up: the call is rejoined from scratch
-      // rather than left silent.
-      if (
-        state === "failed" &&
-        this.#state.status === "connected" &&
-        (transport === this.#sendTransport || transport === this.#recvTransport)
-      ) {
+    const state = connection.connectionState;
+    if (state === "connected") {
+      this.#restarting = false;
+      return;
+    }
+    if ((state !== "failed" && state !== "disconnected") || this.#restarting) {
+      return;
+    }
+    this.#restarting = true;
+    const generation = this.#generation;
+    const lost = this.#now();
+    const unchanged = () =>
+      generation === this.#generation &&
+      this.#connection === connection &&
+      connection.connectionState !== "connected";
+    const retry = () => {
+      if (!unchanged()) {
+        return;
+      }
+      if (this.#now() - lost >= ICE_RECOVERY_LIMIT_MS) {
         this.#rejoin();
+        return;
+      }
+      this.#send({ type: "restartIce", connection: "call" });
+      this.#setTimeout(retry, ICE_RESTART_INTERVAL_MS);
+    };
+    if (state === "failed") {
+      retry();
+    } else {
+      this.#setTimeout(retry, ICE_RESTART_INTERVAL_MS);
+    }
+  }
+
+  /** Answers an offer of the call connection, after every offer before it. */
+  #applyOffer(frame: Offer): void {
+    const connection = this.#connection;
+    const signal = this.#signal;
+    if (connection === null || signal === null) {
+      return;
+    }
+    this.#negotiation = this.#negotiation.then(async () => {
+      if (connection !== this.#connection) {
+        return;
+      }
+      const answered = this.#answered.call;
+      // An offer restated on resuming, already answered before the socket closed.
+      if (answered?.revision === frame.revision) {
+        signal.send({ type: "answer", connection: "call", ...answered });
+        return;
+      }
+      try {
+        await connection.setRemoteDescription({ type: "offer", sdp: frame.sdp });
+        this.#sections = new Map(frame.sections.map((section) => [section.mid, section]));
+        const encodings: [CallTransceiver, Encoding][] = [];
+        for (const transceiver of connection.getTransceivers()) {
+          const section =
+            transceiver.mid === null ? undefined : this.#sections.get(transceiver.mid);
+          if (section?.carries !== "sending") {
+            continue;
+          }
+          // The server receives on a section it offers for what this client sends.
+          transceiver.direction = "sendonly";
+          const sent = this.#sent.get(section.source);
+          const track = sent?.track ?? null;
+          if (transceiver.sender.track !== track) {
+            await transceiver.sender.replaceTrack(track);
+          }
+          if (sent?.encoding != null) {
+            encodings.push([transceiver, sent.encoding]);
+          }
+        }
+        await connection.setLocalDescription(await connection.createAnswer());
+        const sdp = connection.localDescription?.sdp;
+        if (sdp === undefined) {
+          throw new Error("no answer");
+        }
+        // An encoding is set once the answer is applied, which makes the sender's.
+        for (const [transceiver, encoding] of encodings) {
+          await this.#encode(transceiver, encoding);
+        }
+        if (connection !== this.#connection) {
+          return;
+        }
+        this.#answered.call = { revision: frame.revision, sdp };
+        this.#signal?.send({ type: "answer", connection: "call", revision: frame.revision, sdp });
+        this.#received();
+      } catch (error) {
+        this.#negotiationFailed(error);
       }
     });
-    transport.on("connect", ({ dtlsParameters }, callback, errback) => {
-      this.#reply(signal, "transportConnected", (f) => f.transportId === transportId)
-        .then(() => {
-          callback();
-        })
-        .catch(errback);
-      signal.send({ type: "connectTransport", transportId, dtlsParameters });
+  }
+
+  /** Bounds what a sender's encoder may spend, as `encoding` says. */
+  async #encode(transceiver: CallTransceiver, encoding: Encoding): Promise<void> {
+    const parameters = transceiver.sender.getParameters();
+    const [first, ...rest] = parameters.encodings;
+    if (
+      first === undefined ||
+      (first.maxBitrate === encoding.maxBitrate && first.maxFramerate === encoding.maxFramerate)
+    ) {
+      return;
+    }
+    await transceiver.sender.setParameters({
+      ...parameters,
+      encodings: [
+        { ...first, maxBitrate: encoding.maxBitrate, maxFramerate: encoding.maxFramerate },
+        ...rest,
+      ],
     });
-    transport.on("produce", ({ kind, rtpParameters, appData }, callback, errback) => {
-      const source =
-        appData.source === "screen" ||
-        appData.source === "screenAudio" ||
-        appData.source === "camera"
-          ? appData.source
-          : "microphone";
-      this.#reply(signal, "produced", (f) => f.source === source)
-        .then((f) => {
-          callback({ id: f.producerId });
-        })
-        .catch(errback);
-      signal.send({
-        type: "produce",
-        transportId,
-        kind: kind === "video" ? "video" : "audio",
-        source,
-        rtpParameters,
+  }
+
+  /**
+   * An offer this device could not apply. While joining, the join fails as this device's
+   * (`CallSetupError`); in a call, the call is rejoined, since nothing more can be negotiated
+   * on this connection.
+   */
+  #negotiationFailed(error: unknown): void {
+    const setupFailed = this.#setupFailed;
+    if (setupFailed !== null) {
+      this.#setupFailed = null;
+      setupFailed(new CallSetupError(error));
+    } else if (this.#state.status === "connected") {
+      this.#rejoin();
+    }
+  }
+
+  /** Answers an offer of the capture connection through the sender outside the browser. */
+  #applyCaptureOffer(frame: Offer): void {
+    const sender = this.#captureSender;
+    if (sender === null) {
+      return;
+    }
+    const answered = this.#answered.capture;
+    if (answered?.revision === frame.revision) {
+      this.#send({ type: "answer", connection: "capture", ...answered });
+      return;
+    }
+    sender
+      .answer({ revision: frame.revision, sdp: frame.sdp, sections: frame.sections })
+      .then((sdp) => {
+        if (this.#captureSender === sender) {
+          this.#answered.capture = { revision: frame.revision, sdp };
+          this.#send({ type: "answer", connection: "capture", revision: frame.revision, sdp });
+          this.#captureStarted?.resolve();
+          this.#captureStarted = null;
+        }
+      })
+      .catch((error: unknown) => {
+        if (this.#captureSender === sender) {
+          const started = this.#captureStarted;
+          this.#captureStarted = null;
+          this.stopScreenShare();
+          started?.reject(error);
+        }
       });
+  }
+
+  /**
+   * Follows what the call connection receives, as its latest offer said: plays each audio slot
+   * and share's sound it newly carries and stops each it no longer does, and shows the video it
+   * carries, keeping each screen and camera already shown in its place.
+   */
+  #received(): void {
+    const connection = this.#connection;
+    if (connection === null) {
+      return;
+    }
+    const self = this.#lastReady?.user;
+    for (const [mid, section] of this.#sections) {
+      let heard: Heard;
+      if (section.carries === "audioSlot") {
+        heard = { carries: "audioSlot", slot: section.slot };
+      } else if (section.carries === "shareAudio") {
+        heard = { carries: "shareAudio", user: section.user };
+      } else {
+        continue;
+      }
+      const before = this.#heard.get(mid);
+      if (before !== undefined) {
+        // A section the server took over for other sound plays on, at the new sound's volume.
+        if (!sameHeard(before, heard)) {
+          this.#heard.set(mid, heard);
+          this.#applyVolume(mid);
+        }
+        continue;
+      }
+      const transceiver = this.#transceiver(mid);
+      if (transceiver === null) {
+        continue;
+      }
+      this.#heard.set(mid, heard);
+      this.#media.play(mid, transceiver.receiver.track);
+      this.#applyVolume(mid);
+    }
+    for (const mid of [...this.#heard.keys()]) {
+      if (!this.#sections.has(mid)) {
+        this.#heard.delete(mid);
+        this.#media.stop(mid);
+      }
+    }
+    const shown = (source: "screen" | "camera", held: readonly RemoteScreen[]) => {
+      // A section the server took over for someone else's video is theirs from now on.
+      const kept = held.filter((video) => {
+        const section = this.#sections.get(video.id);
+        return (
+          section?.carries === "video" && section.source === source && section.user === video.user
+        );
+      });
+      for (const [mid, section] of this.#sections) {
+        if (
+          section.carries !== "video" ||
+          section.source !== source ||
+          section.user === self ||
+          kept.some((video) => video.id === mid)
+        ) {
+          continue;
+        }
+        const transceiver = this.#transceiver(mid);
+        if (transceiver !== null) {
+          kept.push({ user: section.user, id: mid, track: transceiver.receiver.track });
+        }
+      }
+      return kept;
+    };
+    const preview =
+      this.#externalShare === null
+        ? null
+        : [...this.#sections].find(
+            ([, section]) =>
+              section.carries === "video" && section.source === "screen" && section.user === self,
+          )?.[0];
+    this.#set({
+      screens: shown("screen", this.#state.screens),
+      cameras: shown("camera", this.#state.cameras),
+      ...(this.#externalShare === null
+        ? {}
+        : {
+            localScreen:
+              preview === undefined || preview === null
+                ? null
+                : (this.#transceiver(preview)?.receiver.track ?? null),
+          }),
     });
-    return transport;
+  }
+
+  /**
+   * Asks for the video to watch, when it changed: while anything shows video, every screen and
+   * camera another participant sends, up to `ready`'s `maxWatchedVideo`, and the preview of a
+   * share sent from outside the browser; otherwise none.
+   */
+  #updateWatch(): void {
+    const self = this.#lastReady?.user;
+    const video: WatchedVideo[] = [];
+    if (this.#videoShown > 0 && self !== undefined) {
+      if (this.#externalShare !== null) {
+        video.push({ user: self, source: "screen" });
+      }
+      for (const [user, sources] of this.#sources) {
+        if (user === self) {
+          continue;
+        }
+        for (const source of sources) {
+          if (isVideo(source)) {
+            video.push({ user, source });
+          }
+        }
+      }
+    }
+    const limited = video.slice(0, this.#lastReady?.maxWatchedVideo ?? 0);
+    const key = JSON.stringify(limited);
+    if (key !== this.#watching && this.#signal !== null) {
+      this.#watching = key;
+      this.#send({ type: "watch", video: limited });
+    }
   }
 
   #onFrame(frame: ServerMessage): void {
@@ -1430,37 +1847,47 @@ export class VoiceCall {
       return;
     }
     switch (frame.type) {
-      case "newConsumer":
-        void this.#consume(frame);
-        break;
-      case "consumerClosed": {
-        const consumer = this.#consumers.get(frame.consumerId);
-        if (consumer !== undefined) {
-          consumer.close();
-          this.#consumers.delete(frame.consumerId);
-          this.#media.stop(frame.consumerId);
-        }
-        if (this.#state.screens.some((screen) => screen.consumerId === frame.consumerId)) {
-          this.#set({
-            screens: this.#state.screens.filter((screen) => screen.consumerId !== frame.consumerId),
-          });
-        }
-        if (this.#state.cameras.some((camera) => camera.consumerId === frame.consumerId)) {
-          this.#set({
-            cameras: this.#state.cameras.filter((camera) => camera.consumerId !== frame.consumerId),
-          });
-        }
-        if (this.#previewConsumerId === frame.consumerId) {
-          this.#previewConsumerId = null;
-          if (this.#external !== null) {
-            this.#set({ localScreen: null });
-          }
+      case "offer":
+        if (frame.connection === "call") {
+          this.#applyOffer(frame);
+        } else {
+          this.#applyCaptureOffer(frame);
         }
         break;
-      }
+      case "sections":
+        // Restated on resuming where no offer was outstanding: nothing to answer.
+        if (frame.connection === "call") {
+          this.#sections = new Map(frame.sections.map((section) => [section.mid, section]));
+          this.#received();
+        }
+        break;
+      case "slots":
+        for (const { slot, user } of frame.assignments) {
+          this.#slots.set(slot, user ?? null);
+        }
+        this.refreshVolumes();
+        break;
+      case "sending":
+        this.#pending.delete(frame.source);
+        break;
+      case "sources":
+        this.#sourcesChanged(frame.user, new Set(frame.sources.map((s) => s.source)));
+        break;
+      case "participantLeft":
+        this.#participants.delete(frame.user);
+        this.#setOnHold(frame.user, false);
+        this.#sourcesChanged(frame.user, new Set());
+        this.#updateSilence();
+        break;
+      case "participantJoined":
+        // Someone already silenced (blocked, say) is silenced from their first word.
+        this.#participants.add(frame.user);
+        this.#updateSilence();
+        break;
       case "kicked":
-        if (frame.reason === "serverStopping") {
-          // The server is going down; the API server ends its calls and the offer names another.
+        if (frame.reason === "serverStopping" || frame.reason === "connectionFailed") {
+          // The server is going down, or this client's media never reached it or was lost:
+          // the offer names a server to rejoin.
           this.#rejoin();
           break;
         }
@@ -1485,7 +1912,10 @@ export class VoiceCall {
           this.#set({
             muted: frame.muted || this.#asked.muted,
             deafened: frame.deafened || this.#asked.deafened,
+            held: (frame.held ?? false) || this.#asked.held,
           });
+        } else {
+          this.#setOnHold(frame.user, frame.held ?? false);
         }
         break;
       case "error":
@@ -1494,20 +1924,80 @@ export class VoiceCall {
           this.#teardown();
           this.#set({ ...IDLE, status: "failed", error: frame.detail });
         } else if (frame.refused === "setState") {
-          // Only unmuting or undeafening is ever refused: the user stays as they are shown.
-          this.#asked = { muted: this.#state.muted, deafened: this.#state.deafened };
+          // Only lifting a mute, deafen, or hold is ever refused: the user stays as they are
+          // shown.
+          this.#asked = this.#shown();
           this.#set({ stateRefused: { retryAfterSeconds: frame.retryAfterSeconds ?? null } });
+        } else if (frame.refused === "send") {
+          this.#sendRefused();
         }
         break;
-      default:
+      case "ready":
+      case "speaking":
+      case "fileOffered":
+      case "fileWithdrawn":
+      case "transferStarting":
+      case "transferSignal":
+      case "transferEnded":
+      case "transferLinkChanged":
+        // The participants and their state reach the app through the API server's events; file
+        // frames are `FileTransfers`'.
         break;
+      default:
+        frame satisfies never;
+    }
+  }
+
+  /**
+   * What a participant sends changed. The video watched follows it; this client's own share
+   * sent from outside the browser, gone from what it sends once it was sent on, ended at the
+   * server (its capture connection failed), so it ends here too.
+   */
+  #sourcesChanged(user: string, sources: Set<MediaSource>): void {
+    const before = this.#sources.get(user);
+    if (sources.size === 0) {
+      this.#sources.delete(user);
+    } else {
+      this.#sources.set(user, sources);
+    }
+    if (
+      user === this.#lastReady?.user &&
+      this.#externalShare !== null &&
+      before?.has("screen") === true &&
+      !sources.has("screen")
+    ) {
+      this.stopScreenShare();
+    }
+    this.#updateWatch();
+  }
+
+  /**
+   * The voice server refused to receive a source asked for; its `error` names the request, not
+   * the source, so whatever is still waiting to be sent on stops: the camera, saying so in
+   * `cameraError`, or the share.
+   */
+  #sendRefused(): void {
+    const pending = [...this.#pending];
+    this.#pending.clear();
+    if (pending.includes("camera")) {
+      this.stopCamera();
+      this.#set({ cameraError: "unsent" });
+    }
+    if (pending.includes("screen") || pending.includes("screenAudio")) {
+      this.stopScreenShare();
+    }
+    if (pending.includes("microphone")) {
+      this.#sent.delete("microphone");
+      this.#set({
+        error: new MicrophoneError("the voice server did not take the microphone").message,
+      });
     }
   }
 
   /**
    * Follows what the client may now do in the call, as the voice server says once the
    * permissions behind it change: what it may no longer send stops (the server has already
-   * closed it), and a microphone it may now send starts.
+   * stopped receiving it), and a microphone it may now send starts.
    */
   async #grantsChanged(grants: Grants): Promise<void> {
     this.#set({
@@ -1523,14 +2013,12 @@ export class VoiceCall {
       this.stopCamera();
     }
     if (!grants.speak) {
-      this.#microphoneProducer?.close();
-      this.#microphoneProducer = null;
+      this.#stopSending("microphone");
       this.#microphone?.stop();
       this.#microphone = null;
       return;
     }
-    const transport = this.#sendTransport;
-    if (this.#microphoneProducer !== null || transport === null) {
+    if (this.#sent.has("microphone") || this.#signal === null) {
       return;
     }
     const generation = this.#generation;
@@ -1538,7 +2026,7 @@ export class VoiceCall {
       const microphone =
         this.#microphone ??
         (await this.#media.getMicrophone(this.#devices.input, this.#inputVolume));
-      if (generation !== this.#generation || this.#sendTransport !== transport) {
+      if (generation !== this.#generation || this.#sent.has("microphone")) {
         if (microphone !== this.#microphone) {
           microphone.stop();
         }
@@ -1546,68 +2034,10 @@ export class VoiceCall {
       }
       this.#microphone = microphone;
       this.#holdMicrophone();
-      this.#microphoneProducer = await transport.produce({
-        track: microphone,
-        appData: { source: "microphone" },
-        stopTracks: false,
-      });
+      this.#startSending("microphone", { track: microphone, encoding: null });
       this.#sendState();
     } catch (error) {
       this.#set({ error: new MicrophoneError(error).message });
-    }
-  }
-
-  async #consume(frame: Extract<ServerMessage, { type: "newConsumer" }>): Promise<void> {
-    const transport = this.#recvTransport;
-    const signal = this.#signal;
-    if (transport === null || signal === null) {
-      return;
-    }
-    try {
-      const consumer = await transport.consume({
-        id: frame.consumerId,
-        producerId: frame.producerId,
-        kind: frame.kind,
-        rtpParameters: frame.rtpParameters,
-      });
-      this.#consumers.set(frame.consumerId, {
-        close: () => {
-          consumer.close();
-        },
-        user: frame.user,
-        source: frame.source,
-      });
-      if (frame.kind === "video" && frame.source === "camera") {
-        this.#set({
-          cameras: [
-            ...this.#state.cameras,
-            { user: frame.user, consumerId: frame.consumerId, track: consumer.track },
-          ],
-        });
-      } else if (frame.kind === "video" && frame.user === this.#lastReady?.user) {
-        // The call's own external share, back from the server as its preview.
-        this.#previewConsumerId = frame.consumerId;
-        this.#set({ localScreen: consumer.track });
-      } else if (frame.kind === "video") {
-        this.#set({
-          screens: [
-            ...this.#state.screens,
-            { user: frame.user, consumerId: frame.consumerId, track: consumer.track },
-          ],
-        });
-      } else {
-        this.#media.play(frame.consumerId, consumer.track);
-        const gain = this.#userVolume(
-          frame.user,
-          frame.source === "screenAudio" ? "screenAudio" : "microphone",
-        );
-        if (gain !== 1) {
-          this.#media.setVolume(frame.consumerId, gain);
-        }
-      }
-      signal.send({ type: "resumeConsumer", consumerId: frame.consumerId });
-    } catch {
-      // The transport is gone; the consumer will be re-announced after the rejoin.
     }
   }
 }

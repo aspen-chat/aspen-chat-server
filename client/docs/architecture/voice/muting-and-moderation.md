@@ -6,10 +6,26 @@
   which keeps it disabled whenever `muted` is shown). The voice server never refuses them.
 - Unmuting and undeafening are only asked for (`#asked`). They show once a `participantState` frame
   about the user themself says the server did them.
+- A muted microphone is paused at the voice server too, and ranks last for an audio slot, so it
+  gives up its slots to whoever speaks. A deafened user is sent no sound at all: the server stops
+  their audio slots and shares' sound until they undeafen.
 - That frame sets `muted` and `deafened` in the call state. This is how a server mute shows on the
   user's own controls.
 - The frame never shows the user less silenced than they have since asked to be. **Why:** an answer
   to an earlier request must not reopen a microphone they just muted.
+
+### Hold
+
+- `setHeld` puts the call on hold, as a phone does while a phone call has its audio, and takes it
+  off. It shows at once (`held`) and ends only on the server's word, as a mute does, and keeps the
+  microphone's track disabled while shown. The user's own `muted` and `deafened` stay as they are.
+- The voice server sends nothing of the user's while held, and nothing to them.
+- `onHold` lists the others the server says are on hold, from `ready` and `participantState`, in id
+  order.
+- Who is on hold shows from their call record (`VoiceParticipant.held`, kept by the store like
+  `muted`), as a phone with a pause mark (`heldMark`) before their other marks, in the sidebar
+  (`VoiceParticipants`) and on the call screen's tiles alike, so it shows to those outside the call
+  too, and apart from a mute.
 
 ### Refused state changes
 

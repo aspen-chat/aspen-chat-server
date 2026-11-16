@@ -115,18 +115,20 @@ pub mod api {
 pub mod voice {
     pub const ROOMS: &str = "aspen_voice_rooms";
     pub const PARTICIPANTS: &str = "aspen_voice_participants";
-    pub const PRODUCERS: &str = "aspen_voice_producers";
-    pub const CONSUMERS: &str = "aspen_voice_consumers";
-    /// WebRTC and plain transports, each holding ports from the media range.
-    pub const TRANSPORTS: &str = "aspen_voice_transports";
+    /// Peer connections the media threads hold: one per participant, and one more while a
+    /// game capture helper sends for one.
+    pub const CONNECTIONS: &str = "aspen_voice_connections";
+    /// Media sections across every connection: what participants send, their audio slots, and
+    /// the video they watch.
+    pub const SECTIONS: &str = "aspen_voice_sections";
     /// Signalling frames handled, by `kind`.
     pub const FRAMES: &str = "aspen_voice_frames_total";
     /// Signalling frames refused for going too fast, by `kind`.
     pub const FRAMES_REFUSED: &str = "aspen_voice_frames_refused_total";
     /// HTTP requests refused for going too fast, by `route`.
     pub const HTTP_REFUSED: &str = "aspen_voice_http_refused_total";
-    /// CPU seconds each mediasoup worker process has used, by `worker`.
-    pub const WORKER_CPU: &str = "aspen_voice_worker_cpu_seconds";
+    /// CPU seconds each media thread has used, by `thread`.
+    pub const MEDIA_THREAD_CPU: &str = "aspen_voice_media_thread_cpu_seconds";
     /// 1 while a suspension of the rate limits is in force.
     pub const RATE_LIMITS_SUSPENDED: &str = "aspen_voice_rate_limits_suspended";
     /// File transfers under way, by `mode` as the receiver chose it.

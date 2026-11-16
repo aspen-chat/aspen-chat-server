@@ -3,7 +3,7 @@ name = "voice_server"
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
-description = "An Aspen voice server: a mediasoup SFU that carries the media of calls, signals with clients over WebSockets, and reports to the API server over NATS."
+description = "An Aspen voice server: an SFU that carries the media of calls through str0m, signals with clients over WebSockets, and reports to the API server over NATS."
 
 [dependencies]
 anyhow = "1.0.102"
@@ -16,7 +16,9 @@ aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"
 # so its statistics describe all of the process's memory.
 tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
 async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }
-axum = { version = "0.8.4", features = ["macros", "ws"] }
+axum = { version = "0.8.4", features = ["macros"] }
+bytes = "1.11"
+yawc = { version = "0.5.0", default-features = false, features = ["axum"] }
 clap = { version = "4.5.37", features = ["derive"] }
 config = { version = "0.15.14", features = ["toml"] }
 futures-util = "0.3.31"
@@ -25,9 +27,6 @@ hyper-util = { version = "0.1.12", features = ["http1", "server", "tokio"] }
 tower = { version = "0.5.2", features = ["util"] }
 libc = "0.2"
 local-ip-address = "0.6"
-mediasoup = "0.30.0"
-# Named only to turn on linking the system OpenSSL; see `[patch.crates-io]` in the workspace.
-mediasoup-sys = { version = "0.20.0", features = ["system-openssl"] }
 metrics = "0.24"
 num_cpus = "1.17.0"
 schemars = { version = "1.2.1", features = ["uuid1"] }
@@ -40,6 +39,8 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 voice_protocol = { path = "../voice_protocol" }
+# The synthetic peers are what `estimate-capacity` calibrates with.
+voice_media = { path = "../voice_media", features = ["peer", "jemalloc"] }
 smart-default = "0.7.1"
 strum = { version = "0.28.0", features = ["derive"] }
 turn = "0.17.2"
@@ -49,10 +50,3 @@ base64 = "0.22.1"
 hmac = "0.12.1"
 sha2 = "0.10.9"
 rand = "0.10.0"
-
-[dev-dependencies]
-dtls = "0.17.2"
-rtp = "0.17.2"
-rustls = { version = "0.23.26", default-features = false, features = ["ring"] }
-stun = "0.17.2"
-webrtc-srtp = "0.17.2"

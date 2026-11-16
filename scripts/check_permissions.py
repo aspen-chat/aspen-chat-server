@@ -713,6 +713,27 @@ def calls(world: World, check: Checks) -> None:
     lifted = frame_of(call, "participantState", 10)
     check("lifting it from the community's list reaches the call",
           lifted is not None and lifted["muted"] is False, lifted)
+    # A hold, as a phone puts the call on, is the member's own state beside their mute: the call
+    # is told, a client open throughout hears it, and a fresh read agrees, both ways.
+    watching = stack.events(world.owner["token"])
+
+    def recorded_held() -> bool | None:
+        read = stack.api("GET", f"/communities/{world.community}?include=voice", token=world.owner["token"])
+        return next((p.get("held") for p in read.get("included", {}).get("voiceParticipants", [])
+                     if p["user"] == world.member["id"]), None)
+
+    for held in (True, False):
+        call.send({"type": "setState", "muted": True, "deafened": False, "held": held})
+        state = frame_of(call, "participantState")
+        check(f"{'holding' if held else 'ending the hold'} reaches the call, the member's mute beside it",
+              state is not None and state.get("held") is held and state["muted"] is True, state)
+        seen: list[dict] = []
+        heard = soon(lambda: bool(seen.extend(watching.gather(0.2)) or any(
+            e.get("serverEvent") == "voiceParticipant" and e.get("type") == "update"
+            and e.get("user") == world.member["id"] and e.get("held") is held for e in seen)), 15)
+        check("a client open throughout is told", heard, seen)
+        check("as a fresh read says", recorded_held() is held, recorded_held())
+    watching.close()
     callers = world.role("Call moderators", ["manageCalls"])
     world.give(callers)
     owner_seat = f"/channels/{room}/voice/participants/{world.owner['id']}"

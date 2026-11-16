@@ -5,11 +5,10 @@ machine, with the clang and lld already installed there.
 The binaries are linked against a Debian sysroot, by default Debian 12 (bookworm, glibc 2.36),
 so they run on Raspberry Pi OS Bookworm and anything newer; a toolchain that links against the
 build machine's own, newer glibc makes binaries an older Pi refuses to start. The script fetches
-the Debian arm64 packages Aspen builds against (the C library, libstdc++, OpenSSL, libpq, and
-their dependencies) and unpacks them into a sysroot, which needs no root and installs nothing
-outside the build directory. Everything is compiled with clang for the target and linked with
-lld: the Rust code, the C in the crates that build C (ring, aws-lc, jemalloc), and mediasoup's
-C++ worker, through a Meson cross file.
+the Debian arm64 packages Aspen builds against (the C library, OpenSSL, libpq, and their
+dependencies) and unpacks them into a sysroot, which needs no root and installs nothing outside
+the build directory. Everything is compiled with clang for the target and linked with lld: the
+Rust code and the C in the crates that build C (ring, aws-lc, jemalloc, libwebp).
 
 jemalloc is built for 64 KiB pages, which also runs on kernels with 4 KiB and 16 KiB pages:
 Raspberry Pi OS on a Pi 5 boots a 16 KiB-page kernel by default, where a jemalloc built for
@@ -24,11 +23,8 @@ Raspberry Pi OS on a Pi 5 boots a 16 KiB-page kernel by default, where a jemallo
 
 On the Pi, the binaries need `apt install libssl3 libpq5` (present on most installations).
 Needs Python 3.12 or later (3.14 for a Debian release whose packages are zstd-compressed),
-clang, lld, llvm-ar, llvm-readelf, pkg-config, rustup,
-and network access, both here and during the build (mediasoup fetches its C++ dependencies).
-mediasoup builds a code generator for the target and runs it while it builds, so the script also
-unpacks Debian's user-mode arm64 emulator, which Meson runs target programs through; the checks
-start each built binary under it too.
+clang, lld, llvm-ar, llvm-readelf, pkg-config, rustup, and network access. The script also
+unpacks Debian's user-mode arm64 emulator, which the checks start each built binary under.
 
 `check --dir DIR` checks binaries built some other way, such as natively on an ARM machine in
 CI; that needs only Python 3.10 and `readelf`.
@@ -61,18 +57,17 @@ ROOT_PACKAGES = [
     "libc6-dev",
     "linux-libc-dev",
     "libgcc-12-dev",
-    "libstdc++-12-dev",
     "libssl-dev",
     "libpq-dev",
 ]
 # Trixie's compiler runtime is GCC 14's.
-ROOT_PACKAGES_TRIXIE = {"libgcc-12-dev": "libgcc-14-dev", "libstdc++-12-dev": "libstdc++-14-dev"}
+ROOT_PACKAGES_TRIXIE = {"libgcc-12-dev": "libgcc-14-dev"}
 # The binaries a Pi needs: the chat server, the voice server, and the migration runner.
 PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
 BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
 # jemalloc's page size, as a power of two: 64 KiB, which serves every smaller kernel page.
 JEMALLOC_LG_PAGE = "16"
-# Shared libraries the binaries may need beyond the C and C++ runtimes, and the Debian
+# Shared libraries the binaries may need beyond the C runtime, and the Debian
 # package that provides each on the Pi.
 RUNTIME_PACKAGES = {"libssl.so.3": "libssl3", "libcrypto.so.3": "libssl3", "libpq.so.5": "libpq5"}
 
@@ -98,10 +93,6 @@ class Paths:
         return self.root / "bin"
 
     @property
-    def meson_cross_file(self) -> Path:
-        return self.root / "meson-cross.ini"
-
-    @property
     def tools(self) -> Path:
         return self.root / "tools"
 
@@ -122,7 +113,7 @@ def fail(message: str) -> None:
 def require_tools() -> None:
     missing = [
         tool
-        for tool in ["clang", "clang++", "ld.lld", "llvm-ar", "llvm-readelf", "pkg-config", "rustup", "cargo"]
+        for tool in ["clang", "ld.lld", "llvm-ar", "llvm-readelf", "pkg-config", "rustup", "cargo"]
         if shutil.which(tool) is None
     ]
     if missing:
@@ -289,11 +280,9 @@ def wrapper_flags(paths: Paths) -> list[str]:
 
 
 def qemu(paths: Paths) -> Path:
-    """Debian's statically linked user-mode emulator for arm64, unpacked into the build directory.
-
-    Meson runs what it builds for the target through it: its compiler checks, and mediasoup's
-    FlatBuffers code generator, which mediasoup builds from source for the target and runs during
-    the build. It is called by path, not registered with the kernel, so it needs no root.
+    """Debian's statically linked user-mode emulator for arm64, unpacked into the build directory,
+    which the checks start the built binaries under. It is called by path, not registered with the
+    kernel, so it needs no root.
     """
     emulator = paths.tools / "qemu-aarch64-static"
     if emulator.exists():
@@ -315,52 +304,24 @@ def qemu(paths: Paths) -> Path:
 
 def write_toolchain(paths: Paths) -> None:
     paths.bin.mkdir(parents=True, exist_ok=True)
-    emulator = qemu(paths)
+    qemu(paths)
     flags = " ".join(shlex.quote(f) for f in wrapper_flags(paths))
-    for name, compiler in [("cc", "clang"), ("c++", "clang++")]:
-        wrapper = paths.bin / f"{TRIPLE}-{name}"
-        wrapper.write_text(f'#!/bin/sh\nexec {compiler} {flags} "$@"\n')
-        wrapper.chmod(0o755)
-    quoted = lambda items: "[" + ", ".join(repr(i) for i in items) + "]"
-    paths.meson_cross_file.write_text(
-        "[binaries]\n"
-        # Meson picks lld by `c_ld`, when it links; flags given here are also used for its
-        # compile-only checks, which it runs with unused arguments as errors.
-        f"c = {quoted(['clang', *target_flags(paths)])}\n"
-        f"cpp = {quoted(['clang++', *target_flags(paths)])}\n"
-        "c_ld = 'lld'\n"
-        "cpp_ld = 'lld'\n"
-        "ar = 'llvm-ar'\n"
-        "strip = 'llvm-strip'\n"
-        "pkg-config = 'pkg-config'\n"
-        f"exe_wrapper = {quoted([str(emulator), '-L', str(paths.sysroot)])}\n"
-        "\n[properties]\n"
-        f"sys_root = '{paths.sysroot}'\n"
-        f"pkg_config_libdir = '{paths.sysroot}/usr/lib/{TRIPLE}/pkgconfig:{paths.sysroot}/usr/share/pkgconfig'\n"
-        "\n[host_machine]\n"
-        "system = 'linux'\n"
-        "cpu_family = 'aarch64'\n"
-        "cpu = 'aarch64'\n"
-        "endian = 'little'\n"
-    )
+    wrapper = paths.bin / f"{TRIPLE}-cc"
+    wrapper.write_text(f'#!/bin/sh\nexec clang {flags} "$@"\n')
+    wrapper.chmod(0o755)
 
 
 def build_env(paths: Paths) -> dict[str, str]:
-    """What cargo, the crates' build scripts, and mediasoup's Meson build read."""
+    """What cargo and the crates' build scripts read."""
     target = RUST_TARGET.replace("-", "_")
     pkg_config_libdir = f"{paths.sysroot}/usr/lib/{TRIPLE}/pkgconfig:{paths.sysroot}/usr/share/pkgconfig"
     cc = str(paths.bin / f"{TRIPLE}-cc")
-    cxx = str(paths.bin / f"{TRIPLE}-c++")
     return {
         f"CARGO_TARGET_{target.upper()}_LINKER": cc,
         f"CC_{target}": cc,
-        f"CXX_{target}": cxx,
         f"AR_{target}": "llvm-ar",
-        # mediasoup-sys links libstdc++ statically, from wherever plain `CXX` says it is, so
-        # that must be the target's; build scripts compiling for this machine read HOST_*.
-        "CXX": cxx,
+        # Build scripts compiling for this machine read HOST_*.
         "HOST_CC": "clang",
-        "HOST_CXX": "clang++",
         # Anything that asks pkg-config is answered from the sysroot.
         f"PKG_CONFIG_SYSROOT_DIR_{target}": str(paths.sysroot),
         f"PKG_CONFIG_LIBDIR_{target}": pkg_config_libdir,
@@ -371,9 +332,6 @@ def build_env(paths: Paths) -> dict[str, str]:
         # and links against this machine's libraries.
         f"PQ_LIB_DIR_{target.upper()}": f"{paths.sysroot}/usr/lib/{TRIPLE}",
         "JEMALLOC_SYS_WITH_LG_PAGE": JEMALLOC_LG_PAGE,
-        # mediasoup's worker: Meson compiles it for the target with the cross file, and runs
-        # the code generator it builds on the way through the emulator the cross file names.
-        "MESON_ARGS": f"--cross-file={paths.meson_cross_file}",
     }
 
 

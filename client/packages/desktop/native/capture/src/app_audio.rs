@@ -1,7 +1,7 @@
 //! Game audio, from the platform's capture of one application's sound (`pipewire_audio` on
 //! Linux, `sck_audio` on macOS) to the voice server: 48 kHz stereo float as the capture
-//! delivers it, cut into 20 ms frames, encoded as Opus with libopus, and sent as SRTP by an
-//! `RtpSender` of its own.
+//! delivers it, cut into 20 ms frames, encoded as Opus with libopus, and sent on the capture
+//! connection by an `RtpSender` of its own.
 //!
 //! The capture hands buffers over on a thread of the platform's (PipeWire's real-time thread,
 //! where nothing may block; ScreenCaptureKit's queue), so they are passed through a bounded
@@ -41,7 +41,7 @@ struct Running {
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
-/// Audio runs at its set rate; the receiver's estimate steers nothing here.
+/// Audio runs at its set rate; the bandwidth estimate steers nothing here.
 struct NoFeedback;
 
 impl Feedback for NoFeedback {
@@ -61,7 +61,6 @@ pub fn start(options: &AudioOptions) -> Result<(), String> {
         .unwrap_or(DEFAULT_BITRATE_KBPS)
         .clamp(32, 320);
     let sender = RtpSender::start(
-        &options.rtp,
         StreamKind::Audio,
         Arc::new(NoFeedback),
         bitrate_kbps,

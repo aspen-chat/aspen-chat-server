@@ -72,13 +72,43 @@ pub fn tcp_listeners(addrs: &[SocketAddr], required: bool) -> io::Result<Vec<Tcp
 }
 
 pub fn udp_socket(addr: SocketAddr) -> io::Result<UdpSocket> {
+    UdpSocket::from_std(std_udp_socket(addr, None)?)
+}
+
+/// A UDP socket of `addr`'s family alone, not blocking, for a thread that polls its sockets
+/// rather than a runtime. `buffer` asks for receive and send buffers of that many bytes each,
+/// which the kernel caps at `net.core.rmem_max` and `wmem_max`; `buffer_sizes` says what it gave.
+pub fn std_udp_socket(addr: SocketAddr, buffer: Option<usize>) -> io::Result<std::net::UdpSocket> {
     let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
     if addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
+    if let Some(bytes) = buffer {
+        socket.set_recv_buffer_size(bytes)?;
+        socket.set_send_buffer_size(bytes)?;
+    }
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
-    UdpSocket::from_std(socket.into())
+    Ok(socket.into())
+}
+
+/// A TCP listener of `addr`'s family alone, not blocking, for a thread that polls its sockets.
+pub fn std_tcp_listener(addr: SocketAddr) -> io::Result<std::net::TcpListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(TCP_BACKLOG as i32)?;
+    Ok(socket.into())
+}
+
+/// The receive and send buffer sizes the kernel gave `socket`, in bytes.
+pub fn buffer_sizes(socket: &std::net::UdpSocket) -> io::Result<(usize, usize)> {
+    let socket = SockRef::from(socket);
+    Ok((socket.recv_buffer_size()?, socket.send_buffer_size()?))
 }
 
 #[cfg(test)]

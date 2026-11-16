@@ -13,7 +13,8 @@ in line when access changes, and the voice server enforces the grants as they no
 | Rechecking every call on the deployment     | the `recheckAllCalls` job (`app::voice::recheck_all_step`) |
 | Sign-in liveness                            | `login::sign_in_live`                                      |
 | Whether an ended sign-in ends a participant | `VoiceCommand::ends_sign_in`                               |
-| Producer kind by source                     | `MediaSource::kind`                                        |
+| Section kind by source                      | `MediaSource::kind`                                        |
+| Grants on the voice server                  | `Rooms::send`, `Rooms::source_live`, `Rooms::set_grants`   |
 
 ## When a recheck runs
 
@@ -69,33 +70,39 @@ token issued before its sign-in ended and used after it does not keep the partic
 
 When a `Grant` changes a participant's grants, the voice server:
 
-1. closes the producers they may no longer send,
+1. stops each source they send or have asked to send that the new grants no longer allow: its
+   section goes from their next offer and nothing more of it is forwarded; when it was live,
+   everyone is told what they now send (`sources`), with a `participantState` report when it was
+   their screen;
 2. withdraws their offers and ends the transfers they are sending, if they may no longer offer
-   files,
+   files;
 3. tells their client (`grantsChanged`).
 
-The client stops what it may no longer send and opens the microphone it may now send.
+A `Grant` that changes nothing does nothing. The client stops what it may no longer send and opens
+the microphone it may now send.
 
-## What the voice server enforces on each producer
+## What the voice server enforces on each source
 
-The voice server refuses a producer when:
+A participant sends a source only on a section the server offered for it, after a `send`. The
+section's kind is its source's (`MediaSource::kind`): a microphone and screen audio are audio; a
+screen and a camera are video. So a source always means what it says. The server refuses a `send`
+of:
 
-- its kind is not its source's kind (`MediaSource::kind`): a microphone and screen audio are audio;
-  a screen and a camera are video;
-- it is a microphone producer without `speak`;
-- it is a screen or screen audio producer without `share_screen`;
-- it is a camera producer without `camera`.
+- a microphone without `speak`;
+- a screen or screen audio without `share_screen`;
+- a camera without `camera`;
+- a source the participant already sends.
 
 These use the participant's grants as they now stand. They are checked twice:
 
-1. when the frame arrives;
-2. again, with the one-producer-per-source rule, under the room's lock as the new producer is added.
-   Making it awaits mediasoup, and a `Grant` may land meanwhile. A `Grant` that lands then finds
-   nothing to close, so the producer is closed instead of added.
+1. when `send` arrives, under the room's lock;
+2. again when the source goes live, at its first packet reaching the server (`Rooms::source_live`).
+   A source whose grant has gone by then is stopped rather than sent on, and the others are never
+   told of it.
 
-A new microphone is likewise brought in line with a mute, a moderator's included, that landed while
-it was being made. One fed by `produceRtp` is made paused while its sender is muted, as a browser's
-is.
+A microphone asked for while its sender is silenced, by their own mute or a moderator's, starts
+paused, in the same command order as the mute, so nothing of it is forwarded before the mute
+applies.
 
 **Why:** what may be sent and what a mute pauses are decided by source. See
-[design notes](design-notes.md#producers-by-source).
+[design notes](design-notes.md#sources).

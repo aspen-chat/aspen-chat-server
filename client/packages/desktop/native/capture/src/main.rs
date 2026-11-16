@@ -2,9 +2,9 @@
 //!
 //! On Windows the capture is libobs's (`obs`): its game hook reaches games that ordinary
 //! display capture cannot, and the picture and the application's sound are encoded and sent
-//! as SRTP straight to the voice server's plain RTP transport. The shell's main
-//! process spawns this helper and tells it where to send; the media never passes through the
-//! shell or the browser.
+//! straight to the voice server over a WebRTC connection of the helper's own (`rtp`), whose
+//! offers the shell's main process passes in and whose answers it passes back; the media never
+//! passes through the shell or the browser.
 //!
 //! On Linux and macOS the picture comes from the browser's own screen share instead (on Linux
 //! only the process owning the requesting window can raise the desktop portal that picks what
@@ -36,7 +36,6 @@ mod rtp;
 #[cfg(target_os = "macos")]
 mod sck_audio;
 
-use rtp::RtpTarget;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 
@@ -104,10 +103,10 @@ pub struct StartOptions {
     /// Where OBS's data (`libobs/` effects, `obs-plugins/`) is, when not the build-time default.
     #[serde(default)]
     pub data_dir: Option<String>,
-    /// Where to send the video SRTP.
-    pub rtp: RtpTarget,
+    /// The voice server's first offer of the capture connection, which the capture answers.
+    pub offer: String,
     /// The application's audio: the source that captures it, when this platform has one for
-    /// the target, and where to send it as Opus. Both or neither.
+    /// the target, sent as Opus on the same connection.
     #[serde(default)]
     pub audio: Option<AudioOptions>,
 }
@@ -121,7 +120,6 @@ pub struct AudioOptions {
     /// Its settings as a JSON object.
     #[serde(default)]
     pub settings: Option<String>,
-    pub rtp: RtpTarget,
     #[serde(default)]
     pub bitrate_kbps: Option<u32>,
 }
@@ -133,6 +131,8 @@ pub struct AudioOptions {
 #[serde(rename_all = "camelCase")]
 pub struct AudioStart {
     pub audio: AudioOptions,
+    /// The voice server's first offer of the capture connection, which the capture answers.
+    pub offer: String,
     #[serde(default)]
     pub plugin_dir: Option<String>,
     #[serde(default)]
@@ -232,12 +232,26 @@ fn start_audio_capture(options: AudioStart) -> Result<()> {
     }
 }
 
-/// Stops the capture, if one runs. Safe to call at any time.
+/// Stops the capture, if one runs, and its connection. Safe to call at any time.
 fn stop_capture() {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     app_audio::stop();
     #[cfg(obs)]
     obs::stop_capture();
+    rtp::close();
+}
+
+/// Answers the capture connection's first offer and starts the capture with `start`, which
+/// sends on that connection; answers with the connection's answer and what `start` gave.
+fn answer_and_start<T>(offer: &str, start: impl FnOnce() -> Result<T>) -> Result<(String, T)> {
+    let answer = rtp::connect(offer)?;
+    match start() {
+        Ok(started) => Ok((answer, started)),
+        Err(reason) => {
+            rtp::close();
+            Err(reason)
+        }
+    }
 }
 
 /// Stops any capture and whatever must be shut down at the end of the process.
@@ -269,6 +283,11 @@ enum Request {
         id: u64,
         options: Box<AudioStart>,
     },
+    /// A later offer of the running capture's connection.
+    Answer {
+        id: u64,
+        offer: String,
+    },
     Stop {
         id: u64,
     },
@@ -292,6 +311,10 @@ enum Reply {
         /// and the rest of `obs::capture::VIDEO_ENCODERS`); absent on every other reply.
         #[serde(skip_serializing_if = "Option::is_none")]
         encoder: Option<&'static str>,
+        /// The capture connection's answer to the offer a start or an `answer` carried;
+        /// absent on every other reply.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        answer: Option<String>,
     },
     Failed {
         id: u64,
@@ -396,24 +419,43 @@ fn main() {
             },
             Request::Start { id, options } => {
                 stop_capture();
-                match start_capture(*options) {
-                    Ok(encoder) => Reply::Done {
+                let offer = options.offer.clone();
+                match answer_and_start(&offer, || start_capture(*options)) {
+                    Ok((answer, encoder)) => Reply::Done {
                         id,
                         encoder: Some(encoder),
+                        answer: Some(answer),
                     },
                     Err(reason) => Reply::Failed { id, reason },
                 }
             }
             Request::StartAudio { id, options } => {
                 stop_capture();
-                match start_audio_capture(*options) {
-                    Ok(()) => Reply::Done { id, encoder: None },
+                let offer = options.offer.clone();
+                match answer_and_start(&offer, || start_audio_capture(*options)) {
+                    Ok((answer, ())) => Reply::Done {
+                        id,
+                        encoder: None,
+                        answer: Some(answer),
+                    },
                     Err(reason) => Reply::Failed { id, reason },
                 }
             }
+            Request::Answer { id, offer } => match rtp::renegotiate(&offer) {
+                Ok(answer) => Reply::Done {
+                    id,
+                    encoder: None,
+                    answer: Some(answer),
+                },
+                Err(reason) => Reply::Failed { id, reason },
+            },
             Request::Stop { id } => {
                 stop_capture();
-                Reply::Done { id, encoder: None }
+                Reply::Done {
+                    id,
+                    encoder: None,
+                    answer: None,
+                }
             }
             Request::Shutdown => break,
         };
@@ -431,7 +473,8 @@ mod tests {
 
     #[test]
     fn a_request_that_cannot_be_read_is_answered_to_its_id() {
-        let line = r#"{"type":"start","id":7,"options":{"kind":"game_capture","width":-1}}"#;
+        let line =
+            r#"{"type":"start","id":7,"options":{"kind":"game_capture","width":-1,"offer":""}}"#;
         let error = serde_json::from_str::<Request>(line)
             .err()
             .expect("unreadable");

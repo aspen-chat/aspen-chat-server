@@ -5,9 +5,8 @@
  * shipped) or a standard text in `spdx/`.
  *
  * Every entry is tied to where its version is decided, and the build stops when that moves, so
- * an update cannot ship with this list describing the version before it: mediasoup's
- * subprojects to the Meson wraps in the `mediasoup-sys` crate the server locks, and what the
- * Windows desktop app ships from OBS Studio's release to `OBS_VERSION` in
+ * an update cannot ship with this list describing the version before it: what the Windows
+ * desktop app ships from OBS Studio's release, to `OBS_VERSION` in
  * `packages/desktop/scripts/fetch-libobs.mjs`.
  */
 
@@ -25,71 +24,16 @@ export interface NativeLibrary {
   readonly version: NativeVersion;
 }
 
-/** Where a library's version comes from, and so what the build checks it against. */
-export type NativeVersion =
-  /** The `directory` of `subprojects/<wrap>.wrap` in the locked `mediasoup-sys`, as recorded. */
-  | { readonly wrap: string; readonly directory: string; readonly version: string }
-  /**
-   * Shipped from OBS Studio's Windows release of this version, which the build checks is still
-   * the one fetched: OBS Studio itself, or a library it bundles (`bundled`), whose version is
-   * whatever that release carries.
-   */
-  | { readonly obs: string; readonly bundled: boolean };
-
-/** The libraries mediasoup's worker, in the voice server, builds from Meson wraps. */
-const MEDIASOUP: readonly NativeLibrary[] = [
-  {
-    component: "server",
-    name: "abseil-cpp",
-    license: "Apache-2.0",
-    url: "https://abseil.io",
-    texts: ["abseil-cpp-LICENSE"],
-    version: { wrap: "abseil-cpp", directory: "abseil-cpp-20240722.0", version: "20240722.0" },
-  },
-  {
-    component: "server",
-    name: "FlatBuffers",
-    license: "Apache-2.0",
-    url: "https://flatbuffers.dev",
-    texts: ["flatbuffers-LICENSE"],
-    version: { wrap: "flatbuffers", directory: "flatbuffers-24.3.25", version: "24.3.25" },
-  },
-  {
-    component: "server",
-    name: "libsrtp",
-    license: "BSD-3-Clause",
-    url: "https://github.com/versatica/libsrtp",
-    texts: ["libsrtp-LICENSE"],
-    version: {
-      wrap: "libsrtp3",
-      directory: "libsrtp-3.0.0-beta-2fc078db",
-      version: "3.0.0-beta-2fc078db",
-    },
-  },
-  {
-    component: "server",
-    name: "libuv",
-    license: "MIT",
-    url: "https://libuv.org",
-    texts: ["libuv-LICENSE", "libuv-LICENSE-extra"],
-    version: { wrap: "libuv", directory: "libuv-v1.51.0", version: "1.51.0" },
-  },
-  {
-    component: "server",
-    name: "unordered_dense",
-    license: "MIT",
-    url: "https://github.com/martinus/unordered_dense",
-    texts: ["unordered_dense-LICENSE"],
-    version: { wrap: "unordered-dense", directory: "unordered_dense-5.3.1", version: "5.3.1" },
-  },
-];
-
 /**
- * The wraps mediasoup has that no shipped build compiles: its tests' framework, Windows'
- * `getopt`, the voice server running on Linux alone, and OpenSSL, since the voice server builds
- * the worker against the system's (`system-openssl`).
+ * Where a library's version comes from, and so what the build checks it against: OBS Studio's
+ * Windows release of this version, which the build checks is still the one fetched, shipping
+ * OBS Studio itself or a library it bundles (`bundled`), whose version is whatever that release
+ * carries.
  */
-export const UNSHIPPED_WRAPS: readonly string[] = ["catch2", "openssl", "wingetopt"];
+export interface NativeVersion {
+  readonly obs: string;
+  readonly bundled: boolean;
+}
 
 const OBS_VERSION = "32.2.2";
 
@@ -173,14 +117,10 @@ const OBS: readonly NativeLibrary[] = [
   },
 ];
 
-export const NATIVE_LIBRARIES: readonly NativeLibrary[] = [...MEDIASOUP, ...OBS];
+export const NATIVE_LIBRARIES: readonly NativeLibrary[] = OBS;
 
 /**
  * Texts for packages whose published files carry none, by package name, taken from their
  * projects' sources; preferred to a standard text, since they name the copyright holders.
  */
-export const PACKAGE_TEXTS: Readonly<Record<string, readonly string[]>> = {
-  mediasoup: ["mediasoup-LICENSE"],
-  "mediasoup-sys": ["mediasoup-LICENSE"],
-  "mediasoup-types": ["mediasoup-LICENSE"],
-};
+export const PACKAGE_TEXTS: Readonly<Record<string, readonly string[]>> = {};

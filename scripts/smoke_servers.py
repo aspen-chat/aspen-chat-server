@@ -11,8 +11,8 @@ voice server on ports of their own (so a development stack can keep running besi
 - makes a community with a voice channel and joins its call, which needs the voice server to
   have registered and reported in over NATS;
 - reads both servers' metrics, including the allocator's figures;
-- runs the voice server's `estimate-capacity`, whose self-test forwards real media through
-  mediasoup, and checks the media arrived;
+- runs the voice server's `estimate-capacity`, whose self-test forwards real media through a
+  media thread of its own, and checks the media arrived;
 - removes the voice server's registration while it runs, checks the dashboard's fleet lists it
   as reporting under an id that is not registered, and checks that started again it stops,
   saying its id is not registered.

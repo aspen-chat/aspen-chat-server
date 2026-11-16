@@ -159,7 +159,7 @@ variable "voice_servers" {
 }
 
 variable "voice_media_ports" {
-  description = "The UDP and TCP ports each voice server takes media on ([rtc] min_port and max_port). A call's participant takes one."
+  description = "The UDP and TCP ports each voice server may take media on ([rtc] min_port and max_port): each of its media threads, one per CPU, takes one of each, from min_port up, and a server refuses to start when the range holds too few."
   type = object({
     min = optional(number, 40000)
     max = optional(number, 40999)

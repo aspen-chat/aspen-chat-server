@@ -37,7 +37,8 @@ explicit direction.
   for development from an authority of its own); PostgreSQL over TLS through OpenSSL
   (`postgres-openssl`, as libpq does), every other service over rustls
 - **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and
-  compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
+  compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures, and
+  the voice server's DTLS and SRTP through `str0m`)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with
   `chrono-tz` for each digest's time zone; see Email
 - **Search:** PostgreSQL full-text search, with `icu_segmenter` (ICU4X, its data compiled in)
@@ -48,18 +49,21 @@ explicit direction.
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour
   profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and
   `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
-- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl`
-  feature builds its worker against the system OpenSSL rather than the 3.0.10 its Meson build
-  compiles in
+- **Voice media:** `str0m` in the voice server's `voice_media` crate (`voice_media/`), in its RTP
+  mode and as an ICE-lite peer, with DTLS and SRTP through `aws-lc-rs`, so the voice server links no
+  OpenSSL: media threads, each holding the WebRTC connections of the calls given to it on one UDP
+  and one TCP port, that forward each participant's packets to the others as they are; see Voice. It
+  is the fork `[patch.crates-io]` names, whose `SdpApi::set_stream_id` moves a section into another
+  stream, until str0m releases it. Its signalling WebSocket is `yawc`, for permessage-deflate
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice
   server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi`
   giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)
 - **Allocator:** jemalloc (`tikv-jemallocator`) in both servers, replacing `malloc` for the whole
-  process so C and C++ libraries (mediasoup's worker) use it too, with its background thread on
-  (`malloc_conf` in each `main.rs`) so freed memory returns to the system when a server goes idle;
-  its statistics are exported as `aspen_memory_*`
+  process so C libraries use it too, with its background thread on (`malloc_conf` in each `main.rs`)
+  so freed memory returns to the system when a server goes idle; its statistics are exported as
+  `aspen_memory_*`
 
 ## Building and Running
 
@@ -290,15 +294,15 @@ or what an operator must open, route, or back up updates it in the same commit.
 
    It fetches a Debian 12 arm64 sysroot (glibc 2.36, so the binaries run on Raspberry Pi OS Bookworm
    and newer) into `target/cross/`, compiles everything with the clang and lld already installed
-   (the Rust code, the crates' C, and mediasoup's C++ through a generated Meson cross file), and
-   checks the result: AArch64, no glibc symbol newer than the sysroot's, and each binary starting
-   under Debian's user-mode emulator, which it also unpacks there (Meson runs mediasoup's code
-   generator through it during the build). It needs no root. The binaries land in
-   `target/aarch64-unknown-linux-gnu/release/`; on the Pi they need only `libssl3`.
-   `eval "$(scripts/cross_aarch64.py env)"` sets up a shell to run cargo for the target by hand.
-   Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its page size when compiled,
-   a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB pages
-   aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
+   (the Rust code and the crates' C: ring, aws-lc, jemalloc, and libwebp), and checks the result:
+   AArch64, no glibc symbol newer than the sysroot's, and each binary starting under Debian's
+   user-mode emulator, which it also unpacks there. It needs no root. The binaries land in
+   `target/aarch64-unknown-linux-gnu/release/`; on the Pi they need only `libssl3` and `libpq5`, and
+   the voice server neither. `eval "$(scripts/cross_aarch64.py env)"` sets up a shell to run cargo
+   for the target by hand. Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its
+   page size when compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc
+   built for 4 KiB pages aborts at startup there, while 64 KiB pages serve every smaller kernel page
+   size.
 
 6. Run two deployments that federate, for developing federation:
 
@@ -379,6 +383,20 @@ or what an operator must open, route, or back up updates it in the same commit.
    they drain higher ranks first, that a viewer is told the level, and that what waits two minutes
    is dropped (see Channel mana).
 
+   Check calls in real browsers against the voice server:
+
+   ```
+   scripts/check_calls.py --bin target/debug
+   ```
+
+   It runs a deployment whose web client is a page made of the client's own call code
+   (`client/packages/protocol/calls/`) and drives two people through it with Playwright
+   (`calls/drive.ts`), Chromium with Chromium and then with Firefox: each hears the other on an
+   audio slot, a camera arrives only once it is watched, a shared screen and a camera arrive
+   together, a screen's sound is stereo without DTX, and leaving takes it all away. It needs the
+   client's dependencies installed and Playwright's Chromium and Firefox
+   (`pnpm --filter @aspen/app exec playwright install chromium firefox`).
+
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,
    for finding what a slow request or a stalled stream is waiting on:
@@ -404,17 +422,17 @@ sudo pacman -S sccache    # or: cargo install --locked sccache
 `.cargo/config.toml` names `scripts/sccache.sh` as Cargo's rustc wrapper, which compiles through
 sccache when it is on the `PATH` and with the compiler alone when it is not. Each worktree keeps a
 target directory of its own, and a compile the cache holds is fetched rather than run again. Most of
-a cold build's work is C and C++ (mediasoup's worker, which Meson sends through sccache on its own,
-and aws-lc, jemalloc, and libwebp, which the `cc` crate sends through the wrapper), and those hit in
-any worktree. A Rust dependency hits in another worktree only when sccache's server was started with
-`SCCACHE_BASEDIRS` naming both worktrees' roots (separated by `:`; `sccache --stop-server` makes the
-next build start it afresh) and both builds give `CARGO_TARGET_DIR` the same value or none, since
-its value is part of the cache key. The workspace's own crates (Cargo compiles them incrementally),
-proc-macro crates, and linking are never cached, so sccache shortens a worktree's first build, not
-rebuilds after an edit. The cache is `~/.cache/sccache`, 10 GiB unless `SCCACHE_CACHE_SIZE` says
-otherwise, of which a debug build of the servers takes about 2 GiB; `sccache --show-stats` counts
-its hits. `client/.cargo/config.toml` turns the wrapper off under `client/`, whose capture helper is
-built on Windows, where the script cannot run.
+a cold build's work is C (aws-lc, ring, jemalloc, and libwebp, which the `cc` crate sends through
+the wrapper), and those hit in any worktree. A Rust dependency hits in another worktree only when
+sccache's server was started with `SCCACHE_BASEDIRS` naming both worktrees' roots (separated by `:`;
+`sccache --stop-server` makes the next build start it afresh) and both builds give
+`CARGO_TARGET_DIR` the same value or none, since its value is part of the cache key. The workspace's
+own crates (Cargo compiles them incrementally), proc-macro crates, and linking are never cached, so
+sccache shortens a worktree's first build, not rebuilds after an edit. The cache is
+`~/.cache/sccache`, 10 GiB unless `SCCACHE_CACHE_SIZE` says otherwise, of which a debug build of the
+servers takes about 2 GiB; `sccache --show-stats` counts its hits. `client/.cargo/config.toml` turns
+the wrapper off under `client/`, whose capture helper is built on Windows, where the script cannot
+run.
 
 11. Build the container images, and describe a deployment in files:
 
@@ -469,9 +487,10 @@ the public media prefixes against the server's, `media_store::PublicPrefix`), an
 `scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
 container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and
 `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts;
-`scripts/check_permissions.py`, `scripts/check_nats_memory.py`, and `scripts/check_mana.py` run in
-the x86-64 job against its debug build, the first building and installing the example plugins. Every
-job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
+`scripts/check_permissions.py`, `scripts/check_nats_memory.py`, `scripts/check_mana.py`, and
+`scripts/check_calls.py` run in the x86-64 job against its debug build, the first building and
+installing the example plugins, the last calling between Chromium and Firefox through Playwright.
+Every job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
 example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail
 the build.
 
@@ -1334,8 +1353,8 @@ when reviewing.
     asking for it again revives one that was (`jobs::revive`).
 11. **Sibling paths do the same work.** When one way to an end cleans up, announces, or installs
     (`leave`, `soft_delete`, a `RecordStore` batch), every other way to that end does too, by
-    calling the same function (`Participant::remove_producer`, `saved_message::forget`), never by a
-    copy of part of it.
+    calling the same function (`Rooms::stop_source`, `saved_message::forget`), never by a copy of
+    part of it.
 12. **Test past the threshold.** Whatever depends on age, size, count, or state is tested with
     values on the far side of each limit, not with what a fresh fixture happens to have: a key older
     than the handover window, a message that was held, a role at the cap, zero and negative

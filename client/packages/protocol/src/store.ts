@@ -3236,6 +3236,7 @@ export class RecordStore {
                 muted: event.muted ?? current.muted,
                 sharingScreen: event.sharingScreen ?? current.sharingScreen,
                 deafened: event.deafened ?? current.deafened,
+                held: event.held ?? current.held,
               });
             }
           } else {
@@ -4755,6 +4756,8 @@ export class RecordStore {
       muted: participant.muted,
       sharingScreen: participant.sharingScreen,
       deafened: participant.deafened,
+      // Absent from a deployment that predates holds.
+      held: participant.held ?? false,
       speaking: current?.speaking ?? false,
       lastSpokeAt: current?.lastSpokeAt ?? null,
     });

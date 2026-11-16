@@ -9,7 +9,7 @@
 #
 # `http` limits its two routes, `health` (the latency probe) and `signalling` (opening the
 # socket), along `ip` and `global`. `frames` limits signalling frames by type (their `type` on
-# the wire, `createTransport` for instance, or `any` for every frame) along `user` (one caller,
+# the wire, `answer` for instance, or `any` for every frame) along `user` (one caller,
 # on this server), `ip`, `channel` (one call, whoever sends), and `global`.
 
 [rate_limits]
@@ -20,20 +20,21 @@ ipv6_prefix = 64
 # The longest this server honours a suspension of its limits (the API server's
 # `limits suspend`), counted from when it started: a day.
 max_suspension_seconds = 86400
-# The largest signalling message taken, in bytes. The biggest a client sends are its RTP
-# capabilities, a few kilobytes.
+# The largest signalling message taken, in bytes. The biggest a client sends is an answer: about
+# a kilobyte for each of its sections, which its audio slots, what it sends, and the video it
+# watches bound to well under this.
 max_message_bytes = 262144
 # Sockets one address may hold open before they identify.
 max_pending_sockets_per_ip = 8
 # Connections the HTTP listener holds at once, signalling sockets included; past it, new ones
 # wait to be accepted. Each is a file descriptor, so the process's limit (`ulimit -n`) must
-# allow this many and mediasoup's own besides.
+# allow this many and the media threads' TCP streams besides.
 max_connections = 10000
-# Calls one user may be in at once on this server, each holding transports and so ports from
-# the media range: a second leaves room for a device joining one call while another leaves.
+# Calls one user may be in at once on this server, each holding a peer connection on a media
+# thread: a second leaves room for a device joining one call while another leaves.
 # Joining the same call again from another socket replaces the first and takes no more.
 max_seats_per_user = 2
-# People one call may hold at once, so no single call takes the whole media range.
+# People one call may hold at once, so no single call fills its media thread.
 max_participants_per_call = 500
 
 [rate_limits.http.health]
@@ -44,48 +45,44 @@ ip = { requests = 120, per_seconds = 60, burst = 30 }
 ip = { requests = 60, per_seconds = 60, burst = 20 }
 
 [rate_limits.frames.any]
-# Joining a big call resumes one consumer per producer already in it.
 user = { requests = 50, per_seconds = 1, burst = 400 }
 
-# Joining a call takes one `identify`, `setCapabilities`, `produce`, and `setState`, and two
-# `createTransport` and `connectTransport`. Their limits let someone moving from call to call
-# join a dozen times back to back, and every two seconds or so after that.
+# Joining a call takes one `identify`, an `answer`, a `send` for the microphone, and a
+# `setState`. Their limits let someone moving from call to call join a dozen times back to back,
+# and every two seconds or so after that.
 [rate_limits.frames.identify]
 user = { requests = 30, per_seconds = 60, burst = 12 }
 
-[rate_limits.frames.setCapabilities]
-user = { requests = 30, per_seconds = 60, burst = 12 }
+# Taken before anyone is known, so by address alone: its secret must not be guessed at speed.
+[rate_limits.frames.resume]
+ip = { requests = 30, per_seconds = 60, burst = 10 }
 
-# Each transport takes ports from the media range. A participant holds one in each direction
-# (a second send transport is refused; a new receive transport replaces the last), and leaving
-# closes both, so moving between calls churns
-# transports rather than piling them up.
-[rate_limits.frames.createTransport]
-user = { requests = 60, per_seconds = 60, burst = 24 }
-# A whole office may share an address. The server's own limit bounds how fast the range can be
-# churned whatever the number of accounts.
-ip = { requests = 240, per_seconds = 60, burst = 96 }
-global = { requests = 6000, per_seconds = 60, burst = 1200 }
+# Each answers an offer the server made: on joining, and as what the client sends or watches
+# changes.
+[rate_limits.frames.answer]
+user = { requests = 120, per_seconds = 60, burst = 40 }
 
-[rate_limits.frames.connectTransport]
-user = { requests = 60, per_seconds = 60, burst = 24 }
-
-[rate_limits.frames.produce]
+[rate_limits.frames.send]
 user = { requests = 40, per_seconds = 60, burst = 20 }
 
-[rate_limits.frames.produceRtp]
-user = { requests = 10, per_seconds = 60, burst = 4 }
-ip = { requests = 40, per_seconds = 60, burst = 16 }
-global = { requests = 1200, per_seconds = 60, burst = 300 }
-
-# Each takes a port from the media range too.
-[rate_limits.frames.consumeRtp]
-user = { requests = 10, per_seconds = 60, burst = 4 }
-ip = { requests = 40, per_seconds = 60, burst = 16 }
-global = { requests = 1200, per_seconds = 60, burst = 300 }
-
-[rate_limits.frames.closeProducer]
+[rate_limits.frames.stopSending]
 user = { requests = 30, per_seconds = 60, burst = 10 }
+
+# Each change of what a client watches renegotiates its connection: scrolling through a grid of
+# cameras makes them in bursts.
+[rate_limits.frames.watch]
+user = { requests = 120, per_seconds = 60, burst = 30 }
+
+# Each block, unblock, or volume set to nothing or back may move a slot and renegotiate.
+[rate_limits.frames.silence]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+# Pausing what is received changes forwarding alone.
+[rate_limits.frames.setReceiving]
+user = { requests = 600, per_seconds = 60, burst = 100 }
+
+[rate_limits.frames.restartIce]
+user = { requests = 20, per_seconds = 60, burst = 6 }
 
 # Only a `setState` that unmutes or undeafens counts: one that mutes or deafens, and lifts
 # neither, always goes through (`Rooms::quietens`), so no one can be kept audible. Each is

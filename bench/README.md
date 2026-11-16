@@ -4,7 +4,7 @@
 plays a population of simulated users against a real deployment (signing in and starting up the way
 the client does, holding the event stream open, chatting, tagging, reacting, replying in threads,
 voting in polls, searching, posting pictures, reading history, reconnecting, and sitting in voice
-calls with real SRTP media), measures what they experience, samples the servers' metrics while it
+calls with real WebRTC media), measures what they experience, samples the servers' metrics while it
 does, and writes a verdict against the service levels the profile names.
 
 Run it against a staging deployment built like production. Running it against production works, but
@@ -188,7 +188,7 @@ what any `[[events]]` commands printed, and findings from the sampled metrics:
 - database pool connections waiting, sustained;
 - NATS publish or Valkey rate-limit check latency high;
 - rate limit refusals (the run was throttled, so its latencies are not the server's);
-- a mediasoup worker near one full core;
+- a voice server media thread near one full core (`aspen_voice_media_thread_cpu_seconds`);
 - memory growth per hour, fitted over a steady phase of at least ten minutes: resident memory, and
   the heap the servers' allocator reports (`aspen_memory_allocated_bytes`). Resident memory that
   grows while the heap does not is the allocator keeping freed memory; a growing heap is a leak.

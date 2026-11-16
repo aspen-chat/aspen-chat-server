@@ -48,9 +48,13 @@ running unregistered was removed while it ran, or its API servers are older than
 
 Signalling works but media does not flow. Either:
 
-- the media ports (`[rtc] min_port` to `max_port`, UDP and TCP) are closed, or
+- the media ports are closed: UDP and TCP, `[rtc] min_port` and one more for each further media
+  thread, as the startup log's `media listening` lines give them; or
 - `[rtc] announced_address` is not the address clients can reach. Behind NAT it must be the public
   one.
+
+A connection that has not connected within thirty seconds ends, so such people are taken out of the
+call and their clients join again, over and over.
 
 When only some people are affected, or calls take seconds to connect, check each family apart: the
 startup log has one `media listening` line for each family the server announces.

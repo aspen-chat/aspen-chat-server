@@ -575,6 +575,7 @@
     "speaking": "{name} está hablando",
     "mutedMark": "Micrófono silenciado",
     "deafenedMark": "Audio desactivado",
+    "heldMark": "En espera",
     "callBarLabel": "Tu llamada",
     "connected": "Voz conectada",
     "joining": "Uniéndose…",

@@ -1,5 +1,5 @@
 //! A voice server with no media: it publishes the reports a real one would, so the API server's
-//! side of the contract can be exercised without mediasoup. Each invocation sends one report,
+//! side of the contract can be exercised without media. Each invocation sends one report,
 //! to the report stream on its subject as the server it names, and waits for the stream to take
 //! it.
 //!
@@ -10,10 +10,11 @@
 //! ```
 //!
 //! Reports: `load <server> <participants>`, `session-started <server> <session> <channel>`,
-//! `snapshot <server> <session> <channel> [<user>[:muted][:deafened][:sharing]...]`, `held
+//! `snapshot <server> <session> <channel> [<user>[:muted][:deafened][:sharing][:held]...]`, `held
 //! <server> <lane> [<session>...]`, and, sent as the server `--server <server>` names, `joined
 //! <session> <channel> <user> [<sign-in>]`, `left <session> <channel> <user>`, `speaking <session> <channel>
-//! <user> <true|false>`, `state <session> <channel> <user> <muted> <deafened>`, `ended <session>
+//! <user> <true|false>`, `state <session> <channel> <user> <muted> <deafened> [<sharing>
+//! [<held>]]`, `ended <session>
 //! <channel>`. Also `verify <token>
 //! <public key> <server>` checks a signed join token against the base64url Ed25519 public key
 //! the way a voice server would, and `command-kick
@@ -163,6 +164,7 @@ async fn main() {
                         user,
                         muted: marks.contains(&"muted"),
                         deafened: marks.contains(&"deafened"),
+                        held: marks.contains(&"held"),
                         sharing_screen: marks.contains(&"sharing"),
                         sign_in: None,
                     }
@@ -212,6 +214,7 @@ async fn main() {
             user: uuid(rest.get(3)),
             muted: flag(rest.get(4)),
             deafened: flag(rest.get(5)),
+            held: rest.get(7).is_some_and(|v| v == "true"),
             sharing_screen: rest.get(6).is_some_and(|v| v == "true"),
         },
         "ended" => VoiceReport::SessionEnded {

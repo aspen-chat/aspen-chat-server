@@ -26,7 +26,7 @@ FROM debian:bookworm AS build
 ARG MIN_CA_CERTIFICATES
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
-        pkg-config libssl-dev libpq-dev python3 python3-pip python3-venv \
+        pkg-config libssl-dev libpq-dev \
     && rm -rf /var/lib/apt/lists/* \
     && dpkg --compare-versions "$(dpkg-query -Wf '${Version}' ca-certificates)" \
         ge "$MIN_CA_CERTIFICATES"
