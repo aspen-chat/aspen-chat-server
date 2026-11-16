@@ -139,4 +139,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261111_135637_message_attachment_position::M,
     &migrations::m20261111_143412_moderation_log_operator::M,
     &migrations::m20261111_145810_held_message_list_by_id::M,
+    &migrations::m20261116_034814_voice_participant_held::M,
 ];

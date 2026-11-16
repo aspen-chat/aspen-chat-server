@@ -179,6 +179,10 @@ pub struct ParticipantSnapshot {
     pub user: Uuid,
     pub muted: bool,
     pub deafened: bool,
+    /// On hold (`setState`'s `held`). Absent from a voice server that predates holds, which
+    /// means not held.
+    #[serde(default)]
+    pub held: bool,
     pub sharing_screen: bool,
     /// The sign-in their join token was issued to, as `ParticipantJoined::sign_in` names it,
     /// so a participant the snapshot records (their join's report lost) is taken out if it has
@@ -237,6 +241,10 @@ pub enum VoiceReport {
         user: Uuid,
         muted: bool,
         deafened: bool,
+        /// On hold: a phone call has their device, and nothing of theirs is sent or sent to
+        /// them. Absent in a report from a voice server that predates holds, which means not.
+        #[serde(default)]
+        held: bool,
         /// Whether the participant has a screen (or window, or game) video producer. Absent in
         /// a report from a voice server that predates screen sharing, which means not sharing.
         #[serde(default)]
@@ -457,14 +465,30 @@ mod tests {
                 user: Uuid::nil(),
                 muted: true,
                 deafened: false,
+                held: true,
                 sharing_screen: true,
                 sign_in: Some("s1".to_string()),
             }],
         };
-        let json = serde_json::to_value(&report).unwrap();
+        let mut json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["type"], "sessionSnapshot");
         assert_eq!(json["participants"][0]["sharingScreen"], true);
-        assert_eq!(serde_json::from_value::<VoiceReport>(json).unwrap(), report);
+        assert_eq!(json["participants"][0]["held"], true);
+        assert_eq!(
+            serde_json::from_value::<VoiceReport>(json.clone()).unwrap(),
+            report
+        );
+        // From a voice server that predates holds: nobody is held.
+        json["participants"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("held");
+        let VoiceReport::SessionSnapshot { participants, .. } =
+            serde_json::from_value::<VoiceReport>(json).unwrap()
+        else {
+            panic!("a snapshot");
+        };
+        assert!(!participants[0].held);
         let held = serde_json::to_value(VoiceReport::SessionsHeld {
             server: Uuid::nil(),
             partition: 3,

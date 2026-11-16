@@ -241,9 +241,9 @@ A phone puts the call on hold while a phone call has its audio (CallKit's hold, 
   slot, no share's sound, no video (`Command::SetHeld` on the media thread). When the hold ends,
   what they receive starts over, video on a keyframe.
 - Their own mute and deafen stand beside it, unchanged, and apply again when it ends.
-- Everyone in the call is told (`participantState`, and `held` on `ready`'s participants), so
-  clients show a participant as on hold rather than muted. The reports to the API server carry their
-  mute and deafen alone.
+- Everyone in the call is told (`participantState`, and `held` on `ready`'s participants), and the
+  API server through the `participantState` report and snapshots, so `VoiceParticipant.held` shows
+  the hold to everyone who can see the channel, in the call or not, apart from a mute.
 - Someone put on hold while speaking stops speaking at once, as a mute does.
 
 ### A moderator's mute
@@ -266,11 +266,13 @@ microphone never speaks. The same levels fill the audio slots.
 
 ## State reports
 
-- The `participantState` report carries `sharing_screen`. It is sent when a screen goes live or
-  stops, as well as with mute and deafen changes, and after the join of a participant who replaced
-  another socket's or joined muted by a moderator.
-- `VoiceParticipant.sharingScreen` follows it, so a client can mark who is sharing without being in
-  the call.
+- The `participantState` report carries `held` and `sharing_screen`. It is sent when a screen goes
+  live or stops, as well as with mute, deafen, and hold changes, and after the join of a participant
+  who replaced another socket's or joined muted by a moderator.
+- `VoiceParticipant.held` and `.sharingScreen` follow it, so a client can mark who is on hold and
+  who is sharing without being in the call. Each is published in the same event as the mute and
+  deafen, to the same readers (`record_state`), and a snapshot that finds one wrong sets it right. A
+  voice server that predates holds reports none, which records as not held.
 
 ## Resuming
 

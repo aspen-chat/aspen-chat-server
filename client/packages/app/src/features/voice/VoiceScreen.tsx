@@ -6,6 +6,7 @@ import {
   MonitorIcon,
   PhoneDisconnectIcon,
   PhoneIcon,
+  PhonePauseIcon,
   ProhibitIcon,
   SpeakerHighIcon,
   SpeakerSlashIcon,
@@ -241,6 +242,7 @@ export function CallStage({
                     speaking={participant.speaking}
                     muted={participant.muted}
                     deafened={participant.deafened}
+                    held={participant.held}
                     sharingScreen={participant.sharingScreen}
                     camera={cameraOf(participant.user)}
                   />
@@ -333,6 +335,7 @@ function ParticipantTile({
   speaking,
   muted,
   deafened,
+  held,
   sharingScreen,
   camera,
 }: {
@@ -341,6 +344,7 @@ function ParticipantTile({
   speaking: boolean;
   muted: boolean;
   deafened: boolean;
+  held: boolean;
   sharingScreen: boolean;
   /** Their camera, which takes the avatar's place and widens the tile to the picture's shape. */
   camera: MediaStreamTrack | null;
@@ -408,6 +412,7 @@ function ParticipantTile({
         anchorRef={tile}
       />
       <span className="flex gap-1 text-ink-faint">
+        {held && <PhonePauseIcon size={14} aria-label={m.voice.heldMark} />}
         {muted && <MicrophoneSlashIcon size={14} aria-label={m.voice.mutedMark} />}
         {deafened && <HeadphonesIcon size={14} aria-label={m.voice.deafenedMark} />}
         {sharingScreen && <MonitorIcon size={14} aria-label={m.voice.sharingMark} />}

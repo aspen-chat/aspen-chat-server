@@ -21,7 +21,11 @@
   microphone's track disabled while shown. The user's own `muted` and `deafened` stay as they are.
 - The voice server sends nothing of the user's while held, and nothing to them.
 - `onHold` lists the others the server says are on hold, from `ready` and `participantState`, in id
-  order, so a participant on hold can be shown apart from one muted.
+  order.
+- Who is on hold shows from their call record (`VoiceParticipant.held`, kept by the store like
+  `muted`), as a phone with a pause mark (`heldMark`) before their other marks, in the sidebar
+  (`VoiceParticipants`) and on the call screen's tiles alike, so it shows to those outside the call
+  too, and apart from a mute.
 
 ### Refused state changes
 

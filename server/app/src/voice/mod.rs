@@ -189,6 +189,7 @@ struct VoiceParticipant {
     muted: bool,
     deafened: bool,
     sharing_screen: bool,
+    held: bool,
 }
 
 impl From<&VoiceSession> for message_enum::VoiceSession {
@@ -214,6 +215,7 @@ fn participant_record(
         muted: row.muted,
         deafened: row.deafened,
         sharing_screen: row.sharing_screen,
+        held: row.held,
     }
 }
 

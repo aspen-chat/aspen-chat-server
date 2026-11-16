@@ -457,6 +457,7 @@ impl Rooms {
                         user: participant.user,
                         muted: participant.silenced(),
                         deafened: participant.deafened,
+                        held: participant.held,
                         sharing_screen: participant.sharing_screen(),
                         sign_in: participant.sign_in.clone(),
                     })
@@ -1226,6 +1227,7 @@ impl Rooms {
             user: participant.user,
             muted: participant.silenced(),
             deafened: participant.deafened,
+            held: participant.held,
             sharing_screen: participant.sharing_screen(),
         }
     }

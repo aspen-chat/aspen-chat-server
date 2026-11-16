@@ -10,6 +10,7 @@ function person(n: number, lastSpokeAt: number | null): VoiceParticipantState {
     joinedAt: `2026-09-26T00:00:${String(n).padStart(2, "0")}Z`,
     muted: false,
     deafened: false,
+    held: false,
     sharingScreen: false,
     speaking: false,
     lastSpokeAt,

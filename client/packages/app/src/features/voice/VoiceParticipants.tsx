@@ -4,6 +4,7 @@ import {
   HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
+  PhonePauseIcon,
   ProhibitIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
@@ -29,8 +30,8 @@ import { format } from "@/i18n/messages";
 
 /**
  * Who is in a voice channel's call, under the channel in the sidebar: a small avatar with a
- * green ring while they speak, their name, and marks for muted, deafened, sharing, and muted
- * for this user. Past fifteen people, the fifteen who spoke most recently. Clicking a person
+ * green ring while they speak, their name, and marks for on hold, muted, deafened, sharing, and
+ * muted for this user. Past fifteen people, the fifteen who spoke most recently. Clicking a person
  * shows their profile beside them; right-clicking, or the dots, opens what can be done to them.
  */
 export function VoiceParticipants({ channelId }: { channelId: string }) {
@@ -50,6 +51,7 @@ export function VoiceParticipants({ channelId }: { channelId: string }) {
           speaking={participant.speaking}
           muted={participant.muted}
           deafened={participant.deafened}
+          held={participant.held}
           sharingScreen={participant.sharingScreen}
         />
       ))}
@@ -70,6 +72,7 @@ function ParticipantRow({
   speaking,
   muted,
   deafened,
+  held,
   sharingScreen,
 }: {
   channelId: string;
@@ -77,6 +80,7 @@ function ParticipantRow({
   speaking: boolean;
   muted: boolean;
   deafened: boolean;
+  held: boolean;
   sharingScreen: boolean;
 }) {
   const m = useMessages();
@@ -115,6 +119,13 @@ function ParticipantRow({
       className="group/participant flex items-center gap-1.5 rounded-md px-2 py-0.5 text-sm text-ink-muted"
     >
       <Identity user={user} name={name} avatar={avatar} channelId={channelId} anchorRef={row} />
+      {held && (
+        <PhonePauseIcon
+          size={14}
+          aria-label={m.voice.heldMark}
+          className="shrink-0 text-ink-faint"
+        />
+      )}
       {muted && (
         <MicrophoneSlashIcon
           size={14}
