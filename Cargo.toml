@@ -11,3 +11,9 @@ exclude = [
   "plugins/calendar",
 ]
 default-members = ["server"]
+
+# str0m with `SdpApi::set_stream_id`, which the voice server's media threads need to move a reused
+# section into its new sender's stream, so receivers keep a person's voice and video in sync. Pinned
+# by commit; replaced by the release that includes it once str0m publishes one.
+[patch.crates-io]
+str0m = { git = "https://github.com/Xaeroxe/str0m", rev = "f2ce59520cc17ca2db4bf4f308a207e22e3ac172" }

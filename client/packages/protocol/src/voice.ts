@@ -32,6 +32,7 @@ import type {
 } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
+import { compareIds } from "./order";
 import { ApiProblemError } from "./problem";
 import {
   type FileSink,
@@ -350,6 +351,15 @@ type Heard =
       readonly user: string;
     };
 
+/** A `silence` naming no one, as the voice server starts each place in a call. */
+const NO_SILENCE = JSON.stringify([[], []]);
+
+function sameHeard(a: Heard, b: Heard): boolean {
+  return a.carries === "audioSlot"
+    ? b.carries === "audioSlot" && a.slot === b.slot
+    : b.carries === "shareAudio" && a.user === b.user;
+}
+
 /** The answer sent to one revision of a connection's offers, sent again if it is offered again. */
 interface Answered {
   readonly revision: number;
@@ -398,6 +408,15 @@ export class VoiceCall {
   #videoShown = 0;
   /** The last `watch` sent, as JSON, so an unchanged one is not sent again. */
   #watching = "[]";
+  /** Who is in the call besides this client, as `ready` and `participantJoined` say. */
+  readonly #participants = new Set<string>();
+  /**
+   * The volumes `setUserVolume` set, by user and source, standing over `userVolume` until
+   * `refreshVolumes` reads it again.
+   */
+  readonly #volumes = new Map<string, number>();
+  /** The last `silence` sent, as JSON, so an unchanged one is not sent again. */
+  #silencing = NO_SILENCE;
   /** Whether the connection has failed and an ICE restart was asked for, until it connects. */
   #restarting = false;
   /** Rejects the join in progress when an offer cannot be applied. */
@@ -947,9 +966,11 @@ export class VoiceCall {
 
   /** Sets every received sound's gain again from `userVolume`, after what it answers has changed. */
   refreshVolumes(): void {
+    this.#volumes.clear();
     for (const mid of this.#heard.keys()) {
       this.#applyVolume(mid);
     }
+    this.#updateSilence();
   }
 
   /**
@@ -957,10 +978,37 @@ export class VoiceCall {
    * is heard right now; the preference behind it is the caller's to keep.
    */
   setUserVolume(userId: string, gain: number, source: AudioSource = "microphone"): void {
+    this.#volumes.set(`${userId} ${source}`, gain);
     for (const [mid, heard] of this.#heard) {
       if (this.#heardUser(heard) === userId && this.#heardSource(heard) === source) {
         this.#media.setVolume(mid, gain);
       }
+    }
+    this.#updateSilence();
+  }
+
+  /** How loud `userId`'s `source` is heard: what `setUserVolume` set, else `userVolume`. */
+  #volumeOf(userId: string, source: AudioSource): number {
+    return this.#volumes.get(`${userId} ${source}`) ?? this.#userVolume(userId, source);
+  }
+
+  /**
+   * Tells the voice server whom this client plays at nothing (blocked, or turned all the way
+   * down), when that changed: it then sends none of their voice or their share's sound, so none
+   * plays even for the moment before a slot's volume follows its new occupant.
+   */
+  #updateSilence(): void {
+    if (this.#signal === null) {
+      return;
+    }
+    const silenced = (source: AudioSource) =>
+      [...this.#participants].filter((user) => this.#volumeOf(user, source) === 0).sort(compareIds);
+    const voices = silenced("microphone");
+    const shares = silenced("screenAudio");
+    const key = JSON.stringify([voices, shares]);
+    if (key !== this.#silencing) {
+      this.#silencing = key;
+      this.#send({ type: "silence", voices, shares });
     }
   }
 
@@ -980,10 +1028,7 @@ export class VoiceCall {
       return;
     }
     const user = this.#heardUser(heard);
-    this.#media.setVolume(
-      mid,
-      user === null ? 1 : this.#userVolume(user, this.#heardSource(heard)),
-    );
+    this.#media.setVolume(mid, user === null ? 1 : this.#volumeOf(user, this.#heardSource(heard)));
   }
 
   #sendState(): void {
@@ -1185,6 +1230,8 @@ export class VoiceCall {
     this.#pending.clear();
     this.#sources.clear();
     this.#watching = "[]";
+    this.#participants.clear();
+    this.#silencing = NO_SILENCE;
     this.#restarting = false;
     this.#answered = { call: null, capture: null };
     this.#negotiation = Promise.resolve();
@@ -1407,7 +1454,9 @@ export class VoiceCall {
       this.#lastReady = frame;
       this.#files.reset(frame);
       this.#sources.clear();
+      this.#participants.clear();
       for (const participant of frame.participants) {
+        this.#participants.add(participant.user);
         this.#sources.set(participant.user, new Set(participant.sources.map((s) => s.source)));
       }
       signal.onClose = () => {
@@ -1421,8 +1470,13 @@ export class VoiceCall {
         this.#onFrame(f);
       };
       // What is shown already (a call rejoined, or another joined from the call screen) is
-      // watched from what `ready` says is sent.
+      // watched from what `ready` says is sent, and whom the user silenced is said: a new place
+      // in a call silences no one, and a resumed one keeps what was said before.
       this.#updateWatch();
+      if (first.type === "identify") {
+        this.#silencing = NO_SILENCE;
+      }
+      this.#updateSilence();
     } catch (error) {
       signal.close();
       throw error;
@@ -1635,15 +1689,21 @@ export class VoiceCall {
     }
     const self = this.#lastReady?.user;
     for (const [mid, section] of this.#sections) {
-      if (this.#heard.has(mid)) {
-        continue;
-      }
       let heard: Heard;
       if (section.carries === "audioSlot") {
         heard = { carries: "audioSlot", slot: section.slot };
       } else if (section.carries === "shareAudio") {
         heard = { carries: "shareAudio", user: section.user };
       } else {
+        continue;
+      }
+      const before = this.#heard.get(mid);
+      if (before !== undefined) {
+        // A section the server took over for other sound plays on, at the new sound's volume.
+        if (!sameHeard(before, heard)) {
+          this.#heard.set(mid, heard);
+          this.#applyVolume(mid);
+        }
         continue;
       }
       const transceiver = this.#transceiver(mid);
@@ -1661,9 +1721,12 @@ export class VoiceCall {
       }
     }
     const shown = (source: "screen" | "camera", held: readonly RemoteScreen[]) => {
+      // A section the server took over for someone else's video is theirs from now on.
       const kept = held.filter((video) => {
         const section = this.#sections.get(video.id);
-        return section?.carries === "video" && section.source === source;
+        return (
+          section?.carries === "video" && section.source === source && section.user === video.user
+        );
       });
       for (const [mid, section] of this.#sections) {
         if (
@@ -1765,7 +1828,14 @@ export class VoiceCall {
         this.#sourcesChanged(frame.user, new Set(frame.sources.map((s) => s.source)));
         break;
       case "participantLeft":
+        this.#participants.delete(frame.user);
         this.#sourcesChanged(frame.user, new Set());
+        this.#updateSilence();
+        break;
+      case "participantJoined":
+        // Someone already silenced (blocked, say) is silenced from their first word.
+        this.#participants.add(frame.user);
+        this.#updateSilence();
         break;
       case "kicked":
         if (frame.reason === "serverStopping" || frame.reason === "connectionFailed") {
@@ -1812,7 +1882,6 @@ export class VoiceCall {
         }
         break;
       case "ready":
-      case "participantJoined":
       case "speaking":
       case "fileOffered":
       case "fileWithdrawn":

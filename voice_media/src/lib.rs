@@ -95,6 +95,13 @@ pub enum Command {
         participant: ParticipantId,
         video: Vec<(Uuid, MediaSource)>,
     },
+    /// Whose voice, and whose share's sound, the participant has silenced (blocked, or set to
+    /// nothing): never carried in its slots nor offered to it. Each list replaces the last.
+    Silence {
+        participant: ParticipantId,
+        voices: Vec<Uuid>,
+        shares: Vec<Uuid>,
+    },
     /// Stops or resumes one section the participant receives, with no renegotiation.
     SetReceiving {
         participant: ParticipantId,

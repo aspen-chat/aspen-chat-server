@@ -379,6 +379,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ClientMessage::Send { source, external } => state.rooms.send(seat, source, external),
             ClientMessage::StopSending { source } => state.rooms.stop_sending(seat, source),
             ClientMessage::Watch { video } => state.rooms.watch(seat, video),
+            ClientMessage::Silence { voices, shares } => state.rooms.silence(seat, voices, shares),
             ClientMessage::SetReceiving { mid, receiving } => {
                 state.rooms.set_receiving(seat, mid, receiving)
             }

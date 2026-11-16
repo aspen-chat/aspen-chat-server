@@ -1099,6 +1099,28 @@ impl Rooms {
         Ok(())
     }
 
+    pub fn silence(
+        &self,
+        seat: Seat,
+        mut voices: Vec<Uuid>,
+        mut shares: Vec<Uuid>,
+    ) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
+        let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;
+        // No call holds more people to silence than it holds.
+        voices.truncate(self.max_participants_per_call);
+        shares.truncate(self.max_participants_per_call);
+        self.media(
+            &room,
+            Command::Silence {
+                participant: media,
+                voices,
+                shares,
+            },
+        );
+        Ok(())
+    }
+
     pub fn set_receiving(&self, seat: Seat, mid: String, receiving: bool) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
         let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;

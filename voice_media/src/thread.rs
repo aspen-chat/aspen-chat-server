@@ -11,20 +11,21 @@
 //! changes (an audio slot moving to another speaker, a video resumed), rebased at the new
 //! source's first packet. A video `Out` starts on a keyframe, asking its source for one.
 
-use crate::connection::Connection;
+use crate::connection::{Connection, Want};
 use crate::keyframe::is_keyframe;
 use crate::levels::{INTERVAL, Levels};
 use crate::net::{self, Listener, Stream};
 use crate::{CallId, Command, Event, Events, Failure, MediaConfig, ParticipantId};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixDatagram;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+use str0m::format::Codec;
 use str0m::media::{KeyframeRequestKind, Mid};
 use str0m::net::{Protocol, Receive, Transmit};
 use str0m::rtp::{ExtensionValues, RtpPacket, RtpWrite, SeqNo};
@@ -157,8 +158,23 @@ fn thread_allocated_bytes() -> Option<u64> {
 }
 
 type SourceKey = (ParticipantId, MediaSource);
-/// The sections a connection should hold, by kind and what each carries.
-type Wanted = Vec<(MediaKind, SectionContent)>;
+/// The sections a connection should hold.
+type Wanted = Vec<Want>;
+
+/// The most audio a section holds for a new occupant while the offer that moves the section into
+/// its stream is answered: a second, at 20 ms a packet. What comes before is dropped; what is held
+/// is sent on once the answer comes, a round trip later than it would have been.
+const HELD_AUDIO_PACKETS: usize = 50;
+
+/// The stream a receiver plays a person's voice and camera in.
+fn camera_stream(user: Uuid) -> String {
+    format!("{user}-camera")
+}
+
+/// The stream a receiver plays a person's share, its picture and its sound, in.
+fn share_stream(user: Uuid) -> String {
+    format!("{user}-share")
+}
 
 /// A section a receiver is sent, and where its numbering stands.
 struct Out {
@@ -175,8 +191,11 @@ struct Out {
     last_at: Option<Instant>,
     /// Whether the client wants it (`setReceiving`).
     receiving: bool,
-    /// The offer that added it; nothing is sent on it before that offer's answer.
+    /// The offer that gave it its content and stream; nothing is sent on it before that offer's
+    /// answer, so a receiver knows whose media it carries before any arrives.
     revision: u64,
+    /// Audio for it that came while that offer was unanswered, sent on with the answer.
+    held: VecDeque<Forwarded>,
 }
 
 struct Sending {
@@ -203,6 +222,15 @@ struct Participant {
     speaking: bool,
     /// The sources whose routes name this participant as a receiver.
     routed: Vec<SourceKey>,
+    /// Whose voice, and whose share's sound, this participant has silenced (blocked, or set to
+    /// nothing): never put in its slots nor offered, so none of it can reach it.
+    silenced_voices: HashSet<Uuid>,
+    silenced_shares: HashSet<Uuid>,
+    /// How this participant's own clock (its sender reports) maps onto the server's, so what it
+    /// sends is forwarded with the timing it captured it at: the first report's time and when it
+    /// arrived. One for every connection of the participant, so its streams keep their timing
+    /// against each other.
+    clock: Option<(SystemTime, Instant)>,
 }
 
 impl Participant {
@@ -257,6 +285,130 @@ fn sleep_on(fds: &mut [libc::pollfd], timeout: Duration) {
         let millis = timeout.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
         // SAFETY: `fds` is a valid array of `fds.len()` pollfds that outlives the call.
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+    }
+}
+
+/// What a section needs of a packet it forwards, copied once for every receiver (and kept, for
+/// a section that holds it).
+#[derive(Clone)]
+struct Forwarded {
+    key: SourceKey,
+    ssrc: u32,
+    sequence: u64,
+    timestamp: u32,
+    marker: bool,
+    payload_type: u8,
+    codec: Option<Codec>,
+    keyframe: bool,
+    audio_level: Option<i8>,
+    voice_activity: Option<bool>,
+    payload: Arc<[u8]>,
+    /// When it was captured, on the server's clock (`sender_time`).
+    wallclock: Instant,
+}
+
+enum Sent {
+    Written,
+    /// A video section starting on a new source, which waits for its keyframe.
+    WantsKeyframe,
+    Not,
+}
+
+/// When the sender captured `packet`, on this server's clock: the time its latest sender report
+/// gives, carried forward by the RTP time since, mapped onto the server's clock by `clock`, the
+/// sender's first report and when it arrived. Every stream of one sender keeps its timing against
+/// the others this way, whatever the network or the sender's encoders add to one of them, so a
+/// receiver synchronizes them. Before the sender's first report, when it arrived stands in.
+fn sender_time(
+    clock: &mut Option<(SystemTime, Instant)>,
+    packet: &RtpPacket,
+    rate: u32,
+) -> Instant {
+    let Some(info) = &packet.last_sender_info else {
+        return packet.timestamp;
+    };
+    // RTP times wrap at 32 bits; the packet is within half the range of the report either way.
+    let ticks = packet
+        .header
+        .timestamp
+        .wrapping_sub(info.rtp_time.numer() as u32) as i32;
+    let since = Duration::from_secs_f64(f64::from(ticks.unsigned_abs()) / f64::from(rate));
+    let sent = if ticks >= 0 {
+        info.ntp_time + since
+    } else {
+        info.ntp_time - since
+    };
+    let (first, arrived) = *clock.get_or_insert((sent, packet.timestamp));
+    match sent.duration_since(first) {
+        Ok(later) => arrived + later,
+        Err(earlier) => arrived.checked_sub(earlier.duration()).unwrap_or(arrived),
+    }
+}
+
+/// Writes `forwarded` on section `mid` of `conn`, numbered for that section: rebased onto where
+/// its numbering stands when the section starts on a new source, so a receiver hears one
+/// unbroken stream.
+fn send_on(
+    out: &mut Out,
+    conn: &mut Connection,
+    mid: Mid,
+    forwarded: &Forwarded,
+    now: Instant,
+) -> Sent {
+    let audio = out.kind == MediaKind::Audio;
+    if out.source != Some(forwarded.key) {
+        if !audio && !forwarded.keyframe {
+            return Sent::WantsKeyframe;
+        }
+        let next = out.last_seq.map_or(1, |last| last + 1);
+        out.base = forwarded.sequence.wrapping_sub(next);
+        let clock = if audio { 48_000 } else { 90_000 };
+        let elapsed = out.last_at.map_or(0, |at| {
+            (now.duration_since(at).as_micros() * clock / 1_000_000) as u32
+        });
+        out.ts_offset = out
+            .last_ts
+            .wrapping_add(elapsed)
+            .wrapping_sub(forwarded.timestamp);
+        out.source = Some(forwarded.key);
+    }
+    let out_sequence = forwarded.sequence.wrapping_sub(out.base);
+    if out.last_seq.is_some_and(|last| out_sequence + 1024 < last) {
+        // From before the source began here: a retransmission of what was never sent on.
+        return Sent::Not;
+    }
+    let out_timestamp = forwarded.timestamp.wrapping_add(out.ts_offset);
+    if out.last_seq.is_none_or(|last| out_sequence > last) {
+        out.last_seq = Some(out_sequence);
+        out.last_ts = out_timestamp;
+        out.last_at = Some(now);
+    }
+    let payload_type = forwarded
+        .codec
+        .and_then(|c| conn.payload_type(c))
+        .unwrap_or(forwarded.payload_type);
+    let mut write = RtpWrite::new(
+        payload_type.into(),
+        SeqNo::from(out_sequence),
+        out_timestamp,
+        forwarded.wallclock,
+        forwarded.payload.clone(),
+    )
+    .marker(forwarded.marker)
+    .ext_vals(ExtensionValues {
+        audio_level: forwarded.audio_level,
+        voice_activity: forwarded.voice_activity,
+        ..Default::default()
+    })
+    .nackable(!audio);
+    if matches!(out.content, SectionContent::AudioSlot { .. }) {
+        // Names the speaker for a client that reads contributing sources.
+        write = write.csrc(&[forwarded.ssrc]);
+    }
+    if conn.write(mid, write) {
+        Sent::Written
+    } else {
+        Sent::Not
     }
 }
 
@@ -370,6 +522,20 @@ impl Thread {
                 };
                 p.watch = video;
                 p.watch.truncate(self.config.max_watched_video);
+                self.settle(participant);
+            }
+            Command::Silence {
+                participant,
+                voices,
+                shares,
+            } => {
+                let Some(p) = self.participants.get_mut(&participant) else {
+                    return;
+                };
+                p.silenced_voices = voices.into_iter().collect();
+                p.silenced_shares = shares.into_iter().collect();
+                let call = p.call;
+                self.assign_slots(call);
                 self.settle(participant);
             }
             Command::SetReceiving {
@@ -491,6 +657,9 @@ impl Thread {
                 deafened: false,
                 speaking: false,
                 routed: Vec::new(),
+                silenced_voices: HashSet::new(),
+                silenced_shares: HashSet::new(),
+                clock: None,
             },
         );
         let entry = self.calls.entry(call).or_default();
@@ -710,7 +879,8 @@ impl Thread {
             return;
         }
         self.mark(index);
-        // Changes made while the offer waited go out now.
+        // What its sections held for the offer goes on, then changes made meanwhile go out.
+        self.release_held(participant);
         self.settle(participant);
     }
 
@@ -723,12 +893,22 @@ impl Thread {
         };
         let mut call = Vec::new();
         let mut capture = Vec::new();
-        for slot in 0..p.slots.len() as u8 {
-            call.push((MediaKind::Audio, SectionContent::AudioSlot { slot }));
+        let user_of = |id: &ParticipantId| self.participants.get(id).map(|o| o.user);
+        for (slot, occupant) in p.slots.iter().enumerate() {
+            // In its occupant's stream, which their camera shares; an empty slot keeps its own.
+            call.push(Want {
+                kind: MediaKind::Audio,
+                content: SectionContent::AudioSlot { slot: slot as u8 },
+                stream: occupant.as_ref().and_then(user_of).map(camera_stream),
+            });
         }
         for source in SOURCES {
             if let Some(sending) = p.sending.get(&source) {
-                let wanted = (source.kind(), SectionContent::Sending { source });
+                let wanted = Want {
+                    kind: source.kind(),
+                    content: SectionContent::Sending { source },
+                    stream: None,
+                };
                 if sending.external {
                     capture.push(wanted);
                 } else {
@@ -747,14 +927,27 @@ impl Thread {
             if !owner.sending.contains_key(&source) || source.kind() != MediaKind::Video {
                 continue;
             }
-            call.push((MediaKind::Video, SectionContent::Video { user, source }));
+            let stream = match source {
+                MediaSource::Screen => share_stream(user),
+                _ => camera_stream(user),
+            };
+            call.push(Want {
+                kind: MediaKind::Video,
+                content: SectionContent::Video { user, source },
+                stream: Some(stream.clone()),
+            });
             // A sharer watching its own share (the preview of one sent from outside the
-            // browser) is not sent its sound back.
+            // browser) is not sent its sound back, nor one who silenced it.
             if source == MediaSource::Screen
                 && user != p.user
+                && !p.silenced_shares.contains(&user)
                 && owner.sending.contains_key(&MediaSource::ScreenAudio)
             {
-                call.push((MediaKind::Audio, SectionContent::ShareAudio { user }));
+                call.push(Want {
+                    kind: MediaKind::Audio,
+                    content: SectionContent::ShareAudio { user },
+                    stream: Some(stream),
+                });
             }
         }
         (call, capture)
@@ -793,8 +986,10 @@ impl Thread {
             let offered: Vec<(Mid, MediaKind, SectionContent)> = connection
                 .sections
                 .iter()
+                .filter(|s| !s.idle)
                 .map(|s| (s.mid, s.kind, s.content.clone()))
                 .collect();
+            let restarted = connection.restarted.clone();
             let Some(p) = self.participants.get_mut(&participant) else {
                 return;
             };
@@ -805,8 +1000,10 @@ impl Thread {
                     if matches!(content, SectionContent::Sending { .. }) {
                         continue;
                     }
-                    p.outs.entry(mid).or_insert(Out {
-                        content,
+                    // A section given other content or another stream starts over, keeping its
+                    // numbering, once this offer is answered.
+                    let out = p.outs.entry(mid).or_insert(Out {
+                        content: content.clone(),
                         kind,
                         source: None,
                         base: 0,
@@ -816,7 +1013,14 @@ impl Thread {
                         last_at: None,
                         receiving: true,
                         revision,
+                        held: VecDeque::new(),
                     });
+                    if restarted.contains(&mid) {
+                        out.content = content;
+                        out.source = None;
+                        out.revision = revision;
+                        out.held.clear();
+                    }
                 }
             }
             p.tell(Event::Offer {
@@ -879,14 +1083,16 @@ impl Thread {
     // --- Slots and speaking -----------------------------------------------------------------
 
     /// Fills each participant's audio slots: everyone else's microphone while they fit, else the
-    /// most recently loud of those not muted. An occupant stays in its slot while it is among
-    /// those chosen, so a slot changes speaker only to make room.
+    /// most recently loud of those not muted, leaving out those it silenced. An occupant stays in
+    /// its slot while it is among those chosen, so a slot changes speaker only to make room.
     ///
-    /// A participant has as many slots as there are other microphones, up to `audio_slots`, and
-    /// never fewer than it had or than one: each section costs its connection on every poll whether or not
-    /// it carries anything, so a call of six holds five, and a call only renegotiates while it
-    /// grows towards `audio_slots`. A slot is told of (`Event::Slots`) before the offer that adds
-    /// its section.
+    /// A participant has as many slots as there are other microphones it hears, up to
+    /// `audio_slots`, and never fewer than it had or than one: each section costs its connection
+    /// on every poll whether or not it carries anything, so a call of six holds five. A slot is
+    /// told of (`Event::Slots`) before the offer that gives it its occupant, which moves the slot
+    /// into the occupant's stream, so a receiver plays their voice in sync with their camera;
+    /// nothing of the occupant is sent on it until that offer is answered (what comes meanwhile
+    /// is held), so a receiver also knows whose voice it is before any arrives.
     fn assign_slots(&mut self, call: CallId) {
         let Some(members) = self.calls.get(&call).map(|c| c.participants.clone()) else {
             return;
@@ -923,10 +1129,16 @@ impl Thread {
             .filter_map(|id| Some((*id, self.participants.get(id)?.user)))
             .collect();
         for receiver in members {
+            let silenced = self
+                .participants
+                .get(&receiver)
+                .map(|p| p.silenced_voices.clone())
+                .unwrap_or_default();
             let chosen: Vec<ParticipantId> = ranked
                 .iter()
                 .map(|(_, id, _, _, _)| *id)
                 .filter(|id| *id != receiver)
+                .filter(|id| users.get(id).is_none_or(|user| !silenced.contains(user)))
                 .take(slots)
                 .collect();
             let Some(p) = self.participants.get_mut(&receiver) else {
@@ -978,12 +1190,8 @@ impl Thread {
                 participant: receiver,
                 assignments,
             });
-            if grew {
-                // Offers the new slots' sections, and routes to them once answered.
-                self.settle(receiver);
-            } else {
-                self.rebuild_routes(receiver);
-            }
+            // Offers the slots their occupants' streams, and routes to them once answered.
+            self.settle(receiver);
         }
     }
 
@@ -1387,13 +1595,26 @@ impl Thread {
             return;
         }
         let key = (participant, source);
-        let keyframe = codec.is_some_and(|c| is_keyframe(c, &packet.payload));
-        let sequence: u64 = *packet.seq_no;
-        let timestamp = packet.header.timestamp;
-        let now = Instant::now();
+        let audio = source.kind() == MediaKind::Audio;
+        let wallclock = sender_time(&mut p.clock, &packet, if audio { 48_000 } else { 90_000 });
+        let forwarded = Forwarded {
+            key,
+            ssrc,
+            sequence: *packet.seq_no,
+            timestamp: packet.header.timestamp,
+            marker: packet.header.marker,
+            payload_type: *packet.header.payload_type,
+            codec,
+            keyframe: codec.is_some_and(|c| is_keyframe(c, &packet.payload)),
+            audio_level: packet.header.ext_vals.audio_level,
+            voice_activity: packet.header.ext_vals.voice_activity,
+            payload: packet.payload.clone(),
+            wallclock,
+        };
         let Some(routes) = self.routes.get(&key).cloned() else {
             return;
         };
+        let now = Instant::now();
         let mut want_keyframe = false;
         for route in routes {
             let Some(receiver) = self.participants.get_mut(&route.receiver) else {
@@ -1405,66 +1626,56 @@ impl Thread {
             let Some(out) = receiver.outs.get_mut(&route.mid) else {
                 continue;
             };
-            let audio = out.kind == MediaKind::Audio;
-            if !out.receiving || (deafened && audio) || out.revision > answered {
+            if !out.receiving || (deafened && audio) {
                 continue;
             }
-            if out.source != Some(key) {
-                if !audio && !keyframe {
-                    want_keyframe = true;
-                    continue;
+            if out.revision > answered {
+                // The receiver does not yet know whose this section is: audio waits for the
+                // answer, and video starts on the keyframe asked for once it comes.
+                if audio {
+                    if out.held.len() == HELD_AUDIO_PACKETS {
+                        out.held.pop_front();
+                    }
+                    out.held.push_back(forwarded.clone());
                 }
-                let next = out.last_seq.map_or(1, |last| last + 1);
-                out.base = sequence.wrapping_sub(next);
-                let clock = if audio { 48_000 } else { 90_000 };
-                let elapsed = out.last_at.map_or(0, |at| {
-                    (now.duration_since(at).as_micros() * clock / 1_000_000) as u32
-                });
-                out.ts_offset = out.last_ts.wrapping_add(elapsed).wrapping_sub(timestamp);
-                out.source = Some(key);
-            }
-            let out_sequence = sequence.wrapping_sub(out.base);
-            if out.last_seq.is_some_and(|last| out_sequence + 1024 < last) {
-                // From before the source began here: a retransmission of what was never sent on.
                 continue;
             }
-            let out_timestamp = timestamp.wrapping_add(out.ts_offset);
-            if out.last_seq.is_none_or(|last| out_sequence > last) {
-                out.last_seq = Some(out_sequence);
-                out.last_ts = out_timestamp;
-                out.last_at = Some(now);
-            }
-            let slot = matches!(out.content, SectionContent::AudioSlot { .. });
             let Some(target_conn) = self.conns[target].as_mut() else {
                 continue;
             };
-            let payload_type = codec
-                .and_then(|c| target_conn.payload_type(c))
-                .unwrap_or(*packet.header.payload_type);
-            let mut write = RtpWrite::new(
-                payload_type.into(),
-                SeqNo::from(out_sequence),
-                out_timestamp,
-                packet.timestamp,
-                packet.payload.clone(),
-            )
-            .marker(packet.header.marker)
-            .ext_vals(ExtensionValues {
-                audio_level: packet.header.ext_vals.audio_level,
-                voice_activity: packet.header.ext_vals.voice_activity,
-                ..Default::default()
-            })
-            .nackable(!audio);
-            if slot {
-                // Names the speaker for a client that reads contributing sources.
-                write = write.csrc(&[ssrc]);
-            }
-            if target_conn.write(route.mid, write) {
-                self.mark(target);
+            match send_on(out, target_conn, route.mid, &forwarded, now) {
+                Sent::Written => self.mark(target),
+                Sent::WantsKeyframe => want_keyframe = true,
+                Sent::Not => {}
             }
         }
         if want_keyframe {
             self.request_keyframe(key, KeyframeRequestKind::Pli);
+        }
+    }
+
+    /// Sends on what `receiver`'s sections held while their offers were unanswered, for those
+    /// whose offer now is.
+    fn release_held(&mut self, receiver: ParticipantId) {
+        let Some(p) = self.participants.get_mut(&receiver) else {
+            return;
+        };
+        let target = p.conn;
+        let Some(conn) = self.conns[target].as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut written = false;
+        for (mid, out) in p.outs.iter_mut() {
+            if out.held.is_empty() || out.revision > conn.answered {
+                continue;
+            }
+            for forwarded in std::mem::take(&mut out.held) {
+                written |= matches!(send_on(out, conn, *mid, &forwarded, now), Sent::Written);
+            }
+        }
+        if written {
+            self.mark(target);
         }
     }
 

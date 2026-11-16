@@ -229,8 +229,9 @@ async fn open_microphone(media: &voice_media::Media, peer: &mut Peer) -> String 
             external: false,
         },
     );
+    let microphone = sending(MediaSource::Microphone);
     peer.until(media, WAIT, |e| {
-        matches!(e, Event::Offer { revision: 2, .. })
+        matches!(e, Event::Offer { sections, .. } if sections.iter().any(|s| s.content == microphone))
     })
     .await
     .expect("an offer of a section to send the microphone on");
@@ -254,7 +255,18 @@ async fn a_slot_moves_to_who_speaks_and_its_numbering_runs_on() {
     }
     let bob_mid = open_microphone(&media, &mut bob).await;
     bob.send_audio(&bob_mid, Some(-100));
-    ann.until(&media, WAIT, |_| false).await;
+    // Every client answers its offers as they come, as a browser does: Cat's slot moves to
+    // Bob's stream too, and an offer left unanswered fails its connection.
+    let bob_user = bob.user;
+    tokio::join!(
+        ann.until(
+            &media,
+            WAIT,
+            |e| matches!(e, Event::Slots { assignments, .. }
+            if assignments.iter().any(|a| a.slot == 0 && a.user == Some(bob_user)))
+        ),
+        cat.settle(&media),
+    );
     assert_eq!(
         ann.slots.get(&0),
         Some(&Some(bob.user)),
@@ -279,7 +291,9 @@ async fn a_slot_moves_to_who_speaks_and_its_numbering_runs_on() {
         Some(&Some(cat.user)),
         "the slot carries Cat now"
     );
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Cat is sent on the slot once Ann has answered the offer that moves it to her stream; what
+    // she said meanwhile follows at once.
+    ann.settle(&media).await;
 
     let slot_mid = ann.mid_of(&SectionContent::AudioSlot { slot: 0 }).unwrap();
     let heard: Vec<_> = ann
@@ -672,4 +686,189 @@ async fn a_muted_microphone_gives_up_its_slot_at_once() {
     .await
     .expect("the slot moves as Bob is muted");
     assert_eq!(ann.slots.get(&0), Some(&Some(cat.user)));
+}
+
+/// The stream id the latest offer a peer was given names for section `mid`.
+fn stream_of(peer: &Peer, mid: &str) -> Option<String> {
+    let sdp = peer.log.iter().rev().find_map(|e| match e {
+        Event::Offer {
+            connection: voice_protocol::signal::ConnectionKind::Call,
+            sdp,
+            ..
+        } => Some(sdp.clone()),
+        _ => None,
+    })?;
+    let section = sdp
+        .split("\nm=")
+        .find(|s| s.lines().any(|l| l.trim() == format!("a=mid:{mid}")))?;
+    section
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("a=msid:"))
+        .and_then(|msid| msid.split(' ').next())
+        .map(str::to_string)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_persons_voice_and_camera_share_a_stream_and_a_share_has_its_own() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    for peer in [&mut ann, &mut bob] {
+        peer.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+            .await
+            .unwrap();
+    }
+    open_microphone(&media, &mut ann).await;
+    for source in [MediaSource::Camera, MediaSource::Screen] {
+        send(
+            &media,
+            Command::Send {
+                participant: ann.id,
+                source,
+                external: false,
+            },
+        );
+    }
+    ann.settle(&media).await;
+    for source in [MediaSource::Camera, MediaSource::Screen] {
+        let mid = ann.mid_of(&sending(source)).unwrap();
+        ann.send_video(&mid);
+    }
+    tokio::join!(ann.settle(&media), bob.settle(&media));
+    send(
+        &media,
+        Command::Watch {
+            participant: bob.id,
+            video: vec![
+                (ann.user, MediaSource::Camera),
+                (ann.user, MediaSource::Screen),
+            ],
+        },
+    );
+    tokio::join!(ann.settle(&media), bob.settle(&media));
+    let camera = format!("{}-camera", ann.user);
+    let share = format!("{}-share", ann.user);
+    let slot = bob.mid_of(&SectionContent::AudioSlot { slot: 0 }).unwrap();
+    assert_eq!(bob.slots.get(&0), Some(&Some(ann.user)));
+    assert_eq!(stream_of(&bob, &slot), Some(camera.clone()), "her voice");
+    let of = |source| {
+        bob.mid_of(&SectionContent::Video {
+            user: ann.user,
+            source,
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        stream_of(&bob, &of(MediaSource::Camera)),
+        Some(camera),
+        "her camera"
+    );
+    assert_eq!(
+        stream_of(&bob, &of(MediaSource::Screen)),
+        Some(share),
+        "her screen"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_silenced_reaches_no_slot_of_who_silenced_them() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    let mut cat = Peer::join(&media, call, 3);
+    for peer in [&mut ann, &mut bob, &mut cat] {
+        peer.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+            .await
+            .unwrap();
+    }
+    // Bob has blocked Ann before either speaks.
+    send(
+        &media,
+        Command::Silence {
+            participant: bob.id,
+            voices: vec![ann.user],
+            shares: vec![ann.user],
+        },
+    );
+    let ann_mid = open_microphone(&media, &mut ann).await;
+    tokio::join!(bob.settle(&media), cat.settle(&media));
+    let cat_mid = open_microphone(&media, &mut cat).await;
+    tokio::join!(ann.settle(&media), bob.settle(&media));
+    ann.send_audio(&ann_mid, Some(-10));
+    cat.send_audio(&cat_mid, Some(-10));
+    tokio::join!(ann.settle(&media), bob.settle(&media), cat.settle(&media));
+    bob.drain();
+    tokio::join!(ann.settle(&media), bob.settle(&media), cat.settle(&media));
+    let ann_ssrc = ann.ssrc(&ann_mid).await.unwrap();
+    let cat_ssrc = cat.ssrc(&cat_mid).await.unwrap();
+    let heard = bob.drain();
+    assert!(
+        !bob.slots.values().any(|o| *o == Some(ann.user)),
+        "Ann holds none of Bob's slots: {:?}",
+        bob.slots
+    );
+    assert!(
+        heard.iter().any(|p| p.csrc == vec![cat_ssrc]),
+        "Bob hears Cat"
+    );
+    assert!(
+        !heard.iter().any(|p| p.csrc == vec![ann_ssrc]),
+        "and never Ann"
+    );
+    // Cat, who silenced no one, hears Ann.
+    assert!(cat.slots.values().any(|o| *o == Some(ann.user)));
+
+    // Watching Ann's share, Bob is given its picture and not its sound; Cat both.
+    for source in [MediaSource::Screen, MediaSource::ScreenAudio] {
+        send(
+            &media,
+            Command::Send {
+                participant: ann.id,
+                source,
+                external: false,
+            },
+        );
+    }
+    ann.settle(&media).await;
+    let screen = ann.mid_of(&sending(MediaSource::Screen)).unwrap();
+    let sound = ann.mid_of(&sending(MediaSource::ScreenAudio)).unwrap();
+    ann.send_video(&screen);
+    ann.send_audio(&sound, Some(-20));
+    for peer in [bob.id, cat.id] {
+        send(
+            &media,
+            Command::Watch {
+                participant: peer,
+                video: vec![(ann.user, MediaSource::Screen)],
+            },
+        );
+    }
+    tokio::join!(ann.settle(&media), bob.settle(&media), cat.settle(&media));
+    let picture = SectionContent::Video {
+        user: ann.user,
+        source: MediaSource::Screen,
+    };
+    let share_sound = SectionContent::ShareAudio { user: ann.user };
+    assert!(bob.mid_of(&picture).is_some() && bob.mid_of(&share_sound).is_none());
+    assert!(cat.mid_of(&picture).is_some() && cat.mid_of(&share_sound).is_some());
+
+    // Unblocked, Ann takes one of his slots.
+    send(
+        &media,
+        Command::Silence {
+            participant: bob.id,
+            voices: vec![],
+            shares: vec![],
+        },
+    );
+    tokio::join!(ann.settle(&media), bob.settle(&media), cat.settle(&media));
+    bob.drain();
+    tokio::join!(ann.settle(&media), bob.settle(&media), cat.settle(&media));
+    assert!(bob.slots.values().any(|o| *o == Some(ann.user)));
+    assert!(
+        bob.drain().iter().any(|p| p.csrc == vec![ann_ssrc]),
+        "Bob hears Ann"
+    );
 }

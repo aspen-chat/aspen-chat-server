@@ -32,12 +32,35 @@ const VP8_RTX: u8 = 97;
 const H264: u8 = 102;
 const H264_RTX: u8 = 103;
 
+/// Whether a section is one the server receives on, which only another such section can take
+/// over: the other way round, its direction would change from receiving to sending.
+fn sending(content: &SectionContent) -> bool {
+    matches!(content, SectionContent::Sending { .. })
+}
+
 /// What a section is for, as negotiated or offered.
 #[derive(Debug, Clone)]
 pub struct Sectioned {
     pub mid: Mid,
     pub kind: MediaKind,
+    /// What it carries, or carried last while `idle`.
     pub content: SectionContent,
+    /// The MediaStream a receiver plays it in, for a section the server sends on: a receiver
+    /// synchronizes the audio and video of one stream.
+    pub stream: Option<String>,
+    /// Kept inactive for the next section of its kind and role, rather than stopped: a stopped
+    /// section stays in every later offer, so a connection that stopped one per change would
+    /// offer ever more.
+    pub idle: bool,
+}
+
+/// A section a connection should hold: its kind, what it carries, and for a section the server
+/// sends on, the stream a receiver plays it in (`None` keeps the one it has).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Want {
+    pub kind: MediaKind,
+    pub content: SectionContent,
+    pub stream: Option<String>,
 }
 
 /// How much of what a sending stream sends in a second may be resends, before str0m drops the
@@ -74,6 +97,9 @@ pub struct Connection {
     pub restart_ice: bool,
     /// Every section offered (the outstanding offer's included), in order.
     pub sections: Vec<Sectioned>,
+    /// The sections the latest offer added, gave other content, or moved into another stream:
+    /// what each carries starts over, once that offer is answered.
+    pub restarted: Vec<Mid>,
     /// Payload type to codec, as negotiated.
     codecs: Vec<(u8, Codec)>,
     /// The section each received SSRC arrives on.
@@ -146,6 +172,7 @@ impl Connection {
             restart_ice: false,
             resending: HashSet::new(),
             sections: Vec::new(),
+            restarted: Vec::new(),
             codecs: Vec::new(),
             ssrc_mid: HashMap::new(),
             connected: false,
@@ -220,65 +247,142 @@ impl Connection {
 
     /// Offers the sections `wanted` if they differ from those offered, or an ICE restart is
     /// wanted, and no offer is outstanding. Returns the offer's revision and text.
-    pub fn negotiate(
-        &mut self,
-        wanted: &[(MediaKind, SectionContent)],
-        now: Instant,
-    ) -> Option<(u64, String)> {
+    ///
+    /// A section no longer wanted goes idle (inactive), and the next one wanted of its kind and
+    /// role takes it over, given its content and stream; only when none is idle is one added. So
+    /// a connection never holds more sections than it once needed at once.
+    pub fn negotiate(&mut self, wanted: &[Want], now: Instant) -> Option<(u64, String)> {
         if self.pending.is_some() || self.failed.is_some() {
             return None;
         }
-        let missing: Vec<(MediaKind, SectionContent)> = wanted
-            .iter()
-            .filter(|(_, content)| !self.sections.iter().any(|s| &s.content == content))
-            .cloned()
-            .collect();
-        let extra: Vec<Mid> = self
+        let held = |s: &Sectioned, w: &Want| !s.idle && s.content == w.content;
+        let going: Vec<Mid> = self
             .sections
             .iter()
-            .filter(|s| !wanted.iter().any(|(_, content)| content == &s.content))
+            .filter(|s| !s.idle && !wanted.iter().any(|w| held(s, w)))
             .map(|s| s.mid)
             .collect();
-        if missing.is_empty() && extra.is_empty() && !self.restart_ice && self.revision > 0 {
+        let moved: Vec<(Mid, String)> = wanted
+            .iter()
+            .filter_map(|w| {
+                let section = self.sections.iter().find(|s| held(s, w))?;
+                let stream = w.stream.as_ref()?;
+                (section.stream.as_ref() != Some(stream)).then(|| (section.mid, stream.clone()))
+            })
+            .collect();
+        let coming: Vec<&Want> = wanted
+            .iter()
+            .filter(|w| !self.sections.iter().any(|s| held(s, w)))
+            .collect();
+        if going.is_empty()
+            && moved.is_empty()
+            && coming.is_empty()
+            && !self.restart_ice
+            && self.revision > 0
+        {
             return None;
         }
+        // Sections going idle, and those already idle, are taken over before any is added.
+        let mut free: Vec<(Mid, MediaKind, bool)> = self
+            .sections
+            .iter()
+            .filter(|s| s.idle || going.contains(&s.mid))
+            .map(|s| (s.mid, s.kind, sending(&s.content)))
+            .collect();
+        let mut placed: Vec<(Option<Mid>, Want)> = Vec::new();
+        for want in coming {
+            let role = sending(&want.content);
+            let taken = free
+                .iter()
+                .position(|(_, kind, r)| *kind == want.kind && *r == role)
+                .map(|at| free.remove(at).0);
+            placed.push((taken, want.clone()));
+        }
+        let idling: Vec<Mid> = free
+            .iter()
+            .map(|(mid, _, _)| *mid)
+            .filter(|mid| !self.sections.iter().any(|s| s.mid == *mid && s.idle))
+            .collect();
         let restart = std::mem::take(&mut self.restart_ice);
         let applied = self.guarded(|rtc| {
             let mut change = rtc.sdp_api();
-            let added: Vec<(Mid, MediaKind, SectionContent)> = missing
-                .into_iter()
-                .map(|(kind, content)| {
-                    let direction = match content {
-                        SectionContent::Sending { .. } => Direction::RecvOnly,
-                        _ => Direction::SendOnly,
-                    };
-                    let rtc_kind = match kind {
-                        MediaKind::Audio => RtcKind::Audio,
-                        MediaKind::Video => RtcKind::Video,
-                    };
-                    (
-                        change.add_media(rtc_kind, direction, None, None, None),
-                        kind,
-                        content,
-                    )
-                })
-                .collect();
-            for mid in &extra {
-                change.stop_media(*mid);
+            let mut added = Vec::new();
+            for (taken, want) in &placed {
+                let direction = if sending(&want.content) {
+                    Direction::RecvOnly
+                } else {
+                    Direction::SendOnly
+                };
+                match taken {
+                    Some(mid) => {
+                        change.set_direction(*mid, direction);
+                        if let Some(stream) = &want.stream {
+                            change.set_stream_id(*mid, stream);
+                        }
+                    }
+                    None => {
+                        let rtc_kind = match want.kind {
+                            MediaKind::Audio => RtcKind::Audio,
+                            MediaKind::Video => RtcKind::Video,
+                        };
+                        added.push(change.add_media(
+                            rtc_kind,
+                            direction,
+                            want.stream.clone(),
+                            None,
+                            None,
+                        ));
+                    }
+                }
+            }
+            for mid in &idling {
+                change.set_direction(*mid, Direction::Inactive);
+            }
+            for (mid, stream) in &moved {
+                change.set_stream_id(*mid, stream);
             }
             // The fragment a restart's checks name; str0m takes it up with the answer.
             let restarted = restart.then(|| change.ice_restart(true).ufrag);
             (added, restarted, change.apply())
         })?;
         let (added, restarted, offer) = applied;
-        self.sections.retain(|s| !extra.contains(&s.mid));
-        self.resending.retain(|mid| !extra.contains(mid));
-        self.sections
-            .extend(
-                added
-                    .into_iter()
-                    .map(|(mid, kind, content)| Sectioned { mid, kind, content }),
-            );
+        let mut changed = Vec::new();
+        let mut added = added.into_iter();
+        for (taken, want) in placed {
+            let mid = match taken {
+                Some(mid) => {
+                    let section = self.sections.iter_mut().find(|s| s.mid == mid)?;
+                    section.content = want.content;
+                    section.idle = false;
+                    if want.stream.is_some() {
+                        section.stream = want.stream;
+                    }
+                    mid
+                }
+                None => {
+                    let mid = added.next()?;
+                    self.sections.push(Sectioned {
+                        mid,
+                        kind: want.kind,
+                        content: want.content,
+                        stream: want.stream,
+                        idle: false,
+                    });
+                    mid
+                }
+            };
+            changed.push(mid);
+        }
+        for section in &mut self.sections {
+            if idling.contains(&section.mid) {
+                section.idle = true;
+            }
+            if let Some((mid, stream)) = moved.iter().find(|(mid, _)| *mid == section.mid) {
+                section.stream = Some(stream.clone());
+                changed.push(*mid);
+            }
+        }
+        self.restarted = changed;
         let (offer, pending) = offer?;
         self.touch(now);
         self.pending = Some(pending);
@@ -296,7 +400,7 @@ impl Connection {
     /// The format parameters each section's codecs are offered with beyond the connection's own.
     fn format_edits(&self) -> Vec<FormatEdit> {
         let mut edits = Vec::new();
-        for section in &self.sections {
+        for section in self.sections.iter().filter(|s| !s.idle) {
             let mid = section.mid.to_string();
             match &section.content {
                 SectionContent::Sending {
@@ -369,9 +473,12 @@ impl Connection {
         Ok(())
     }
 
+    /// What every section that carries something carries; an idle one is left out, so a
+    /// client takes what it carried as gone.
     pub fn sections_for_client(&self) -> Vec<Section> {
         self.sections
             .iter()
+            .filter(|s| !s.idle)
             .map(|s| Section {
                 mid: s.mid.to_string(),
                 kind: s.kind,
@@ -380,8 +487,9 @@ impl Connection {
             .collect()
     }
 
+    /// The section `mid` names while it carries something; an idle one carries nothing.
     pub fn section(&self, mid: Mid) -> Option<&Sectioned> {
-        self.sections.iter().find(|s| s.mid == mid)
+        self.sections.iter().find(|s| s.mid == mid && !s.idle)
     }
 
     pub fn codec(&self, payload_type: u8) -> Option<Codec> {
@@ -463,6 +571,106 @@ mod tests {
     use str0m::change::SdpOffer;
     use str0m::{Candidate, Rtc};
 
+    fn connection() -> (Connection, Rtc) {
+        str0m::crypto::from_feature_flags().install_process_default();
+        let candidate = Candidate::host("127.0.0.1:40000".parse().unwrap(), "udp").unwrap();
+        let connection = Connection::new(ParticipantId(1), ConnectionKind::Call, &[candidate]);
+        (connection, Rtc::builder().build(Instant::now()))
+    }
+
+    /// Offers `wanted`, has `client` answer, and returns the offer.
+    fn offer(connection: &mut Connection, client: &mut Rtc, wanted: &[Want]) -> String {
+        let (revision, sdp) = connection.negotiate(wanted, Instant::now()).unwrap();
+        let answer = client
+            .sdp_api()
+            .accept_offer(SdpOffer::from_sdp_string(&sdp).unwrap())
+            .unwrap();
+        connection
+            .accept_answer(revision, &answer.to_sdp_string())
+            .unwrap();
+        sdp
+    }
+
+    fn slot(stream: Option<&str>) -> Want {
+        Want {
+            kind: MediaKind::Audio,
+            content: SectionContent::AudioSlot { slot: 0 },
+            stream: stream.map(str::to_string),
+        }
+    }
+
+    fn camera(user: uuid::Uuid) -> Want {
+        Want {
+            kind: MediaKind::Video,
+            content: SectionContent::Video {
+                user,
+                source: voice_protocol::signal::MediaSource::Camera,
+            },
+            stream: Some(format!("{user}-camera")),
+        }
+    }
+
+    /// Video watched and unwatched over and over takes the section it left idle each time, so
+    /// the offer never grows; each time in the stream of whoever it carries now.
+    #[test]
+    fn a_section_left_idle_is_taken_over_in_its_new_stream() {
+        let (mut connection, mut client) = connection();
+        let users: Vec<uuid::Uuid> = (0..6).map(|_| uuid::Uuid::now_v7()).collect();
+        let mut sizes = Vec::new();
+        for (round, user) in users.iter().enumerate() {
+            let wanted = if round % 2 == 0 {
+                vec![slot(None), camera(*user)]
+            } else {
+                vec![slot(None)]
+            };
+            let sdp = offer(&mut connection, &mut client, &wanted);
+            sizes.push(sdp.matches("\nm=").count());
+            if round % 2 == 0 {
+                assert!(sdp.contains(&format!("a=msid:{user}-camera ")), "{sdp}");
+                let section = connection
+                    .sections
+                    .iter()
+                    .find(|s| matches!(s.content, SectionContent::Video { .. }))
+                    .unwrap();
+                assert!(connection.restarted.contains(&section.mid));
+            } else {
+                assert!(sdp.contains("a=inactive"), "{sdp}");
+                assert_eq!(
+                    connection.sections_for_client().len(),
+                    1,
+                    "an idle section is no one's"
+                );
+            }
+        }
+        assert!(
+            sizes.iter().all(|n| *n == 2),
+            "m-lines per offer: {sizes:?}"
+        );
+    }
+
+    /// A section whose content stays but whose stream changes (a slot's new occupant) is moved
+    /// into the new stream in the next offer, and restarts.
+    #[test]
+    fn a_new_occupant_moves_its_slot_into_their_stream() {
+        let (mut connection, mut client) = connection();
+        offer(&mut connection, &mut client, &[slot(Some("ann-camera"))]);
+        let sdp = offer(&mut connection, &mut client, &[slot(Some("bob-camera"))]);
+        assert!(sdp.contains("a=msid:bob-camera "), "{sdp}");
+        assert_eq!(sdp.matches("\nm=").count(), 1);
+        assert_eq!(connection.restarted.len(), 1);
+        // The same occupant again, or none named, offers nothing.
+        assert!(
+            connection
+                .negotiate(&[slot(Some("bob-camera"))], Instant::now())
+                .is_none()
+        );
+        assert!(
+            connection
+                .negotiate(&[slot(None)], Instant::now())
+                .is_none()
+        );
+    }
+
     /// The `a=ice-ufrag` an SDP names.
     fn ufrag_of(sdp: &str) -> String {
         sdp.lines()
@@ -480,7 +688,11 @@ mod tests {
         let candidate = Candidate::host("127.0.0.1:40000".parse().unwrap(), "udp").unwrap();
         let mut connection = Connection::new(ParticipantId(1), ConnectionKind::Call, &[candidate]);
         let mut client = Rtc::builder().build(Instant::now());
-        let slot = [(MediaKind::Audio, SectionContent::AudioSlot { slot: 0 })];
+        let slot = [Want {
+            kind: MediaKind::Audio,
+            content: SectionContent::AudioSlot { slot: 0 },
+            stream: None,
+        }];
         let (revision, first) = connection.negotiate(&slot, Instant::now()).unwrap();
         assert_eq!(connection.ufrag, ufrag_of(&first));
         let answer = client

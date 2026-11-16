@@ -91,6 +91,12 @@ pub struct Connection {
     local: SocketAddr,
     stopped: AtomicBool,
     keyframes_wanted: AtomicU64,
+    /// The capture clock's first presentation time, in microseconds, and the instant it was
+    /// sent, shared by every stream of the capture: each frame is stamped with the instant its
+    /// presentation time comes to on that anchor, not the instant it is sent, so the sender
+    /// reports of its picture and its sound agree however long the encoders take, and a receiver
+    /// synchronizes them.
+    epoch: Mutex<Option<(f64, Instant)>>,
 }
 
 /// The capture's connection while one runs; one capture runs at a time.
@@ -169,6 +175,7 @@ pub fn connect(offer: &str) -> Result<String, String> {
         local,
         stopped: AtomicBool::new(false),
         keyframes_wanted: AtomicU64::new(0),
+        epoch: Mutex::new(None),
     });
     connection.touch();
     let network = Arc::clone(&connection);
@@ -390,6 +397,16 @@ impl RtpSender {
         let rate = self.kind.clock_rate();
         let samples = (since_first.max(0.0) * f64::from(rate.get()) / 1e6) as u64;
         let connection = &self.connection;
+        let captured = {
+            let mut epoch = connection.epoch.lock().expect("epoch lock");
+            let (first_pts, first_at) = *epoch.get_or_insert((pts_us, Instant::now()));
+            let offset = Duration::from_secs_f64((pts_us - first_pts).abs() / 1e6);
+            if pts_us >= first_pts {
+                first_at + offset
+            } else {
+                first_at.checked_sub(offset).unwrap_or(first_at)
+            }
+        };
         if connection.stopped.load(Ordering::SeqCst) {
             return;
         }
@@ -413,7 +430,7 @@ impl RtpSender {
             return;
         };
         let time = MediaTime::new(samples, rate);
-        if writer.write(pt, Instant::now(), time, data).is_ok() {
+        if writer.write(pt, captured, time, data).is_ok() {
             connection.drain(&mut state);
         }
     }

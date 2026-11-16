@@ -73,6 +73,10 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 [rate_limits.frames.watch]
 user = { requests = 120, per_seconds = 60, burst = 30 }
 
+# Each block, unblock, or volume set to nothing or back may move a slot and renegotiate.
+[rate_limits.frames.silence]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
 # Pausing what is received changes forwarding alone.
 [rate_limits.frames.setReceiving]
 user = { requests = 600, per_seconds = 60, burst = 100 }

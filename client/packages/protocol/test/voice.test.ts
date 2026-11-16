@@ -1504,6 +1504,84 @@ describe("VoiceCall", () => {
     expect(volumes).toEqual(["0=0", "s1=1"]);
   });
 
+  it("tells the server whom it plays at nothing, as people come and volumes change", async () => {
+    FakeSocket.behaviour = new Map();
+    let blocked = new Set(["blocked"]);
+    FakeSocket.readyParticipants = [
+      { user: "blocked", muted: false, deafened: false, speaking: false, sources: [] },
+      { user: "friend", muted: false, deafened: false, speaking: false, sources: [] },
+    ];
+    const { call } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      userVolume: (user) => (blocked.has(user) ? 0 : 1),
+    });
+    await call.join(channel);
+    await settle();
+    const socket = FakeSocket.instances[0];
+    const silences = () => socket?.sent.filter((f) => f.type === "silence") ?? [];
+    expect(silences()).toEqual([{ type: "silence", voices: ["blocked"], shares: ["blocked"] }]);
+    // Someone already blocked who joins is silenced from the start.
+    blocked.add("late");
+    socket?.frame({ type: "participantJoined", user: "late", muted: false, deafened: false });
+    await settle();
+    expect(silences().at(-1)).toEqual({
+      type: "silence",
+      voices: ["blocked", "late"],
+      shares: ["blocked", "late"],
+    });
+    // Turned all the way down for their voice alone, then back up.
+    call.setUserVolume("friend", 0);
+    expect(silences().at(-1)).toEqual({
+      type: "silence",
+      voices: ["blocked", "friend", "late"],
+      shares: ["blocked", "late"],
+    });
+    call.setUserVolume("friend", 0.5);
+    expect(silences().at(-1)?.voices).toEqual(["blocked", "late"]);
+    // Unblocked, and nothing sent again for what has not changed.
+    blocked = new Set();
+    call.refreshVolumes();
+    expect(silences().at(-1)).toEqual({ type: "silence", voices: [], shares: [] });
+    const sent = silences().length;
+    call.refreshVolumes();
+    expect(silences()).toHaveLength(sent);
+    FakeSocket.readyParticipants = [];
+  });
+
+  it("follows a section the server hands to someone else", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, volumes, played, connection } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      userVolume: (user, source) => (user === "cat" && source === "screenAudio" ? 0.25 : 1),
+    });
+    await call.join(channel);
+    call.showVideo();
+    await settle();
+    const socket = FakeSocket.instances[0];
+    socket?.watched.push(
+      { mid: "v1", kind: "video", carries: "video", user: "bob", source: "camera" },
+      { mid: "a1", kind: "audio", carries: "shareAudio", user: "bob" },
+    );
+    socket?.offer();
+    await settle();
+    expect(call.state.cameras.map((c) => [c.user, c.id])).toEqual([["bob", "v1"]]);
+    // The same sections, now Cat's: her camera, her share's sound at her share's volume.
+    socket?.watched.splice(
+      0,
+      2,
+      { mid: "v1", kind: "video", carries: "video", user: "cat", source: "camera" },
+      { mid: "a1", kind: "audio", carries: "shareAudio", user: "cat" },
+    );
+    socket?.offer();
+    await settle();
+    expect(call.state.cameras.map((c) => [c.user, c.id])).toEqual([["cat", "v1"]]);
+    expect(call.state.cameras[0]?.track).toBe(connection()?.transceiver("v1")?.receiver.track);
+    expect(volumes.at(-1)).toBe("a1=0.25");
+    expect(played.filter((id) => id === "a1")).toHaveLength(1);
+  });
+
   it("ranks unreachable servers last and builds signalling URLs", () => {
     const ranked = rankCandidates([
       { candidate: servers.far, latencyMs: Infinity },

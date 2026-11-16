@@ -3900,8 +3900,7 @@ dependencies = [
 [[package]]
 name = "is"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72dd0494853a6c3769c87adc610e8b228fd8c65c41cc4d2717ff6151ee2d6c73"
+source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
 dependencies = [
  "crc",
  "serde",
@@ -6608,8 +6607,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "str0m"
 version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357c7e453c033c8bb59e912312f9f9ff07c2a9ce7268bcb94f0c828a5b47e58f"
+source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
 dependencies = [
  "arrayvec",
  "base64ct",
@@ -6629,8 +6627,7 @@ dependencies = [
 [[package]]
 name = "str0m-aws-lc-rs"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ec90dfd6ceb4b82131b494e21ee555ad35d565bdf9ab4077fd67924a0e8a5fe"
+source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -6641,8 +6638,7 @@ dependencies = [
 [[package]]
 name = "str0m-proto"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6a9a46a0f013add7a1d0d53d9bc92c85c1ac95243140fe0d073fb6e57c99b63"
+source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
 dependencies = [
  "base64ct",
  "dimpl",

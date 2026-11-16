@@ -297,6 +297,17 @@ pub enum ClientMessage {
     Watch {
         video: Vec<WatchedVideo>,
     },
+    /// Whose voice, and whose share's sound, the client has silenced (blocked, or set to
+    /// nothing), replacing what it said before: the server puts no one in `voices` in the
+    /// client's audio slots and offers no share sound of anyone in `shares`, so nothing of theirs
+    /// reaches it, not even for a moment as a slot changes hands. Each list is cut to the call's
+    /// most participants.
+    Silence {
+        #[serde(default)]
+        voices: Vec<Uuid>,
+        #[serde(default)]
+        shares: Vec<Uuid>,
+    },
     /// Stops or resumes one section the client receives, with no renegotiation: video off
     /// screen, someone muted for this client alone.
     SetReceiving {
