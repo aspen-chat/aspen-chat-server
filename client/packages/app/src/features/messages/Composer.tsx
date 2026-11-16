@@ -157,7 +157,7 @@ const menuItemClass =
 
 /** The box's own buttons beside it, and the emoji keyboard's while the keyboard is open. */
 const toolButtonShape =
-  "shrink-0 rounded-md border p-2.5 outline-none hover:bg-surface-hover pressed:bg-surface-hover " +
+  "composer-control shrink-0 rounded-md outline-none hover:bg-surface-hover pressed:bg-surface-hover " +
   "focus-visible:ring-2 focus-visible:ring-accent/50";
 const toolButtonClass = toolButtonShape + " border-line text-ink-muted hover:text-ink";
 const openToolButtonClass = toolButtonShape + " border-accent text-accent";
@@ -1045,7 +1045,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           void send();
         }
       }}
-      className="flex flex-col gap-2 border-t border-line px-4 pt-3 pb-1"
+      className="composer-form flex flex-col gap-2 border-line px-4"
     >
       {!starting && <ScheduledStrip channelId={channelId} onEdit={edit} />}
       <HeldMessages place={draftKey} />
@@ -1328,14 +1328,14 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             rows={1}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            className="message-box-text block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
+            className="message-box-text block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md composer-box border-line bg-surface-raised px-3 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
           {draft === "" && (
             // The box's own placeholder would wrap, and grow the box, where it is too long for
             // one line; this one is cut short with an ellipsis instead.
             <span
               aria-hidden="true"
-              className="message-box-text pointer-events-none absolute inset-x-[13px] bottom-[9px] truncate text-ink-faint"
+              className="message-box-text pointer-events-none absolute inset-x-[13px] bottom-[calc(var(--composer-box-pad)+var(--composer-rule))] truncate text-ink-faint"
             >
               {placeholder}
             </span>
@@ -1357,7 +1357,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             type="submit"
             aria-label={scheduledFor === null ? m.send : m.scheduled.schedule}
             isDisabled={!canSend}
-            className="shrink-0 rounded-md border border-transparent bg-accent p-2.5 text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="composer-control shrink-0 rounded-md border-transparent bg-accent text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             {scheduledFor === null ? (
               <PaperPlaneRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />

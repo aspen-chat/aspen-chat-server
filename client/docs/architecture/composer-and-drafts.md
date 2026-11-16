@@ -31,7 +31,10 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
   when the message is sent (`ScheduleMessageModal`, as the wide screen's clock button does).
 - The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an
   empty box together (`composer-foot-height` in `styles.css`), at every message text size and
-  spacing, so its top rule meets the typing line's in one line.
+  spacing, so its top rule meets the typing line's in one line. The foot's rule, padding, box
+  padding, and button size are custom properties (`--composer-*`) that the composer is drawn with
+  (`composer-form`, `composer-box`, `composer-control`) and that height adds up, so a change to the
+  composer's dimensions moves the user bar with it; `e2e/panes.spec.ts` checks the two rules meet.
 
 ### Enter
 

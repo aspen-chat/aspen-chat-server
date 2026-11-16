@@ -282,10 +282,11 @@ same commit, as with comments.
   areas never overlap) and `SidebarFooter` (the call bar and the user bar). The bar at the head of
   every pane (`SidebarHeader`, `ChannelHeader`, `DmHeader`, the thread panel's) takes
   `pane-head-height` (`styles.css`) and centres what it holds, so the rules under bars side by side
-  meet in one line, as the user bar's and the composer's do at the foot (`composer-foot-height`); a
-  new pane's bar takes it too. A page of its own beside the community rail (the Administration
-  Dashboard, activity, saved messages) is a `RailPage`, whose rail has the user bar at its foot and
-  whose content scrolls only up and down.
+  meet in one line, as the user bar's and the composer's do at the foot (`composer-foot-height`,
+  added up from the `--composer-*` properties the composer is drawn with, so size the composer
+  through them); a new pane's bar takes it too. A page of its own beside the community rail (the
+  Administration Dashboard, activity, saved messages) is a `RailPage`, whose rail has the user bar
+  at its foot and whose content scrolls only up and down.
 - Events are routed by the server to the communities the user belongs to and to the user alone,
   leaving out channels they may not view, so the client filters nothing itself. An event about a
   user reaches the client once per community shared with them; every copy carries the same `eventId`

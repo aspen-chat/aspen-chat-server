@@ -4,7 +4,9 @@ import { signInToWorld } from "./world";
 /**
  * Resizable panes, against the stubbed world: the channel list, member list, and thread panel
  * each have an edge the reader drags or moves from the keyboard, and this device keeps the
- * width; the bars at their heads are one height, so the rules under them meet.
+ * width; the bars at their heads are one height, so the rules under them meet, and the user bar
+ * at the channel list's foot is as tall as the channel's foot beside it, so the rules over them
+ * meet.
  */
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -85,4 +87,40 @@ test("the bars at the head of the channel list, the channel, and a thread are on
       (await channelHead(page).boundingBox())?.height,
     ])
     .toEqual([53, 53]);
+});
+
+/** The top of the user bar, and of the channel's foot beside it: its typing line. */
+const footTops = (page: Page) =>
+  Promise.all([
+    page
+      .getByRole("button", { name: "Settings", exact: true })
+      .evaluate((button) => button.parentElement?.getBoundingClientRect().top),
+    page
+      .locator("main form textarea")
+      .evaluate((box) => box.closest("form")?.previousElementSibling?.getBoundingClientRect().top),
+  ]);
+
+/** Moves a slider in Settings to its far end. */
+async function settingAtMost(page: Page, slider: string): Promise<void> {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Settings", exact: true })
+    .getByRole("slider", { name: slider })
+    .focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Escape");
+}
+
+test("the rule over the user bar meets the channel's foot at every message text size and spacing", async ({
+  page,
+}) => {
+  const meet = async () => {
+    const [bar, foot] = await footTops(page);
+    return bar !== undefined && foot !== undefined && Math.abs(bar - foot) < 0.5;
+  };
+  await expect.poll(meet).toBe(true);
+  await settingAtMost(page, "Message text size");
+  await expect.poll(meet).toBe(true);
+  await settingAtMost(page, "Line spacing");
+  await expect.poll(meet).toBe(true);
 });

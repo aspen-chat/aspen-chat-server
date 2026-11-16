@@ -704,18 +704,57 @@ body {
   font-size: max(1rem, var(--text-base));
 }
 
-/* The height of a channel's foot at rest, the typing line (`TypingIndicator`, one line of message
-   text) over an empty one-line message box (`Composer`: its rule and padding around the taller of
-   the box and its 42px buttons), at the message text size and spacing. The user bar
-   (`SidebarFooter`) sits beside it at the foot of the sidebar and takes it as its least height, so
-   their top rules meet in one line. Each term is the one those components draw; change them
-   together. */
+/* A channel's foot: the typing line (`TypingIndicator`, one line of message text) over the message
+   box (`Composer`). The user bar (`SidebarFooter`) sits beside it at the foot of the sidebar and
+   takes the foot's height at rest as its least height (`composer-foot-height`), so their top rules
+   meet in one line. The foot's dimensions are these properties, which the composer is drawn with
+   (`composer-form`, `composer-box`, `composer-control`) and `composer-foot-height` adds up, so the
+   two cannot drift apart: a change to the composer's padding, box, or buttons is a change here. */
+:root {
+  --composer-rule: 1px;
+  --composer-pad-top: 0.75rem;
+  --composer-pad-bottom: 0.25rem;
+  --composer-box-pad: 0.5rem;
+  --composer-control: calc(1.25rem + 22px);
+}
+
+/* The composer's form: its rule over the typing line, and its padding around what it holds. */
+@utility composer-form {
+  border-top-width: var(--composer-rule);
+  padding-top: var(--composer-pad-top);
+  padding-bottom: var(--composer-pad-bottom);
+}
+
+/* The message box's block padding and rule; its line is `message-box-text`'s. */
+@utility composer-box {
+  border-width: var(--composer-rule);
+  padding-block: var(--composer-box-pad);
+}
+
+/* The square buttons beside the message box, its icon centred. */
+@utility composer-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--composer-control);
+  height: var(--composer-control);
+  border-width: var(--composer-rule);
+}
+
+/* The foot's height at rest, at the message text size and spacing: the typing line, then the
+   form around an empty one-line box or its buttons, whichever is taller. Nothing else in the form
+   is drawn at rest. */
 @utility composer-foot-height {
   --foot-text: calc(1rem * var(--system-text-scale, 1) * var(--message-text-scale, 1));
   --foot-line: calc(1.5 * var(--message-line-scale, 1));
   min-height: calc(
-    var(--foot-text) * var(--foot-line) + 1px + 1.5rem +
-      max(1.25rem + 22px, max(1rem, var(--foot-text)) * var(--foot-line) + 1rem + 2px)
+    var(--foot-text) * var(--foot-line) + var(--composer-rule) + var(--composer-pad-top) +
+      var(--composer-pad-bottom) +
+      max(
+        var(--composer-control),
+        max(1rem, var(--foot-text)) * var(--foot-line) + 2 * var(--composer-box-pad) + 2 *
+          var(--composer-rule)
+      )
   );
 }
 
