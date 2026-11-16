@@ -25,7 +25,8 @@ use crate::files::Files;
 use crate::peer_connection::{
     Configuration, ConnectionState, DataChannel, DataChannelObserver, DataChannelState,
     DescriptionKind, Direction, IceCandidate, PeerConnection, PeerConnectionError,
-    PeerConnectionFactory, PeerConnectionObserver, SessionDescription, TrackId, TransceiverId,
+    PeerConnectionFactory, PeerConnectionKind, PeerConnectionObserver, SessionDescription, TrackId,
+    TransceiverId,
 };
 use crate::signalling::{Incoming, Signalling, signalling_url};
 use crate::sounds::Sounds;
@@ -44,7 +45,7 @@ use uuid::Uuid;
 use voice_protocol::signal::Grants;
 use voice_protocol::signal::{
     ClientMessage, ConnectionKind, KickReason, MediaSource, ParticipantInfo, RESUME_GRACE_SECONDS,
-    Section, SectionContent, ServerMessage, SlotAssignment, TransferMode, WatchedVideo,
+    Section, SectionContent, ServerMessage, SlotAssignment, SourceInfo, TransferMode, WatchedVideo,
 };
 
 /// How long a candidate has to accept the socket and answer `identify` (or `resume`) with
@@ -122,10 +123,16 @@ pub enum Command {
     /// input device); `None` closes it.
     SetMicrophone(Option<TrackId>),
     /// Sends a camera or a screen (its picture as `screen`, its sound as `screenAudio`) from a
-    /// track the platform opened. A microphone given here is `SetMicrophone`.
+    /// track the platform opened. A microphone given here is `SetMicrophone`. `external` sends
+    /// it on the capture connection, a second peer connection the voice server offers for what
+    /// is sent from outside the call's own (`ConnectionKind::Capture`): the phones' shares go
+    /// there, since a share's sound is a second audio capture, and a WebRTC factory carries one
+    /// audio capture for all its connections, so the share's sound has a factory and so a
+    /// connection of its own.
     StartSource {
         source: MediaSource,
         track: TrackId,
+        external: bool,
     },
     StopSource(MediaSource),
     /// The videos to show, replacing what was watched before.
@@ -294,6 +301,8 @@ pub(crate) enum Timer {
     /// a loss the connection has come back from is let go. Outlives the steps a resume moves
     /// through meanwhile, so it is judged by the epoch alone.
     Restart { epoch: u64 },
+    /// As `Restart`, for a loss of the capture connection.
+    CaptureRestart { epoch: u64 },
 }
 
 /// One signalling socket, numbered so frames from one the call has let go are told apart.
@@ -415,6 +424,24 @@ struct Live {
     /// The last `silence` sent (its voices and shares), so an unchanged one is not sent again.
     /// A new place in a call silences no one; a resumed one keeps what was said before.
     silenced: (Vec<Uuid>, Vec<Uuid>),
+    /// The capture connection, from the first external source asked for until the last is
+    /// stopped: the server offers it once the first `send` with `external` reaches it, and takes
+    /// it away with the last external source.
+    capture: Option<Capture>,
+}
+
+/// The capture connection (`ConnectionKind::Capture`): a second peer connection carrying what
+/// is sent from outside the call's own, every section of it one the client sends. The server
+/// offers and the client answers, as for the call connection; nothing is received on it.
+#[derive(Default)]
+struct Capture {
+    /// Made for the first offer; `None` until it arrives.
+    connection: Option<Peer>,
+    sections: Vec<Section>,
+    transceivers: HashMap<String, TransceiverId>,
+    /// The answer to its latest offer, by revision, for the same reason `Live::answered` is kept.
+    answered: Option<(u64, String)>,
+    lost: Option<Lost>,
 }
 
 /// A loss of the connection mid-call, asking for ICE restarts until it is back.
@@ -434,6 +461,27 @@ impl Live {
 
     fn sending_transceiver(&self, source: MediaSource) -> Option<TransceiverId> {
         self.transceiver_of(|content| *content == SectionContent::Sending { source })
+    }
+
+    /// The capture connection's transceiver sending `source`, with the connection it is on.
+    fn capture_sender(&self, source: MediaSource) -> Option<(Peer, TransceiverId)> {
+        let capture = self.capture.as_ref()?;
+        let peer = capture.connection.clone()?;
+        let section = capture
+            .sections
+            .iter()
+            .find(|section| section.content == SectionContent::Sending { source })?;
+        let transceiver = *capture.transceivers.get(&section.mid)?;
+        Some((peer, transceiver))
+    }
+
+    /// Closes the capture connection and forgets it.
+    fn close_capture(&mut self) {
+        if let Some(capture) = self.capture.take()
+            && let Some(peer) = capture.connection
+        {
+            peer.pc.close();
+        }
     }
 }
 
@@ -656,7 +704,11 @@ impl Call {
                 }
             }
             Command::SetMicrophone(track) => self.set_microphone(track).await,
-            Command::StartSource { source, track } => self.start_source(source, track).await,
+            Command::StartSource {
+                source,
+                track,
+                external,
+            } => self.start_source(source, track, external).await,
             Command::StopSource(source) => self.stop_source(source).await,
             Command::SetWatched(video) => self.set_watched(video).await,
             Command::SetUserVolume { user, source, gain } => {
@@ -872,7 +924,8 @@ impl Call {
             }
             (Some(track), None) => {
                 if self.state.grants.speak {
-                    self.request_source(MediaSource::Microphone, track).await;
+                    self.request_source(MediaSource::Microphone, track, false)
+                        .await;
                 }
             }
             (None, Some(_)) => self.stop_source(MediaSource::Microphone).await,
@@ -881,26 +934,27 @@ impl Call {
     }
 
     /// Asks the server for a section to send `source` on; the offer that brings it takes the
-    /// track.
-    async fn request_source(&mut self, source: MediaSource, track: TrackId) {
-        let Some(live) = &self.live else {
+    /// track. An `external` source is sent on the capture connection, which the server offers
+    /// once the first such `send` reaches it.
+    async fn request_source(&mut self, source: MediaSource, track: TrackId, external: bool) {
+        let Some(live) = &mut self.live else {
             return;
         };
+        if external && live.capture.is_none() {
+            live.capture = Some(Capture::default());
+        }
         self.state.sources.push(LocalSource {
             source,
             track,
             live: false,
+            external,
         });
         let link = live.link.clone();
-        link.send(ClientMessage::Send {
-            source,
-            external: false,
-        })
-        .await;
+        link.send(ClientMessage::Send { source, external }).await;
     }
 
-    async fn start_source(&mut self, source: MediaSource, track: TrackId) {
-        if source == MediaSource::Microphone {
+    async fn start_source(&mut self, source: MediaSource, track: TrackId, external: bool) {
+        if source == MediaSource::Microphone && !external {
             self.set_microphone(Some(track)).await;
             return;
         }
@@ -924,22 +978,27 @@ impl Call {
             return;
         }
         self.state.source_refused = None;
-        self.request_source(source, track).await;
+        self.request_source(source, track, external).await;
     }
 
     /// Stops sending `source`: its sender carries nothing from now, and the server takes its
     /// section away in a later offer. The microphone stays held for the next time it may be
-    /// sent.
+    /// sent. The last external source stopped takes the capture connection with it, as it does
+    /// at the server.
     async fn stop_source(&mut self, source: MediaSource) {
         let Some(at) = self.state.sources.iter().position(|s| s.source == source) else {
             return;
         };
-        self.state.sources.remove(at);
+        let external = self.state.sources.remove(at).external;
         let Some(live) = &mut self.live else {
             return;
         };
         let link = live.link.clone();
-        if let (Some(peer), Some(transceiver)) =
+        if external {
+            if let Some((peer, transceiver)) = live.capture_sender(source) {
+                let _ = peer.pc.replace_track(transceiver, None).await;
+            }
+        } else if let (Some(peer), Some(transceiver)) =
             (live.connection.clone(), live.sending_transceiver(source))
         {
             if source == MediaSource::Microphone {
@@ -948,6 +1007,42 @@ impl Call {
             let _ = peer.pc.replace_track(transceiver, None).await;
         }
         link.send(ClientMessage::StopSending { source }).await;
+        self.release_capture_if_idle();
+    }
+
+    /// Closes the capture connection once no external source is sent or asked for.
+    fn release_capture_if_idle(&mut self) {
+        if self.state.sources.iter().any(|s| s.external) {
+            return;
+        }
+        if let Some(live) = &mut self.live {
+            live.close_capture();
+        }
+    }
+
+    /// Ends what is sent on the capture connection, with `refusal` as the share's reason: the
+    /// connection could not be made or was lost, or the server stopped the sources itself. The
+    /// server is told of each source still asked for.
+    async fn end_capture(&mut self, refusal: Option<Refusal>) {
+        let external: Vec<MediaSource> = self
+            .state
+            .sources
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| s.source)
+            .collect();
+        for source in external {
+            self.stop_source(source).await;
+        }
+        if let Some(live) = &mut self.live {
+            live.close_capture();
+        }
+        if let Some(refusal) = refusal {
+            self.state.source_refused = Some(SourceRefusal {
+                source: MediaSource::Screen,
+                refusal,
+            });
+        }
     }
 
     /// Asks for `video`, the first `max_watched_video` of it: the server gives sections for no
@@ -1330,6 +1425,7 @@ impl Call {
             resuming: None,
             lost: None,
             silenced: (Vec::new(), Vec::new()),
+            capture: None,
         });
         let id = self.id();
         let observer = Arc::new(Forwarder {
@@ -1339,7 +1435,7 @@ impl Call {
         match self
             .platform
             .peer_connections
-            .create(Configuration::default(), observer)
+            .create(PeerConnectionKind::Call, Configuration::default(), observer)
             .await
         {
             Ok(pc) => {
@@ -1358,7 +1454,7 @@ impl Call {
         if self.state.grants.speak
             && let Some(microphone) = self.microphone.clone()
         {
-            self.request_source(MediaSource::Microphone, microphone)
+            self.request_source(MediaSource::Microphone, microphone, false)
                 .await;
         }
         // What is watched is asked for with `ready`, not once connected, so a rejoined call's
@@ -1478,6 +1574,11 @@ impl Call {
         if let Some(peer) = &live.connection {
             peer.pc.close();
         }
+        if let Some(capture) = &live.capture
+            && let Some(peer) = &capture.connection
+        {
+            peer.pc.close();
+        }
         self.transfers.close_all(&HashSet::new());
         self.state.session = None;
         self.state.user = None;
@@ -1556,7 +1657,8 @@ impl Call {
                 step,
                 kind,
             } => {
-                let current = matches!(kind, Timer::Restart { .. }) || step == self.step;
+                let current = matches!(kind, Timer::Restart { .. } | Timer::CaptureRestart { .. })
+                    || step == self.step;
                 if generation == self.generation && current {
                     self.timeout(kind).await;
                 }
@@ -1631,6 +1733,15 @@ impl Call {
         let Some(live) = &mut self.live else {
             return;
         };
+        if live
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.connection.as_ref())
+            .map(|peer| peer.id)
+            == Some(connection)
+        {
+            return self.capture_connection_state(state).await;
+        }
         if live.connection.as_ref().map(|peer| peer.id) != Some(connection) {
             return;
         }
@@ -1667,7 +1778,7 @@ impl Call {
                     });
                 }
                 if state == ConnectionState::Failed {
-                    self.restart_ice().await;
+                    self.restart_ice(ConnectionKind::Call).await;
                 }
                 self.timer(Timer::Restart { epoch }, ICE_RESTART_INTERVAL);
             }
@@ -1675,16 +1786,68 @@ impl Call {
         }
     }
 
-    /// Asks the server for new ICE credentials on the call connection, which its next offer
-    /// carries. Asked of a socket that has dropped, it is lost with it; the next interval asks
-    /// again on the resumed one.
-    async fn restart_ice(&mut self) {
+    /// The capture connection's state: lost, new ICE credentials are asked for every
+    /// `ICE_RESTART_INTERVAL` as for the call connection, and once lost for `ICE_RECOVERY_LIMIT`
+    /// the share ends rather than the call, since the call connection carries on without it.
+    async fn capture_connection_state(&mut self, state: ConnectionState) {
+        let Some(capture) = self.live.as_mut().and_then(|live| live.capture.as_mut()) else {
+            return;
+        };
+        match state {
+            ConnectionState::Connected => capture.lost = None,
+            ConnectionState::Failed | ConnectionState::Disconnected => {
+                if capture.lost.is_some() {
+                    return;
+                }
+                let epoch = self.id();
+                if let Some(capture) = self.live.as_mut().and_then(|live| live.capture.as_mut()) {
+                    capture.lost = Some(Lost {
+                        since: Instant::now(),
+                        epoch,
+                    });
+                }
+                if state == ConnectionState::Failed {
+                    self.restart_ice(ConnectionKind::Capture).await;
+                }
+                self.timer(Timer::CaptureRestart { epoch }, ICE_RESTART_INTERVAL);
+            }
+            ConnectionState::New | ConnectionState::Connecting | ConnectionState::Closed => {}
+        }
+    }
+
+    /// `ICE_RESTART_INTERVAL` into the capture connection's loss `epoch`: lost for
+    /// `ICE_RECOVERY_LIMIT` the share ends; before that another restart is asked for.
+    async fn capture_restart_due(&mut self, epoch: u64) {
+        let Some(lost) = self
+            .live
+            .as_ref()
+            .and_then(|live| live.capture.as_ref())
+            .and_then(|capture| capture.lost)
+        else {
+            return;
+        };
+        if lost.epoch != epoch {
+            return;
+        }
+        if Instant::now().duration_since(lost.since) >= ICE_RECOVERY_LIMIT {
+            self.end_capture(Some(Refusal {
+                detail: "the share's connection to the voice server was lost".to_string(),
+                retry_after_seconds: None,
+            }))
+            .await;
+            return;
+        }
+        self.restart_ice(ConnectionKind::Capture).await;
+        self.timer(Timer::CaptureRestart { epoch }, ICE_RESTART_INTERVAL);
+    }
+
+    /// Asks the server for new ICE credentials on `connection`, which its next offer carries.
+    /// Asked of a socket that has dropped, it is lost with it; the next interval asks again on
+    /// the resumed one.
+    async fn restart_ice(&mut self, connection: ConnectionKind) {
         if let Some(live) = &self.live {
             let link = live.link.clone();
-            link.send(ClientMessage::RestartIce {
-                connection: ConnectionKind::Call,
-            })
-            .await;
+            link.send(ClientMessage::RestartIce { connection }).await;
         }
     }
 
@@ -1701,7 +1864,7 @@ impl Call {
             self.rejoin(false).await;
             return;
         }
-        self.restart_ice().await;
+        self.restart_ice(ConnectionKind::Call).await;
         self.timer(Timer::Restart { epoch }, ICE_RESTART_INTERVAL);
     }
 
@@ -1733,6 +1896,7 @@ impl Call {
             }
             Timer::ResumeRetry => self.attempt_resume(),
             Timer::Restart { epoch } => self.restart_due(epoch).await,
+            Timer::CaptureRestart { epoch } => self.capture_restart_due(epoch).await,
         }
     }
 
@@ -1755,22 +1919,25 @@ impl Call {
                 };
                 self.sections_applied(sections, &peer).await;
             }
-            // The game capture helper's connection is the desktop shell's.
             ServerMessage::Offer {
                 connection: ConnectionKind::Capture,
-                ..
-            }
-            | ServerMessage::Sections {
+                revision,
+                sdp,
+                sections,
+            } => self.apply_capture_offer(revision, sdp, sections).await,
+            ServerMessage::Sections {
                 connection: ConnectionKind::Capture,
-                ..
-            } => {}
+                sections,
+            } => self.capture_sections_applied(sections),
             ServerMessage::Sending { source } => {
                 if let Some(sending) = self.state.sources.iter_mut().find(|s| s.source == source) {
                     sending.live = true;
                 }
             }
             ServerMessage::Sources { user, sources } => {
-                if let Some(participant) = self.participant(user) {
+                if self.state.user == Some(user) {
+                    self.own_sources_told(sources);
+                } else if let Some(participant) = self.participant(user) {
                     participant.sources = sources;
                 }
             }
@@ -1886,11 +2053,23 @@ impl Call {
                 };
                 self.state.state_refused = Some(refusal);
             }
-            // The source last asked for, whose section the server will not offer.
+            // The source last asked for, whose section the server will not offer; or, with none
+            // waiting, the capture connection failing at the server, which answers the `send`
+            // that asked for it and stops what was sent on it (`sources` tells of each).
             Some("send") => {
                 if let Some(at) = self.state.sources.iter().rposition(|s| !s.live) {
-                    let source = self.state.sources.remove(at).source;
-                    self.state.source_refused = Some(SourceRefusal { source, refusal });
+                    let removed = self.state.sources.remove(at);
+                    self.state.source_refused = Some(SourceRefusal {
+                        source: removed.source,
+                        refusal,
+                    });
+                    self.release_capture_if_idle();
+                } else if self
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.capture.is_some())
+                {
+                    self.end_capture(Some(refusal)).await;
                 }
             }
             // An offer or acceptance the server would not take, which the page shows as the
@@ -1943,7 +2122,7 @@ impl Call {
             && self.state.status == CallStatus::Connected
             && let Some(microphone) = self.microphone.clone()
         {
-            self.request_source(MediaSource::Microphone, microphone)
+            self.request_source(MediaSource::Microphone, microphone, false)
                 .await;
             self.send_state().await;
         }
@@ -1978,6 +2157,7 @@ impl Call {
             .state
             .sources
             .iter()
+            .filter(|s| !s.external)
             .map(|s| (s.source, Some(s.track.clone())))
             .chain([(MediaSource::Microphone, self.outgoing_microphone())])
             .collect();
@@ -2128,6 +2308,200 @@ impl Call {
         for (mid, user, source) in volumes {
             self.apply_volume(&mid, user, source).await;
         }
+    }
+
+    /// Answers an offer of the capture connection, which carries the external sources alone: the
+    /// connection is made for the first offer, from the platform's factory for `Capture`, whose
+    /// audio capture is the share's; each section is set `sendonly` with its source's track and
+    /// bounded as on the call connection; and the answer goes back named for the connection. A
+    /// connection that cannot be made, or an offer that cannot be applied, ends the share and
+    /// says so as the share's refusal; the call goes on.
+    async fn apply_capture_offer(&mut self, revision: u64, sdp: String, sections: Vec<Section>) {
+        let Some(live) = &self.live else {
+            return;
+        };
+        let Some(capture) = &live.capture else {
+            return;
+        };
+        if let Some((answered, answer)) = &capture.answered
+            && *answered == revision
+        {
+            let (link, answer) = (live.link.clone(), answer.clone());
+            link.send(ClientMessage::Answer {
+                connection: ConnectionKind::Capture,
+                revision,
+                sdp: answer,
+            })
+            .await;
+            return;
+        }
+        let peer = match capture.connection.clone() {
+            Some(peer) => peer,
+            None => {
+                let id = self.id();
+                let observer = Arc::new(Forwarder {
+                    connection: id,
+                    internal: self.internal.clone(),
+                });
+                match self
+                    .platform
+                    .peer_connections
+                    .create(
+                        PeerConnectionKind::Capture,
+                        Configuration::default(),
+                        observer,
+                    )
+                    .await
+                {
+                    Ok(pc) => {
+                        let peer = Peer { id, pc };
+                        if let Some(capture) =
+                            self.live.as_mut().and_then(|live| live.capture.as_mut())
+                        {
+                            capture.connection = Some(peer.clone());
+                        } else {
+                            peer.pc.close();
+                            return;
+                        }
+                        peer
+                    }
+                    Err(e) => {
+                        return self
+                            .end_capture(Some(Refusal {
+                                detail: format!(
+                                    "the share's peer connection could not be made: {e}"
+                                ),
+                                retry_after_seconds: None,
+                            }))
+                            .await;
+                    }
+                }
+            }
+        };
+        let outgoing: HashMap<MediaSource, TrackId> = self
+            .state
+            .sources
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| (s.source, s.track.clone()))
+            .collect();
+        let result: Result<String, PeerConnectionError> = async {
+            let mut encodings = Vec::new();
+            peer.pc
+                .set_remote_description(SessionDescription {
+                    kind: DescriptionKind::Offer,
+                    sdp,
+                })
+                .await?;
+            for section in &sections {
+                let Some(transceiver) = peer.pc.transceiver_by_mid(&section.mid) else {
+                    return Err(PeerConnectionError(format!(
+                        "the offer's section {} has no transceiver",
+                        section.mid
+                    )));
+                };
+                if let SectionContent::Sending { source } = &section.content {
+                    peer.pc
+                        .set_direction(transceiver, Direction::SendOnly)
+                        .await?;
+                    peer.pc
+                        .replace_track(transceiver, outgoing.get(source).cloned())
+                        .await?;
+                    if let Some(encoding) = encoding_of(*source) {
+                        encodings.push((transceiver, encoding));
+                    }
+                }
+            }
+            let answer = peer.pc.create_answer().await?;
+            peer.pc
+                .set_local_description(SessionDescription {
+                    kind: DescriptionKind::Answer,
+                    sdp: answer.clone(),
+                })
+                .await?;
+            for (transceiver, encoding) in encodings {
+                encode(&peer, transceiver, encoding).await?;
+            }
+            Ok(answer)
+        }
+        .await;
+        match result {
+            Ok(answer) => {
+                let Some(live) = &mut self.live else {
+                    return;
+                };
+                let Some(capture) = &mut live.capture else {
+                    return;
+                };
+                capture.answered = Some((revision, answer.clone()));
+                let link = live.link.clone();
+                link.send(ClientMessage::Answer {
+                    connection: ConnectionKind::Capture,
+                    revision,
+                    sdp: answer,
+                })
+                .await;
+                self.capture_sections_applied(sections);
+            }
+            Err(e) => {
+                self.end_capture(Some(Refusal {
+                    detail: format!("the share's offer could not be applied: {e}"),
+                    retry_after_seconds: None,
+                }))
+                .await;
+            }
+        }
+    }
+
+    /// Takes `sections` as what the capture connection carries, read whole from this offer as
+    /// `sections_applied` reads the call connection's. An external source whose section is gone
+    /// is forgotten, and the connection let go once none is left.
+    fn capture_sections_applied(&mut self, sections: Vec<Section>) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(capture) = &mut live.capture else {
+            return;
+        };
+        let Some(peer) = capture.connection.clone() else {
+            return;
+        };
+        let had: Vec<MediaSource> = capture
+            .sections
+            .iter()
+            .filter_map(|s| match s.content {
+                SectionContent::Sending { source } => Some(source),
+                _ => None,
+            })
+            .collect();
+        capture.transceivers = sections
+            .iter()
+            .filter_map(|s| Some((s.mid.clone(), peer.pc.transceiver_by_mid(&s.mid)?)))
+            .collect();
+        capture.sections = sections.clone();
+        for source in had {
+            let still = sections
+                .iter()
+                .any(|s| s.content == SectionContent::Sending { source });
+            if !still {
+                self.state
+                    .sources
+                    .retain(|s| !(s.external && s.source == source));
+            }
+        }
+        self.release_capture_if_idle();
+    }
+
+    /// The server's word on what this client sends, which it tells everyone, this client
+    /// included: a source that was live and is no longer named was stopped at the server (its
+    /// capture connection failed there), and is forgotten here, the connection with it when none
+    /// of its sources is left. A source not yet live is not named either way, and is left to its
+    /// offer.
+    fn own_sources_told(&mut self, sources: Vec<SourceInfo>) {
+        self.state
+            .sources
+            .retain(|s| !s.live || sources.iter().any(|told| told.source == s.source));
+        self.release_capture_if_idle();
     }
 
     /// Whom each slot carries from now on. A slot the offers have not yet given a section is

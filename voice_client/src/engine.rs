@@ -101,8 +101,22 @@ impl Engine {
         self.send(Command::SetMicrophone(track));
     }
 
+    /// Sends `source` on the call connection.
     pub fn start_source(&self, source: MediaSource, track: TrackId) {
-        self.send(Command::StartSource { source, track });
+        self.send(Command::StartSource {
+            source,
+            track,
+            external: false,
+        });
+    }
+
+    /// Sends `source` on the capture connection (`Command::StartSource`'s `external`).
+    pub fn start_external_source(&self, source: MediaSource, track: TrackId) {
+        self.send(Command::StartSource {
+            source,
+            track,
+            external: true,
+        });
     }
 
     pub fn stop_source(&self, source: MediaSource) {

@@ -45,7 +45,7 @@ final class FakeSockets: SocketFactory {
 }
 
 final class FakePeerConnections: PeerConnectionFactory {
-    func create(configuration: Configuration, observer: PeerConnectionObserver) async throws -> CreatedPeerConnection {
+    func create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver) async throws -> CreatedPeerConnection {
         throw PeerConnectionError.Failed(detail: "this check makes no peer connections")
     }
 }

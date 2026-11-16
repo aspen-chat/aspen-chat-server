@@ -124,6 +124,9 @@ pub struct LocalSource {
     /// Whether its media has arrived at the server (`sending`), which is when the others are
     /// told of it.
     pub live: bool,
+    /// Sent on the capture connection, a second peer connection of its own, as the phones'
+    /// shares are (`call::Command::StartSource`), rather than on the call's.
+    pub external: bool,
 }
 
 /// A request the voice server would not honour.

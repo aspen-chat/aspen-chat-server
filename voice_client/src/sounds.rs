@@ -520,6 +520,7 @@ mod tests {
             source: MediaSource::Screen,
             track: TrackId("screen".to_string()),
             live: false,
+            external: true,
         });
         assert_eq!(
             sounds.cues(&in_call, &sharing),
@@ -531,6 +532,7 @@ mod tests {
             source: MediaSource::ScreenAudio,
             track: TrackId("screen-audio".to_string()),
             live: false,
+            external: true,
         });
         assert_eq!(sounds.cues(&sharing, &live), vec![]);
         // Stopping says nothing; sharing again does.

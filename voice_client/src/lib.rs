@@ -12,10 +12,11 @@
 //!   current-thread runtime on a thread of its own.
 //! - `call`: the state machine, everything the web client's `VoiceCall` decides: joining through
 //!   the API server's offer and the candidates nearest first, failures reported, refusals and
-//!   timeouts, answering the server's offers, mute, deafen, and hold, sources sent and videos
-//!   watched,
-//!   audio slots and per-person volume, resuming a dropped socket and rejoining a lost call,
-//!   and each `kicked` reason.
+//!   timeouts, answering the server's offers, mute, deafen, and hold, sources sent (on the
+//!   call's connection, or a share on the capture connection, a second peer connection the
+//!   server offers for what is sent from outside the call's own) and videos watched, audio
+//!   slots and per-person volume, resuming a dropped socket and rejoining a lost call, and each
+//!   `kicked` reason.
 //! - `sounds`: the call's sounds as cues derived from one snapshot to the next, which the
 //!   observer is told to play through the call's own audio path.
 //! - `transfers`: the call's files, everything the web client's `FileTransfers` decides: offers

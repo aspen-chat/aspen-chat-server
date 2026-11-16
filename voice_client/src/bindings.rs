@@ -43,7 +43,8 @@ use crate::engine;
 use crate::files;
 use crate::peer_connection::{
     self, Configuration, ConnectionState, DataChannelState, Direction, IceCandidate, MediaKind,
-    SendEncoding, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
+    PeerConnectionKind, SendEncoding, SessionDescription, SignalingState, StatsOf, TrackId,
+    TransceiverId,
 };
 use crate::sounds::SoundCue;
 use crate::state::{self, CallState, SessionEndReason};
@@ -633,11 +634,15 @@ pub struct CreatedPeerConnection {
 }
 
 /// Makes peer connections (`peer_connection::PeerConnectionFactory`). One per platform process.
+/// `kind` says what the peer connection is for, and so the WebRTC factory it is made from: the
+/// call's, whose audio capture is the microphone, for the call's own connection and a
+/// transfer's, or the capture connection's, whose audio capture is the share's sound.
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait PeerConnectionFactory: Send + Sync {
     async fn create(
         &self,
+        kind: PeerConnectionKind,
         configuration: Configuration,
         observer: Arc<dyn PeerConnectionObserver>,
     ) -> Result<CreatedPeerConnection, PeerConnectionError>;
@@ -649,6 +654,7 @@ struct ForeignPeerConnections(Arc<dyn PeerConnectionFactory>);
 impl peer_connection::PeerConnectionFactory for ForeignPeerConnections {
     async fn create(
         &self,
+        kind: PeerConnectionKind,
         configuration: Configuration,
         observer: Arc<dyn peer_connection::PeerConnectionObserver>,
     ) -> Result<Arc<dyn peer_connection::PeerConnection>, peer_connection::PeerConnectionError>
@@ -656,6 +662,7 @@ impl peer_connection::PeerConnectionFactory for ForeignPeerConnections {
         let created = self
             .0
             .create(
+                kind,
                 configuration,
                 Arc::new(ExportedConnectionObserver(observer)),
             )
@@ -978,6 +985,12 @@ impl Engine {
 
     pub fn start_source(&self, source: MediaSource, track: TrackId) {
         self.0.start_source(source, track);
+    }
+
+    /// Sends `source` on the capture connection (`call::Command::StartSource`'s `external`),
+    /// which the platform's `PeerConnectionFactory` makes for `PeerConnectionKind::Capture`.
+    pub fn start_external_source(&self, source: MediaSource, track: TrackId) {
+        self.0.start_external_source(source, track);
     }
 
     pub fn stop_source(&self, source: MediaSource) {

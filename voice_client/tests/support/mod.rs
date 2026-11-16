@@ -20,8 +20,8 @@ use voice_client::files::{FileError, FileSink, FileSource, Files};
 use voice_client::peer_connection::{
     Configuration, ConnectionState, DataChannel, DataChannelObserver, DataChannelState,
     DescriptionKind, Direction, IceCandidate, MediaKind, PeerConnection, PeerConnectionError,
-    PeerConnectionFactory, PeerConnectionObserver, SendEncoding, SenderParameters,
-    SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
+    PeerConnectionFactory, PeerConnectionKind, PeerConnectionObserver, SendEncoding,
+    SenderParameters, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
 use voice_client::sounds::SoundCue;
 use voice_client::state::{CallObserver, CallState, CallStatus};
@@ -341,6 +341,23 @@ impl FakeServer {
             sections,
         });
     }
+
+    /// Offers `sections` on the capture connection as revision `revision`.
+    pub fn capture_offer(&self, revision: u64, sections: Vec<Section>) {
+        self.send(&ServerMessage::Offer {
+            connection: ConnectionKind::Capture,
+            revision,
+            sdp: sdp_of(&sections),
+            sections,
+        });
+    }
+
+    pub fn capture_sections(&self, sections: Vec<Section>) {
+        self.send(&ServerMessage::Sections {
+            connection: ConnectionKind::Capture,
+            sections,
+        });
+    }
 }
 
 pub fn sdp_of(sections: &[Section]) -> String {
@@ -510,6 +527,8 @@ struct Inner {
 pub struct FakePeerConnection {
     pub id: usize,
     pub configuration: Configuration,
+    /// What the engine made it for.
+    pub kind: PeerConnectionKind,
     observer: Arc<dyn PeerConnectionObserver>,
     inner: Mutex<Inner>,
     parameters: Mutex<HashMap<TransceiverId, SenderParameters>>,
@@ -828,6 +847,7 @@ impl FakePeerConnections {
 impl PeerConnectionFactory for FakePeerConnections {
     async fn create(
         &self,
+        kind: PeerConnectionKind,
         configuration: Configuration,
         observer: Arc<dyn PeerConnectionObserver>,
     ) -> Result<Arc<dyn PeerConnection>, PeerConnectionError> {
@@ -838,6 +858,7 @@ impl PeerConnectionFactory for FakePeerConnections {
         let pc = Arc::new(FakePeerConnection {
             id: created.len() + 1,
             configuration,
+            kind,
             observer,
             inner: Mutex::new(Inner {
                 mids: Vec::new(),

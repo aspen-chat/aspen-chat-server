@@ -452,10 +452,12 @@ async fn the_users_own_share_starting_is_heard() {
     w.send(Command::StartSource {
         source: MediaSource::Screen,
         track: TrackId("screen-1".to_string()),
+        external: true,
     });
     w.send(Command::StartSource {
         source: MediaSource::ScreenAudio,
         track: TrackId("screen-audio-1".to_string()),
+        external: true,
     });
     settle().await;
     assert_eq!(w.sounds(), vec![SoundCue::StreamStarted]);
@@ -471,6 +473,7 @@ async fn the_users_own_share_starting_is_heard() {
     w.send(Command::StartSource {
         source: MediaSource::Camera,
         track: TrackId("camera-1".to_string()),
+        external: false,
     });
     settle().await;
     assert_eq!(w.sounds(), vec![]);

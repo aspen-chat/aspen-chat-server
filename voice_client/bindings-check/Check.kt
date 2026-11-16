@@ -30,7 +30,7 @@ class FakeSockets : SocketFactory {
 }
 
 class FakePeerConnections : PeerConnectionFactory {
-    override suspend fun create(configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection =
+    override suspend fun create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection =
         throw PeerConnectionException.Failed("this check makes no peer connections")
 }
 

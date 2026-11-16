@@ -46,6 +46,22 @@ platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android l
   on and a `DataChannelObserver` it reads from; the platform tells of its candidates and of a
   channel the other side opened through `PeerConnectionObserver`. `state::FilesState` is what the
   page shows (`docs/architecture/file-transfers.md`, Client).
+- **A share has a connection of its own.** A WebRTC factory has one audio capture, the audio device
+  module's, for every connection it makes, so a share's sound (`screenAudio`) cannot be a second
+  track beside the microphone on the call's connection. The phones send a share with
+  `start_external_source`: the engine asks the server with `send {external: true}`, the server
+  offers the capture connection (`ConnectionKind::Capture`, the one the desktop shell's game capture
+  helper holds), and the engine answers it on a peer connection the platform's
+  `PeerConnectionFactory::create` makes for `Capture`, from a factory whose audio capture is the
+  share's sound; the call's connection is left alone. The share's picture and sound go on that one
+  connection, so one transport carries them and the server puts them in one stream for everyone else
+  (`{user}-share`). Each `LocalSource` says whether it is `external`. The connection is made for its
+  first offer and closed with the last external source stopped, as the server lets its own go; a
+  loss of it asks for ICE restarts of its own (`restartIce {connection: capture}`) and ends the
+  share, never the call, after the recovery limit; a connection that cannot be made, an offer that
+  cannot be applied, or the server stopping the share (`error` answering `send`, then `sources`
+  naming what this client still sends) ends the share with the reason in `source_refused`, as the
+  screen's.
 - **Nothing is kept per mid between offers.** Every offer is read whole (`Live::sections` and the
   transceiver of each mid are rebuilt from it, and each received track read again through
   `receiver_track`), since the server may reuse a section for other content: a section moved into

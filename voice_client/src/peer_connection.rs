@@ -212,11 +212,26 @@ pub trait PeerConnectionObserver: Send + Sync {
     fn data_channel_opened(&self, channel: Arc<dyn DataChannel>) -> Arc<dyn DataChannelObserver>;
 }
 
+/// What a peer connection is made for, which decides the WebRTC factory the platform makes it
+/// from. A WebRTC factory has one audio capture for every connection it makes, so the call's
+/// own connection (`Call`), whose audio capture is the microphone, and the capture connection
+/// (`Capture`, `voice_protocol::signal::ConnectionKind::Capture`), which carries a share sent
+/// from outside the call's own and whose audio capture is the share's sound, come from
+/// factories of their own. A transfer's connection (`Transfer`) carries one data channel and
+/// no media, so the call's factory makes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum PeerConnectionKind {
+    Call,
+    Capture,
+    Transfer,
+}
+
 /// Makes peer connections. One per platform process.
 #[async_trait]
 pub trait PeerConnectionFactory: Send + Sync {
     async fn create(
         &self,
+        kind: PeerConnectionKind,
         configuration: Configuration,
         observer: Arc<dyn PeerConnectionObserver>,
     ) -> Result<Arc<dyn PeerConnection>, PeerConnectionError>;

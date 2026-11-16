@@ -3,6 +3,8 @@
 
 mod support;
 
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use support::*;
 use uuid::Uuid;
@@ -10,11 +12,11 @@ use voice_client::call::{
     CONNECT_TIMEOUT, Command, DEAD_SERVER_RETRY, ICE_RECOVERY_LIMIT, ICE_RESTART_INTERVAL,
     PING_TIMEOUT, READY_TIMEOUT, RESUME_GRACE,
 };
-use voice_client::peer_connection::{ConnectionState, Direction, TrackId};
-use voice_client::state::{CallStatus, EndedReason, ErrorKind, SessionEndReason};
+use voice_client::peer_connection::{ConnectionState, Direction, PeerConnectionKind, TrackId};
+use voice_client::state::{CallState, CallStatus, EndedReason, ErrorKind, SessionEndReason};
 use voice_protocol::signal::Grants;
 use voice_protocol::signal::{
-    ClientMessage, ConnectionKind, KickReason, MediaSource, ServerMessage, SlotAssignment,
+    ClientMessage, ConnectionKind, KickReason, MediaSource, Section, ServerMessage, SlotAssignment,
     SourceInfo, WatchedVideo,
 };
 
@@ -881,6 +883,7 @@ async fn a_camera_is_sent_with_its_encodings_and_stopped() {
     w.send(Command::StartSource {
         source: MediaSource::Camera,
         track: camera.clone(),
+        external: false,
     });
     settle().await;
     assert_eq!(
@@ -974,6 +977,7 @@ async fn a_screen_is_sent_as_picture_and_sound_and_a_source_without_its_grant_is
     w.send(Command::StartSource {
         source: MediaSource::Camera,
         track: TrackId("camera-1".to_string()),
+        external: false,
     });
     settle().await;
     assert!(a.received().is_empty());
@@ -983,10 +987,12 @@ async fn a_screen_is_sent_as_picture_and_sound_and_a_source_without_its_grant_is
     w.send(Command::StartSource {
         source: MediaSource::Screen,
         track: TrackId("screen-1".to_string()),
+        external: false,
     });
     w.send(Command::StartSource {
         source: MediaSource::ScreenAudio,
         track: TrackId("screen-audio-1".to_string()),
+        external: false,
     });
     settle().await;
     assert_eq!(w.state().source_refused, None);
@@ -994,6 +1000,7 @@ async fn a_screen_is_sent_as_picture_and_sound_and_a_source_without_its_grant_is
     w.send(Command::StartSource {
         source: MediaSource::Screen,
         track: TrackId("screen-2".to_string()),
+        external: false,
     });
     settle().await;
     assert_eq!(
@@ -1044,6 +1051,7 @@ async fn a_source_the_server_refuses_is_dropped() {
     w.send(Command::StartSource {
         source: MediaSource::Camera,
         track: TrackId("camera-1".to_string()),
+        external: false,
     });
     settle().await;
     a.send(&error("too many send frames", false, Some(3), Some("send")));
@@ -1068,6 +1076,7 @@ async fn grants_lost_stop_sources_and_a_grant_gained_sends_the_microphone() {
     w.send(Command::StartSource {
         source: MediaSource::Camera,
         track: TrackId("camera-1".to_string()),
+        external: false,
     });
     settle().await;
     a.offer(
@@ -2432,4 +2441,470 @@ async fn what_is_asked_while_the_socket_is_down_is_asked_again_once_the_call_is_
     a.ready(w.session, w.user, Vec::new(), "secret-3");
     settle().await;
     assert!(a.received().is_empty());
+}
+
+// --- The capture connection ---------------------------------------------------------------------
+
+/// Asks to send a screen and its sound from outside the call connection.
+fn start_share(w: &World) {
+    w.send(Command::StartSource {
+        source: MediaSource::Screen,
+        track: TrackId("share-video".to_string()),
+        external: true,
+    });
+    w.send(Command::StartSource {
+        source: MediaSource::ScreenAudio,
+        track: TrackId("share-audio".to_string()),
+        external: true,
+    });
+}
+
+fn share_sections() -> Vec<Section> {
+    vec![
+        sending("0", MediaSource::Screen),
+        sending("1", MediaSource::ScreenAudio),
+    ]
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_share_sent_from_outside_goes_on_a_capture_connection_of_its_own() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let call_pc = w.pcs.latest();
+    a.received();
+    start_share(&w);
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![
+            ClientMessage::Send {
+                source: MediaSource::Screen,
+                external: true
+            },
+            ClientMessage::Send {
+                source: MediaSource::ScreenAudio,
+                external: true
+            },
+        ]
+    );
+    let sources = w.state().sources;
+    assert!(
+        sources
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| s.source)
+            .eq([MediaSource::Screen, MediaSource::ScreenAudio]),
+        "{sources:?}"
+    );
+    assert_eq!(
+        w.pcs.count(),
+        1,
+        "the connection waits for the server's offer"
+    );
+    // The capture offer: a second peer connection, made for the capture connection, answers
+    // it with the share's tracks on its sections, the picture bounded as a screen's is.
+    call_pc.ops();
+    a.capture_offer(1, share_sections());
+    settle().await;
+    assert_eq!(w.pcs.count(), 2);
+    let capture_pc = w.pcs.latest();
+    assert_eq!(capture_pc.kind, PeerConnectionKind::Capture);
+    assert_eq!(call_pc.kind, PeerConnectionKind::Call);
+    let ops = capture_pc.ops();
+    assert!(ops.contains(&Op::SetDirection("0".to_string(), Direction::SendOnly)));
+    assert!(ops.contains(&Op::ReplaceTrack(
+        "0".to_string(),
+        Some(TrackId("share-video".to_string()))
+    )));
+    assert!(ops.contains(&Op::ReplaceTrack(
+        "1".to_string(),
+        Some(TrackId("share-audio".to_string()))
+    )));
+    assert!(ops.contains(&Op::SetEncoding(
+        "0".to_string(),
+        Some(25_000_000),
+        Some(60.0)
+    )));
+    assert!(
+        call_pc.ops().is_empty(),
+        "the call connection is left alone"
+    );
+    assert!(matches!(
+        a.received().as_slice(),
+        [ClientMessage::Answer {
+            connection: ConnectionKind::Capture,
+            revision: 1,
+            ..
+        }]
+    ));
+    // The call connection's own offer carries no share track.
+    a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
+    settle().await;
+    let ops = call_pc.ops();
+    assert!(ops.iter().all(|op| !matches!(
+        op,
+        Op::ReplaceTrack(_, Some(TrackId(track))) if track.starts_with("share")
+    )));
+    a.received();
+    a.send(&ServerMessage::Sending {
+        source: MediaSource::Screen,
+    });
+    a.send(&ServerMessage::Sending {
+        source: MediaSource::ScreenAudio,
+    });
+    settle().await;
+    assert!(
+        w.state()
+            .sources
+            .iter()
+            .filter(|s| s.external)
+            .all(|s| s.live)
+    );
+    // The offer restated after a resume gets the same answer and no negotiation.
+    capture_pc.ops();
+    a.capture_offer(1, share_sections());
+    settle().await;
+    assert!(capture_pc.ops().is_empty());
+    assert!(matches!(
+        a.received().as_slice(),
+        [ClientMessage::Answer {
+            connection: ConnectionKind::Capture,
+            revision: 1,
+            ..
+        }]
+    ));
+    // Stopping the picture takes its track off; stopping the sound, the last external source,
+    // closes the capture connection, as the server lets its own go with the last one.
+    w.send(Command::StopSource(MediaSource::Screen));
+    settle().await;
+    assert_eq!(
+        capture_pc.ops(),
+        vec![Op::ReplaceTrack("0".to_string(), None)]
+    );
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::StopSending {
+            source: MediaSource::Screen
+        }]
+    );
+    assert!(!capture_pc.is_closed());
+    w.send(Command::StopSource(MediaSource::ScreenAudio));
+    settle().await;
+    assert!(capture_pc.is_closed());
+    assert!(!call_pc.is_closed());
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert_eq!(w.state().status, CallStatus::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_capture_connection_that_cannot_be_made_or_negotiated_ends_the_share_alone() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.received();
+    w.pcs.fail_create.store(true, Ordering::SeqCst);
+    a.capture_offer(1, share_sections());
+    settle().await;
+    w.pcs.fail_create.store(false, Ordering::SeqCst);
+    assert_eq!(w.pcs.count(), 1);
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    let refused = w
+        .state()
+        .source_refused
+        .clone()
+        .expect("the share is refused");
+    assert_eq!(refused.source, MediaSource::Screen);
+    assert!(
+        refused.refusal.detail.contains("could not be made"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        a.received(),
+        vec![
+            ClientMessage::StopSending {
+                source: MediaSource::Screen
+            },
+            ClientMessage::StopSending {
+                source: MediaSource::ScreenAudio
+            },
+        ]
+    );
+    assert_eq!(w.state().status, CallStatus::Connected);
+    // An offer that cannot be applied ends the share the same way; the call is not rejoined.
+    start_share(&w);
+    settle().await;
+    a.received();
+    a.capture_offer(2, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    assert_eq!(capture_pc.kind, PeerConnectionKind::Capture);
+    a.received();
+    capture_pc.fail_next_remote();
+    a.capture_offer(3, share_sections());
+    settle().await;
+    assert!(capture_pc.is_closed());
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert!(
+        w.state()
+            .source_refused
+            .clone()
+            .is_some_and(|r| r.refusal.detail.contains("could not be applied"))
+    );
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert_eq!(w.http.offers_asked(), 1, "no rejoin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_capture_connection_asks_for_its_own_ice_restarts_and_ends_the_share_at_the_limit() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.capture_offer(1, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    a.received();
+    capture_pc.report(ConnectionState::Connected);
+    capture_pc.report(ConnectionState::Failed);
+    settle().await;
+    let restart = ClientMessage::RestartIce {
+        connection: ConnectionKind::Capture,
+    };
+    assert_eq!(a.received(), vec![restart.clone()]);
+    advance(ICE_RESTART_INTERVAL).await;
+    assert_eq!(a.received(), vec![restart.clone()]);
+    capture_pc.report(ConnectionState::Connected);
+    settle().await;
+    advance(ICE_RESTART_INTERVAL * 2).await;
+    assert!(a.received().is_empty(), "back: no more restarts");
+    assert!(w.state().sources.iter().any(|s| s.external));
+    // Lost for the limit: the share ends and the call goes on.
+    capture_pc.report(ConnectionState::Disconnected);
+    settle().await;
+    let mut elapsed = Duration::ZERO;
+    while elapsed + ICE_RESTART_INTERVAL < ICE_RECOVERY_LIMIT {
+        advance(ICE_RESTART_INTERVAL).await;
+        elapsed += ICE_RESTART_INTERVAL;
+        assert_eq!(a.received(), vec![restart.clone()], "at {elapsed:?}");
+        assert!(!capture_pc.is_closed(), "at {elapsed:?}");
+    }
+    advance(ICE_RESTART_INTERVAL).await;
+    assert!(capture_pc.is_closed());
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert!(
+        w.state()
+            .source_refused
+            .clone()
+            .is_some_and(|r| r.refusal.detail.contains("lost"))
+    );
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert!(!w.pcs.created.lock().unwrap()[0].is_closed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_server_stopping_the_share_is_followed_and_leaving_closes_the_capture_connection() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.capture_offer(1, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    for source in [
+        MediaSource::Microphone,
+        MediaSource::Screen,
+        MediaSource::ScreenAudio,
+    ] {
+        a.send(&ServerMessage::Sending { source });
+    }
+    settle().await;
+    a.received();
+    // The capture connection failed at the server: it answers the `send` that asked for it, and
+    // tells everyone, this client included, what this client still sends.
+    a.send(&error(
+        "the game capture's connection to the voice server failed",
+        false,
+        None,
+        Some("send"),
+    ));
+    a.send(&ServerMessage::Sources {
+        user: w.user,
+        sources: vec![SourceInfo {
+            source: MediaSource::Microphone,
+            paused: false,
+        }],
+    });
+    settle().await;
+    assert!(capture_pc.is_closed());
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert_eq!(
+        w.state().source_refused.clone().map(|r| r.source),
+        Some(MediaSource::Screen)
+    );
+    assert_eq!(w.state().status, CallStatus::Connected);
+    // Started again, the share goes on a new capture connection; leaving closes it.
+    w.send(Command::ClearSourceRefusal);
+    start_share(&w);
+    settle().await;
+    a.capture_offer(2, share_sections());
+    settle().await;
+    let again = w.pcs.latest();
+    assert_eq!(again.kind, PeerConnectionKind::Capture);
+    assert!(!Arc::ptr_eq(&again, &capture_pc));
+    w.send(Command::Leave);
+    settle().await;
+    assert!(again.is_closed());
+    assert_eq!(w.state().status, CallStatus::Idle);
+    assert!(w.state().sources.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn capture_sections_restated_drop_a_source_the_server_took_away() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.capture_offer(1, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    a.capture_sections(vec![sending("0", MediaSource::Screen)]);
+    settle().await;
+    let external: Vec<MediaSource> = w
+        .state()
+        .sources
+        .iter()
+        .filter(|s| s.external)
+        .map(|s| s.source)
+        .collect();
+    assert_eq!(external, vec![MediaSource::Screen]);
+    assert!(!capture_pc.is_closed());
+    a.capture_sections(Vec::new());
+    settle().await;
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert!(capture_pc.is_closed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_share_stays_on_its_capture_connection_through_a_resume_within_the_grace() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let call_pc = w.pcs.latest();
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.capture_offer(1, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    assert_eq!(capture_pc.kind, PeerConnectionKind::Capture);
+    a.send(&ServerMessage::Sending {
+        source: MediaSource::Screen,
+    });
+    a.send(&ServerMessage::Sending {
+        source: MediaSource::ScreenAudio,
+    });
+    settle().await;
+    a.received();
+    capture_pc.ops();
+    // The socket drops: the server keeps the participant and both connections for the grace,
+    // and the share goes on, the call connected throughout.
+    a.close();
+    settle().await;
+    let state = w.state();
+    assert_eq!(state.status, CallStatus::Connected);
+    let external_live = |state: &CallState| {
+        state
+            .sources
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| (s.source, s.live))
+            .collect::<Vec<_>>()
+    };
+    let share = vec![
+        (MediaSource::Screen, true),
+        (MediaSource::ScreenAudio, true),
+    ];
+    assert_eq!(external_live(&state), share, "the share is still sent");
+    assert!(!capture_pc.is_closed());
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Resume {
+            secret: "secret-1".to_string()
+        }]
+    );
+    // The resume restates the capture offer still outstanding, with the same revision: it gets
+    // the same answer and nothing is negotiated anew, so the share's tracks stay where they are.
+    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    a.capture_offer(1, share_sections());
+    settle().await;
+    assert!(matches!(
+        a.received().as_slice(),
+        [ClientMessage::Answer {
+            connection: ConnectionKind::Capture,
+            revision: 1,
+            ..
+        }]
+    ));
+    assert!(capture_pc.ops().is_empty(), "restating answers nothing");
+    assert_eq!(w.pcs.count(), 2, "neither connection is made again");
+    assert!(!call_pc.is_closed() && !capture_pc.is_closed());
+    let state = w.state();
+    assert_eq!(state.status, CallStatus::Connected);
+    assert_eq!(external_live(&state), share);
+    // Stopping the share afterwards goes over the new socket and closes the capture connection.
+    w.send(Command::StopSource(MediaSource::Screen));
+    w.send(Command::StopSource(MediaSource::ScreenAudio));
+    settle().await;
+    assert!(capture_pc.is_closed());
+    assert_eq!(
+        a.received(),
+        vec![
+            ClientMessage::StopSending {
+                source: MediaSource::Screen
+            },
+            ClientMessage::StopSending {
+                source: MediaSource::ScreenAudio
+            },
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_servers_word_on_sources_alone_lets_the_capture_connection_go() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    a.received();
+    start_share(&w);
+    settle().await;
+    a.capture_offer(1, share_sections());
+    settle().await;
+    let capture_pc = w.pcs.latest();
+    for source in [
+        MediaSource::Microphone,
+        MediaSource::Screen,
+        MediaSource::ScreenAudio,
+    ] {
+        a.send(&ServerMessage::Sending { source });
+    }
+    settle().await;
+    assert!(!capture_pc.is_closed());
+    // The server names what this client sends without the share, and no error answered a
+    // `send`: the share was stopped at the server, so its sources are forgotten and the
+    // capture connection let go with the last of them, the call untouched.
+    a.send(&ServerMessage::Sources {
+        user: w.user,
+        sources: vec![SourceInfo {
+            source: MediaSource::Microphone,
+            paused: false,
+        }],
+    });
+    settle().await;
+    assert!(capture_pc.is_closed());
+    assert!(w.state().sources.iter().all(|s| !s.external));
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert!(w.state().source_refused.is_none());
 }

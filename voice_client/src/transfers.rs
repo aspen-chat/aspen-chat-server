@@ -30,7 +30,7 @@ use crate::files::{FileError, FileSink, Files};
 use crate::peer_connection::{
     Configuration, ConnectionState, DataChannel, DataChannelObserver, DataChannelState,
     DescriptionKind, IceCandidate, IceServer, PeerConnection, PeerConnectionError,
-    PeerConnectionFactory, PeerConnectionObserver, SessionDescription, StatsOf,
+    PeerConnectionFactory, PeerConnectionKind, PeerConnectionObserver, SessionDescription, StatsOf,
 };
 use crate::state::{
     EndedBy, FileCommand, FileFailure, FileOfferState, FilesState, TransferRoute, TransferState,
@@ -818,7 +818,11 @@ impl Transfers {
             ended_by: None,
             failure: None,
         };
-        let pc = match self.peer_connections.create(configuration, observer).await {
+        let pc = match self
+            .peer_connections
+            .create(PeerConnectionKind::Transfer, configuration, observer)
+            .await
+        {
             Ok(pc) => pc,
             Err(e) => {
                 if let Some(sink) = sink {
