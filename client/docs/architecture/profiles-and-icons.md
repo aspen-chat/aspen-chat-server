@@ -49,6 +49,15 @@ Profiles are fields on the user record.
 
 `ProfileCard.tsx` is the card any user control opens.
 
+### The picture, larger
+
+The card's picture of a user with an icon is a button (`AvatarZoom`) that opens the picture four
+times as large (`Avatar`'s `xl`, 12rem to the card's 3rem) in a popover of its own, when the pointer
+rests on it for as long as a tooltip waits (`ZOOM_HOVER_DELAY_MS`), or when it is clicked, tapped,
+or pressed from the keyboard. The popover is rendered inside the card's, so it goes when the card
+does; it is modal, so the first click anywhere else, on the card or beyond it, puts it away and does
+nothing more, and Escape puts it away before the card. Initials are not enlarged.
+
 ### Roles on the card
 
 Opened within a community (a `communityId` in the route), the card:
