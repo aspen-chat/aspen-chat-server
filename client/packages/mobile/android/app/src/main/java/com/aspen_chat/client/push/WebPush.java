@@ -71,13 +71,14 @@ public final class WebPush {
         return Arrays.copyOf(padded, end - 1);
     }
 
-    static ECParameterSpec p256() throws GeneralSecurityException {
+    /** P-256's parameters; public for the tests that encrypt as a deployment does. */
+    public static ECParameterSpec p256() throws GeneralSecurityException {
         AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
         parameters.init(new ECGenParameterSpec("secp256r1"));
         return parameters.getParameterSpec(ECParameterSpec.class);
     }
 
-    static ECPoint point(byte[] uncompressed) throws GeneralSecurityException {
+    public static ECPoint point(byte[] uncompressed) throws GeneralSecurityException {
         if (uncompressed.length != 65 || uncompressed[0] != 4) {
             throw new GeneralSecurityException("not an uncompressed P-256 point");
         }
@@ -88,7 +89,7 @@ public final class WebPush {
     }
 
     /** HKDF-SHA256 (RFC 5869), expanded to at most one block. */
-    static byte[] hkdf(byte[] salt, byte[] ikm, byte[] info, int length) throws GeneralSecurityException {
+    public static byte[] hkdf(byte[] salt, byte[] ikm, byte[] info, int length) throws GeneralSecurityException {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(salt, "HmacSHA256"));
         byte[] prk = mac.doFinal(ikm);

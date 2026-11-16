@@ -11,4 +11,8 @@
     <string name="aspen_upload_failures_channel_name">Archivos que no se pudieron enviar</string>
     <string name="aspen_calls_channel_name">Llamadas en curso</string>
     <string name="aspen_call_in_progress">En una llamada</string>
+    <string name="aspen_rings_channel_name">Llamadas entrantes</string>
+    <string name="aspen_incoming_call">Llamada entrante</string>
+    <string name="aspen_ring_answer">Responder</string>
+    <string name="aspen_ring_decline">Rechazar</string>
 </resources>

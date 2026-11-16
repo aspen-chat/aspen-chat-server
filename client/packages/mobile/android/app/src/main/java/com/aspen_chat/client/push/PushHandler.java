@@ -24,7 +24,8 @@ import org.json.JSONObject;
 /**
  * What the phone does with a push while the app may be closed (spec/push.md, The app): finds the
  * account its subscription names, decrypts the pointer, and shows the message or plugin's notice
- * it points to, or takes down what was shown for a channel read elsewhere or a message deleted.
+ * it points to, takes down what was shown for a channel read elsewhere or a message deleted, or
+ * hands a DM's call ringing the phone to the call layer.
  */
 public final class PushHandler {
 
@@ -38,6 +39,11 @@ public final class PushHandler {
     private static final String MESSAGE_INCLUDE = "?include=authors,channels,mentions,memberships,notificationTexts";
     private static final Pattern USER_TAG = Pattern.compile("<@([0-9a-fA-F-]{36})>");
     private static final Pattern ROLE_TAG = Pattern.compile("<@&[0-9a-fA-F-]{36}>");
+    /**
+     * The call layer's entry for a ring (call/CallRings.kt), by name: a build without the layer
+     * (app/build.gradle, {@code callLayer}) has no such class, and shows nothing for a call.
+     */
+    private static final String CALL_RINGS = "com.aspen_chat.client.call.CallRings";
 
     private final Context context;
     private final PushStore store;
@@ -79,6 +85,9 @@ public final class PushHandler {
                     break;
                 case "notice":
                     showNotice(subscription, account, channel, pointer.getString("notice"));
+                    break;
+                case "call":
+                    ring(account.getString("origin"), pointer);
                     break;
                 default:
                     // A kind this app does not know yet.
@@ -136,6 +145,22 @@ public final class PushHandler {
             where == null ? name : name + " · " + where,
             text
         );
+    }
+
+    /**
+     * Hands a DM's call ringing the phone to the call layer, which shows it as an incoming call
+     * within the five seconds a service started by a push has; nothing is fetched first, the
+     * pointer carrying what the call shows.
+     */
+    private void ring(String origin, JSONObject pointer) {
+        try {
+            Class<?> rings = Class.forName(CALL_RINGS);
+            rings.getMethod("incoming", Context.class, String.class, JSONObject.class).invoke(null, context, origin, pointer);
+        } catch (ClassNotFoundException e) {
+            Log.i(TAG, "a call rang the phone, but this build has no call layer to show it");
+        } catch (ReflectiveOperationException e) {
+            Log.w(TAG, "the call layer could not show a ring", e);
+        }
     }
 
     /** Shows a plugin's notice: the plugin's name, and what it says. */

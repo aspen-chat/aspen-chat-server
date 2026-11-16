@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -30,16 +32,39 @@ import com.aspen_chat.client.R
  * The microphone and camera kinds may be refused where the app is not in front when the service
  * takes them (Android 14 lets a service start recording only from the foreground); the service
  * then runs without them, and the call's microphone is Telecom's to grant.
+ *
+ * A DM's call ringing the phone is shown by `showIncoming`: a `CallStyle` incoming call
+ * notification with the system's Answer and Decline, posted directly rather than by a service
+ * (its full-screen intent is what Android 12 asks of a call notification that is no foreground
+ * service's), on a channel that rings with the system's default ringtone, since Aspen has no
+ * ringtone of its own; its actions come back here and reach `CallTelecom`. Answering starts the
+ * service as for any call, whose ongoing notification replaces the incoming one.
  */
 class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_HANG_UP) {
-            // The notification's Hang up, which leaves the call through the engine; the call's
-            // end then stops the service. A process started again for a stale notification has
-            // no call to hang up, and stops.
-            val hangUp = synchronized(CallService) { Companion.hangUp }
-            if (hangUp == null) finish() else hangUp()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_HANG_UP -> {
+                // The notification's Hang up, which leaves the call through the engine; the
+                // call's end then stops the service. A process started again for a stale
+                // notification has no call to hang up, and stops.
+                val hangUp = synchronized(CallService) { Companion.hangUp }
+                if (hangUp == null) finish() else hangUp()
+                return START_NOT_STICKY
+            }
+            ACTION_ANSWER, ACTION_DECLINE -> {
+                // The incoming call's Answer or Decline; a stale notification's finds no ring.
+                val ring = synchronized(CallService) { Companion.ring }
+                if (ring == null) {
+                    getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+                    finish()
+                } else if (intent.action == ACTION_ANSWER) {
+                    ring.answer()
+                } else {
+                    ring.decline()
+                }
+                return START_NOT_STICKY
+            }
+            else -> {}
         }
         val name = intent?.getCharSequenceExtra(EXTRA_NAME) ?: getString(R.string.app_name)
         val video = intent?.getBooleanExtra(EXTRA_VIDEO, false) ?: false
@@ -74,17 +99,83 @@ class CallService : Service() {
         stopSelf()
     }
 
+    /** What the incoming call's notification does; `answer` and `decline` run on the caller's thread. */
+    private class Ringing(val answer: () -> Unit, val decline: () -> Unit)
+
     companion object {
         private const val TAG = "AspenCall"
         const val CHANNEL = "aspen_calls"
+        /** The incoming calls' channel, which rings; `CHANNEL` makes no sound. */
+        const val RING_CHANNEL = "aspen_rings"
         const val NOTIFICATION_ID = 0x43414c4c
         private const val ACTION_HANG_UP = "com.aspen_chat.client.call.HANG_UP"
+        private const val ACTION_ANSWER = "com.aspen_chat.client.call.ANSWER"
+        private const val ACTION_DECLINE = "com.aspen_chat.client.call.DECLINE"
         private const val EXTRA_NAME = "name"
         private const val EXTRA_VIDEO = "video"
         private const val EXTRA_CAMERA = "camera"
         private var hangUp: (() -> Unit)? = null
         /** What the service was last started with, so the camera's kind can be added to the same call. */
         private var shown: Pair<CharSequence, Boolean>? = null
+        private var ring: Ringing? = null
+
+        /**
+         * Shows a DM's call from `name` ringing the phone: the incoming call's notification, with
+         * the system's Answer and Decline and a full-screen intent that opens the app over the
+         * lock screen, on the channel that rings. The same notification id as the ongoing call's,
+         * which replaces it on answering.
+         */
+        fun showIncoming(context: Context, name: CharSequence, answer: () -> Unit, decline: () -> Unit) {
+            synchronized(this) { ring = Ringing(answer, decline) }
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val channel = NotificationChannel(RING_CHANNEL, context.getString(R.string.aspen_rings_channel_name), NotificationManager.IMPORTANCE_HIGH)
+            channel.setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            channel.enableVibration(true)
+            manager.createNotificationChannel(channel)
+            val action = { name: String, request: Int ->
+                PendingIntent.getService(
+                    context,
+                    request,
+                    Intent(context, CallService::class.java).setAction(name),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
+            val builder = NotificationCompat.Builder(context, RING_CHANNEL)
+                .setSmallIcon(R.drawable.ic_stat_aspen)
+                .setColor(0xFF047857.toInt())
+                .setContentTitle(name)
+                .setContentText(context.getString(R.string.aspen_incoming_call))
+                .setStyle(
+                    NotificationCompat.CallStyle.forIncomingCall(
+                        Person.Builder().setName(name).setImportant(true).build(),
+                        action(ACTION_DECLINE, 1),
+                        action(ACTION_ANSWER, 2),
+                    ),
+                )
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+            val open = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            if (open != null) {
+                open.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                val opening = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                builder.setContentIntent(opening).setFullScreenIntent(opening, true)
+            }
+            manager.notify(NOTIFICATION_ID, builder.build())
+        }
+
+        /** Takes the incoming call's notification down, whatever ended the ring. */
+        fun cancelIncoming(context: Context) {
+            synchronized(this) { ring = null }
+            context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+        }
 
         /**
          * Starts the service for a call shown as `name`, whose notification's Hang up runs

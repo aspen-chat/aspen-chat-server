@@ -43,7 +43,7 @@ public final class SessionRefresh {
     }
 
     /** Opens a request that asks for its answer in the languages the phone shows the app in. */
-    static HttpURLConnection open(Context context, String url) throws IOException {
+    public static HttpURLConnection open(Context context, String url) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(TIMEOUT_MILLISECONDS);
         connection.setReadTimeout(TIMEOUT_MILLISECONDS);

@@ -22,4 +22,8 @@
          notification says beneath the call's name. -->
     <string name="aspen_calls_channel_name">Ongoing calls</string>
     <string name="aspen_call_in_progress">In a call</string>
+    <string name="aspen_rings_channel_name">Incoming calls</string>
+    <string name="aspen_incoming_call">Incoming call</string>
+    <string name="aspen_ring_answer">Answer</string>
+    <string name="aspen_ring_decline">Decline</string>
 </resources>

@@ -9,7 +9,9 @@ import java.util.Map;
  * Receives every FCM message for the app, in place of the push plugin's own service (the manifest
  * removes that one), which it extends so the plugin still learns of new tokens. A push from the
  * relay (spec/push.md) is decrypted and shown here, whether or not the app is open; anything
- * else goes to the plugin as before.
+ * else goes to the plugin as before. A call comes marked {@code k: call} beside the ciphertext
+ * (spec/push.md, Calls), a hint the relay adds for a messaging service that would prepare before
+ * decrypting; this one decrypts at once on every push, so the pointer's kind alone decides.
  */
 public class AspenMessagingService extends MessagingService {
 

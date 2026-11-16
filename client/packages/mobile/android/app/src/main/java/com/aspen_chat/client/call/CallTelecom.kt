@@ -14,6 +14,12 @@ import com.aspen_chat.client.R
 import com.aspen_chat.client.voice.CallState
 import com.aspen_chat.client.voice.CallStatus
 import com.aspen_chat.client.voice.Engine
+import com.aspen_chat.client.voice.Ring
+import com.aspen_chat.client.voice.RingEnd
+import com.aspen_chat.client.voice.RingObserver
+import com.aspen_chat.client.voice.RingOptions
+import com.aspen_chat.client.voice.RingPlatform
+import com.aspen_chat.client.voice.RingWatch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,8 +45,14 @@ import kotlinx.coroutines.withContext
  * tells it of) is the engine's hold until it sets the call active again (`onSetActive`), and a
  * mute from the system is the engine's mute.
  *
- * The incoming direction (a DM call ringing this phone, reported from a push before the engine
- * joins) is a later piece; `attributes` is where it will differ.
+ * A DM's call ringing this phone (`ring`, from a `call` push through `CallRings`) is an incoming
+ * call in Telecom before the engine joins, with the incoming call's notification and its
+ * full-screen intent (`CallService.showIncoming`) and the engine's ring watch on it. Answering
+ * (Telecom's `onAnswer`, or the notification's Answer) joins the ring's channel through the
+ * engine, which ends the ring at the deployment, and the call goes on as any other; declining
+ * (Telecom's disconnect, or the notification's Decline) ends the ring at the deployment
+ * (`CallRings.decline`); and the ring ending anywhere else (`ringEnded`) disconnects the call with
+ * the cause its end gives. The ringtone is the notification channel's, the system's default.
  */
 class CallTelecom(
     context: Context,
@@ -49,8 +61,8 @@ class CallTelecom(
     private val audio: CallAudio,
     private val routes: CallRoutes,
 ) : AutoCloseable {
-    /** Where the system's call stands; `IDLE` while the engine is in none. */
-    enum class Phase { IDLE, DIALING, ACTIVE, HELD }
+    /** Where the system's call stands; `IDLE` while the engine is in none and nothing rings. */
+    enum class Phase { IDLE, RINGING, DIALING, ACTIVE, HELD }
 
     private val context = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -76,9 +88,13 @@ class CallTelecom(
      * One call in Telecom, from `addCall` until Telecom has let it go. Read and written on the
      * main thread.
      */
-    private inner class SystemCall(var video: Boolean) {
-        var phase = Phase.DIALING
+    private inner class SystemCall(var video: Boolean, val incoming: CallRings.IncomingRing? = null) {
+        var phase = if (incoming == null) Phase.DIALING else Phase.RINGING
         var control: CallControlScope? = null
+        /** The engine's watch on the ring, while the call is incoming and unanswered. */
+        var watch: RingWatch? = null
+        /** Whether the incoming call was answered here, so the engine's join is this call's. */
+        var answered = false
         /** The collection of Telecom's mute state, for the call's length. */
         var following: Job? = null
         var finished = false
@@ -98,9 +114,156 @@ class CallTelecom(
             closed -> {}
             call == null && state.status.inCall -> begin(state)
             call == null -> {}
+            // A ring stands apart from the engine's state until it is answered here.
+            call.phase == Phase.RINGING -> {}
             state.status == CallStatus.CONNECTED -> connected(call, state)
             state.status == CallStatus.IDLE || state.status == CallStatus.FAILED -> end(call, state, causeOf(state))
         }
+    }
+
+    /**
+     * A DM's call rings the phone: added to Telecom as an incoming call, shown with the incoming
+     * call's notification, and watched through the engine until it is answered, declined, or ends
+     * elsewhere. One call at a time: a ring while the engine is in a call, or another rings, is
+     * declined nowhere and shown nowhere here (the person's other devices show it).
+     */
+    fun ring(ring: CallRings.IncomingRing) {
+        if (closed || call != null) {
+            Log.i(TAG, "a call rang while another call is held; not shown")
+            return
+        }
+        val call = SystemCall(video = false, incoming = ring)
+        this.call = call
+        displayName = ring.callerName.ifEmpty { context.getString(R.string.app_name) }
+        CallService.showIncoming(
+            context,
+            displayName,
+            answer = { onMainLater { answer(call, byTelecom = false) } },
+            decline = { onMainLater { declined(call, byTelecom = false) } },
+        )
+        call.watch = RingWatch.start(
+            RingPlatform(CallHttp(), CallSockets()),
+            RingOptions(ring.origin, CallCredentials(context, ring.origin), CallEngines.loopbackPlainText(context)),
+            Ring(ring.channel, ring.session, ring.until),
+            object : RingObserver {
+                override fun ended(end: RingEnd) {
+                    onMainLater { ringEnded(call, end) }
+                }
+            },
+        )
+        val attributes = CallAttributesCompat(
+            displayName,
+            Uri.parse("aspen://call/${ring.channel}"),
+            CallAttributesCompat.DIRECTION_INCOMING,
+            CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+            CallAttributesCompat.SUPPORTS_SET_INACTIVE,
+        )
+        scope.launch {
+            try {
+                callsManager(context).addCall(
+                    attributes,
+                    onAnswer = { onMain { answer(call, byTelecom = true) } },
+                    onDisconnect = { onMain { declined(call, byTelecom = true) } },
+                    onSetActive = { onMain { held(call, held = false) } },
+                    onSetInactive = { onMain { held(call, held = true) } },
+                ) {
+                    val control = this
+                    scope.launch { controlGiven(call, control) }
+                }
+            } catch (refused: CallException) {
+                Log.w(TAG, "Telecom refused the incoming call (error ${refused.code})", refused)
+                call.refused = true
+                stopRinging(call)
+            } finally {
+                finished(call)
+            }
+        }
+    }
+
+    /**
+     * The ring is answered here, by the notification or by Telecom itself (a headset's button,
+     * which has made the call active already): the engine joins the DM's call, which ends the
+     * ring at the deployment, and the call goes on as an active call of Telecom's, with the
+     * ongoing call's notification in place of the incoming one.
+     */
+    private fun answer(call: SystemCall, byTelecom: Boolean) {
+        val ring = call.incoming ?: return
+        if (call.phase != Phase.RINGING || call.finished) {
+            return
+        }
+        stopRinging(call)
+        call.answered = true
+        call.phase = Phase.DIALING
+        // Answering is what makes the call active; the engine's connection need not ask again.
+        call.activeAsked = true
+        audio.configureForCall()
+        CallService.start(context, displayName, call.video) { engine.leave() }
+        if (!byTelecom) {
+            call.control?.let { control -> scope.launch { answerOn(control) } }
+        }
+        engine.join(ring.channel)
+    }
+
+    private suspend fun answerOn(control: CallControlScope) {
+        val result = control.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
+        if (result is CallControlResult.Error) {
+            Log.w(TAG, "Telecom would not answer the call: error ${result.errorCode}")
+        }
+    }
+
+    /**
+     * The ring is declined here, by the notification or by Telecom (the system's own UI, a
+     * headset): the deployment is told, so the person's other devices stop too. Telecom's own
+     * disconnect of an answered call is the user's leaving, as for any call.
+     */
+    private fun declined(call: SystemCall, byTelecom: Boolean) {
+        val ring = call.incoming
+        if (ring == null || call.phase != Phase.RINGING || call.finished) {
+            if (byTelecom) {
+                disconnectedByTelecom(call)
+            }
+            return
+        }
+        stopRinging(call)
+        CallRings.decline(context, ring.origin, ring.channel)
+        call.endedAtRevision = (snapshots.latest ?: engine.state()).revision
+        val cause = DisconnectCause(DisconnectCause.REJECTED)
+        when {
+            byTelecom -> {
+                call.disconnectedByTelecom = true
+                finished(call)
+            }
+            call.control != null -> disconnect(call, cause)
+            else -> call.endWanted = cause
+        }
+    }
+
+    /** The ring ended anywhere else, as the engine's watch says: Telecom's call ends with the cause. */
+    private fun ringEnded(call: SystemCall, end: RingEnd) {
+        if (call.phase != Phase.RINGING || call.finished) {
+            return
+        }
+        stopRinging(call)
+        call.endedAtRevision = (snapshots.latest ?: engine.state()).revision
+        val cause = when (end) {
+            RingEnd.ANSWERED_ELSEWHERE -> DisconnectCause.ANSWERED_ELSEWHERE
+            RingEnd.DECLINED -> DisconnectCause.REJECTED
+            RingEnd.CALL_ENDED -> DisconnectCause.CANCELED
+            RingEnd.TIMED_OUT -> DisconnectCause.MISSED
+            RingEnd.SIGNED_OUT -> DisconnectCause.ERROR
+        }
+        if (call.control != null) {
+            disconnect(call, DisconnectCause(cause))
+        } else {
+            call.endWanted = DisconnectCause(cause)
+        }
+    }
+
+    /** The incoming call's notification and ring watch are done with, whatever ends the ring. */
+    private fun stopRinging(call: SystemCall) {
+        call.watch?.stop()
+        call.watch = null
+        CallService.cancelIncoming(context)
     }
 
     private fun begin(state: CallState) {
@@ -157,6 +320,8 @@ class CallTelecom(
         val endWanted = call.endWanted
         if (endWanted != null) {
             disconnect(call, endWanted)
+        } else if (call.answered) {
+            scope.launch { answerOn(control) }
         } else if (call.activeAsked) {
             setActive(call)
         }
@@ -269,6 +434,7 @@ class CallTelecom(
             return
         }
         call.finished = true
+        stopRinging(call)
         call.following?.cancel()
         routes.detach()
         CallService.stop(context)
@@ -293,6 +459,11 @@ class CallTelecom(
     }
 
     private suspend fun onMain(block: () -> Unit) = withContext(Dispatchers.Main.immediate) { block() }
+
+    /** Runs `block` on the main thread from any other: a notification's action, the watch's thread. */
+    private fun onMainLater(block: () -> Unit) {
+        scope.launch { block() }
+    }
 
     private val CallStatus.inCall: Boolean
         get() = this == CallStatus.JOINING || this == CallStatus.CONNECTED || this == CallStatus.REJOINING
