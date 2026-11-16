@@ -9,8 +9,9 @@ screen and the camera arrive and decode side by side; and Ann leaving takes them
 
     scripts/check_calls.py --bin target/debug
 
-It builds the page first, and needs the client's dependencies installed and Playwright's
-Chromium and Firefox (`pnpm --filter @aspen/app exec playwright install chromium firefox`).
+It builds the page first, and needs the client's dependencies installed, Playwright's Chromium
+and Firefox (`pnpm --filter @aspen/app exec playwright install chromium firefox`), and a sound
+server (PulseAudio, or PipeWire's), without which Firefox plays and records only silence.
 """
 
 from __future__ import annotations
