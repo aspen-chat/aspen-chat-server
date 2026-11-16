@@ -63,10 +63,12 @@ export {
   RENEWAL_HEADER,
   WebStorageDeviceCredentialStore,
   decodeChallenge,
+  puzzleRanges,
   puzzleWork,
   solvePuzzle,
   solvePuzzleRange,
   type DeviceCredentialStore,
+  type NonceRange,
   type PuzzleSolver,
 } from "./device";
 export {

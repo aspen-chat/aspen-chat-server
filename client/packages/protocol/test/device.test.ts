@@ -7,8 +7,10 @@ import {
   MemoryDeviceCredentialStore,
   MemorySessionStore,
   decodeChallenge,
+  puzzleRanges,
   puzzleWork,
   solvePuzzle,
+  solvePuzzleRange,
   type Session,
 } from "../src";
 
@@ -86,6 +88,41 @@ describe("the device puzzle", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(solvePuzzle(new Uint8Array([1]), 32, controller.signal)).rejects.toBeDefined();
+  });
+});
+
+describe("puzzleRanges", () => {
+  it("covers every safe nonce once, in order, for any number of parts", () => {
+    for (const parts of [1, 2, 3, 7, 8, 64, 1000]) {
+      const ranges = puzzleRanges(parts);
+      expect(ranges).toHaveLength(parts);
+      expect(ranges[0]?.from).toBe(0);
+      expect(ranges.at(-1)?.to).toBe(Number.MAX_SAFE_INTEGER);
+      for (const [index, range] of ranges.entries()) {
+        expect(Number.isSafeInteger(range.from) && Number.isSafeInteger(range.to)).toBe(true);
+        expect(range.to).toBeGreaterThan(range.from);
+        if (index > 0) {
+          expect(range.from).toBe(ranges[index - 1]?.to);
+        }
+      }
+    }
+  });
+
+  it("refuses a count of parts that is not a positive integer", () => {
+    for (const parts of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => puzzleRanges(parts)).toThrow(RangeError);
+    }
+  });
+
+  it("gives each part a range that holds solutions", () => {
+    const challenge = new TextEncoder().encode("challenge");
+    for (const { from, to } of puzzleRanges(8)) {
+      const nonce = solvePuzzleRange(challenge, 10, from, to);
+      expect(nonce).not.toBeNull();
+      expect(nonce).toBeGreaterThanOrEqual(from);
+      expect(nonce).toBeLessThan(to);
+      expect(puzzleWork(challenge, nonce ?? 0)).toBeGreaterThanOrEqual(10);
+    }
   });
 });
 

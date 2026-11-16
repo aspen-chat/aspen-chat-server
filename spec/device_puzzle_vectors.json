@@ -50,6 +50,11 @@
       "challenge": "sAvwcT0UyZKBxpXlTi-bKOBuc0tKPie_oNc_emvz45w",
       "nonce": 1099511628018,
       "zeroBits": 8
+    },
+    {
+      "challenge": "sAvwcT0UyZKBxpXlTi-bKOBuc0tKPie_oNc_emvz45w",
+      "nonce": 7881299347900150,
+      "zeroBits": 13
     }
   ]
 }

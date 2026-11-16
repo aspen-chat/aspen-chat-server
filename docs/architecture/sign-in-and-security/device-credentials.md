@@ -116,10 +116,20 @@ A suspension of the address limits (`limits suspend`) also skips `device`, `ip_f
   When a server answers `deviceCredentialRequired`, it earns one and sends the request once more.
 - **One puzzle at a time:** requests refused together share one earning. A challenge that expired
   while a slow device solved it is asked for once more.
-- **The solver:** the app solves in a worker (`devicePuzzle.worker.ts`), so the page does not
-  freeze. Where workers cannot run, `solvePuzzle` works on the page's thread, a slice at a time. The
-  SHA-256 is plain arithmetic, not WebCrypto, whose every call is asynchronous, and it passes the
-  shared vectors.
+- **The solver:** the app solves across workers (`solveInWorkers`, each running
+  `devicePuzzle.worker.ts`), so the page does not freeze and the work is spread over the device's
+  cores. The SHA-256 is plain arithmetic, not WebCrypto, whose every call is asynchronous, and it
+  passes the shared vectors.
+  - **How many:** one per logical core (`navigator.hardwareConcurrency`, one when it is not given),
+    at most eight (`MAX_PUZZLE_WORKERS`). They are started for each puzzle and ended with it.
+  - **What each searches:** `puzzleRanges` splits the nonces from 0 to 2^53 − 1 (every one a
+    JavaScript number holds exactly) into contiguous ranges that neither overlap nor leave a gap,
+    one per worker. The first nonce any worker finds is sent, and every worker is ended. The server
+    takes any nonce that earns the bits, not only the smallest, and reads it as a `u64`.
+  - **When one fails:** a worker that cannot be started, errors, or reaches the end of its range
+    with nothing ends alone, and the rest go on. Only once every worker has ended without an answer
+    does `solvePuzzle` solve it on the page's thread, a slice at a time, as it does where workers
+    cannot run at all. Stopping the solve ends every worker.
 - **Storage:** the credential is kept per deployment in `localStorage` (`aspen.device.<host>`) and
   survives signing out. It says which device this is, not who uses it.
 - **Native code:** the phones' push handlers make only token refreshes, which are exempt.
