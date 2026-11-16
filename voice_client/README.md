@@ -46,13 +46,23 @@ platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android l
   sender's id, Android by its number), never by mid, and a platform layer that cached anything by
   mid across offers would show the wrong person.
 
+- **Rings.** A phone woken by a `call` push (`spec/push.md`, Calls) shows the incoming call from the
+  push alone, and holds a `RingWatch` (`src/ring.rs`, `src/ring_bindings.rs`) while it rings: the
+  watch opens the deployment's event stream as the account, over the same `Http` and `SocketFactory`
+  a call runs on, and tells its `RingObserver` once when the ring ends anywhere else
+  (`answeredElsewhere`, `declined`, `callEnded`, `timedOut` by the server's clock from `ready`'s
+  `serverTime`, or `signedOut` when no session can be had), so the platform ends its incoming call
+  with that reason; `stop` ends the watch with no report when this phone answered or declined.
+  Answering is the engine's ordinary `join` of the ring's channel; declining is the platform's own
+  `DELETE /channels/{channel}/voice/rings/@me`. Nothing is pushed to end a ring.
+
 ## The bindings
 
 [UniFFI](https://mozilla.github.io/uniffi-rs/) writes a Swift module, `VoiceClient`, and a Kotlin
 package, `com.aspen_chat.client.voice`, from the interface the crate marks for export
-(`src/bindings.rs` says what crosses as it is and what is mirrored at the boundary). Both are
-written from the engine built for this machine, since the generator reads the interface from the
-built library:
+(`src/bindings.rs` says what crosses as it is and what is mirrored at the boundary;
+`src/ring_bindings.rs` adds the ring watch over the same platform traits). Both are written from the
+engine built for this machine, since the generator reads the interface from the built library:
 
 ```
 scripts/voice_client_bindings.py

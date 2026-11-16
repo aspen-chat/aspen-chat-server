@@ -22,8 +22,11 @@
 //! - `api`: the REST calls a call makes.
 //! - `bindings`: the engine as Swift and Kotlin reach it, through UniFFI: what crosses as it
 //!   is, what is mirrored at the boundary, and the `Engine` object the apps hold.
+//! - `ring`: watching a ring a `call` push described through the deployment's event stream, so
+//!   a phone stops ringing when the ring ends anywhere else; `ring_bindings` is it as the apps
+//!   reach it.
 //!
-//! File transfers, rings, CallKit, and Telecom are not here: the signalling's file frames are
+//! File transfers, CallKit, and Telecom are not here: the signalling's file frames are
 //! left alone for the transfers piece, and `state::CallState` is what the rest read.
 
 uniffi::setup_scaffolding!();
@@ -33,6 +36,8 @@ pub mod bindings;
 pub mod call;
 pub mod engine;
 pub mod peer_connection;
+pub mod ring;
+pub mod ring_bindings;
 pub mod signalling;
 pub mod sounds;
 pub mod state;
