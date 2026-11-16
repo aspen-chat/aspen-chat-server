@@ -41,8 +41,12 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         var refusal: String?
         /// The incoming call ringing, by its id at the system, while one does.
         var incoming: UUID?
+        /// Why the last incoming call stopped ringing without this phone answering or declining
+        /// it, as the engine's watch said, kept until the next rings; `nil` while one rings, and
+        /// before any has.
+        var ringEnd: RingEnd?
 
-        static let idle = Status(call: nil, audioActive: false, held: false, interrupted: false, refusal: nil, incoming: nil)
+        static let idle = Status(call: nil, audioActive: false, held: false, interrupted: false, refusal: nil, incoming: nil, ringEnd: nil)
     }
 
     typealias Listener = (Status) -> Void
@@ -332,7 +336,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             ring: Ring(channel: ring.channel, session: ring.session, until: ring.until),
             observer: RingEnds(uuid: made.uuid)
         )
-        update { $0.incoming = made.uuid }
+        update {
+            $0.incoming = made.uuid
+            $0.ringEnd = nil
+        }
     }
 
     /// Reports a call for a VoIP push the app could not read and ends it at once, as Apple
@@ -356,7 +363,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         self.incoming = nil
         incoming.watch = nil
         provider.reportCall(with: uuid, endedAt: nil, reason: Self.reason(end))
-        update { $0.incoming = nil }
+        update {
+            $0.incoming = nil
+            $0.ringEnd = end
+        }
     }
 
     private static func reason(_ end: RingEnd) -> CXCallEndedReason {
@@ -455,6 +465,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         // CallKit lost every call it knew of; so does the engine, and the session with it. A
         // ring it forgot is left to the deployment's clock.
         if let incoming {
+            NSLog("CallKit reset while Aspen's incoming call rang; the ring is left to the deployment's clock")
             incoming.watch = nil
             self.incoming = nil
             update { $0.incoming = nil }
@@ -551,6 +562,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         if let incoming, incoming.uuid == action.callUUID {
             // Declined here: the ring ends at the deployment, so the person's other devices
             // stop ringing too.
+            NSLog("Aspen's incoming call was declined on this phone")
             self.incoming = nil
             incoming.watch?.stop()
             incoming.watch = nil

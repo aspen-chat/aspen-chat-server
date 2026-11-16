@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -144,13 +145,19 @@ class WebSocket:
     """A WebSocket client of the standard library, enough for the event stream and the voice
     server's signalling: text frames each way, pings answered, and the close code kept."""
 
-    def __init__(self, url: str, timeout: float = 15):
+    def __init__(self, url: str, timeout: float = 15, tls: ssl.SSLContext | None = None):
+        """`tls` says whom to trust for a `wss:` address; without it the system's authorities."""
         parts = urllib.parse.urlsplit(url)
-        self.sock = socket.create_connection((parts.hostname, parts.port), timeout=timeout)
+        secure = parts.scheme == "wss"
+        port = parts.port or (443 if secure else 80)
+        self.sock = socket.create_connection((parts.hostname, port), timeout=timeout)
+        if secure:
+            context = tls or ssl.create_default_context()
+            self.sock = context.wrap_socket(self.sock, server_hostname=parts.hostname)
         key = base64.b64encode(os.urandom(16)).decode()
         path = parts.path + (f"?{parts.query}" if parts.query else "")
         self.sock.sendall(
-            f"GET {path} HTTP/1.1\r\nHost: {parts.hostname}:{parts.port}\r\nUpgrade: websocket\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: {parts.hostname}:{port}\r\nUpgrade: websocket\r\n"
             f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
         )
         head = b""
