@@ -82,7 +82,7 @@ engine) where Android allows:
 | `CallEngine.kt`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `CallSnapshots.kt`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main thread                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `CallHttp.kt`           | `Http`                                                                       | OkHttp: no cookies, no redirects followed, every status answered as a response; a bodiless POST, which the engine's are, is sent with an empty body, since OkHttp refuses one without                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `CallSockets.kt`        | `SocketFactory`, `Socket`                                                    | OkHttp's WebSocket, which answers pings itself; `connect` waits for the upgrade, so a refusal is a `TransportException`; frames queue for `receive`, and a close from either side ends the queue                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `CallSockets.kt`        | `SocketFactory`, `Socket`                                                    | OkHttp's WebSocket, which answers pings itself and offers `permessage-deflate` on every socket (`RealWebSocket.connect` sets the header; no switch), so the voice server's offers arrive compressed (`negotiatedExtensions` is the server's answer, `permessage-deflate; server_no_context_takeover; client_no_context_takeover` in the proof); `connect` waits for the upgrade, so a refusal is a `TransportException`; frames queue for `receive`, and a close from either side ends the queue                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallCredentials.kt`    | `Credentials`                                                                | The account at the deployment among those `PushStore` keeps (the state the web view writes on sign-in): its session token for each request, renewed through `SessionRefresh` (shared with the push handler) and written back when the API server refuses it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `CallTracks.kt`         | The track ids the engine passes around                                       | WebRTC tracks by their own `id()`: the microphone as an object, and each received track as the connection that receives it, which gives a live wrapper on demand                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallPeerConnection.kt` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `org.webrtc.PeerConnection`, unified plan, `max-bundle`, RTCP muxed; the factory with the device's hardware video codecs through one EGL context and `JavaAudioDeviceModule` with the device's echo canceller and noise suppressor where it has them. `getTransceivers()` makes new Java wrappers on every call and disposes the ones before, their senders, receivers, and the receivers' tracks with them, so no wrapper is kept: transceivers are told apart by their sender's id and numbered in the order first seen, and each use reads them afresh under a lock. A sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its `AudioTrack.setVolume`; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values; `close` disposes the connection, after which `connectionState` is `Closed` |
@@ -140,11 +140,14 @@ Telecom's session, and `addCall`, open after the call is disconnected.
 
 What Telecom asks goes to the engine: its disconnect (the notification's Hang up goes through the
 service to the engine's `leave` the same way) leaves; its hold (`onSetInactive`, a phone call taken
-or Telecom unable to make the call active beside another) mutes and deafens the user, remembering
-their own mute and deafen, which `onSetActive` puts back; a mute from the system (`isMuted`, a car's
-or a watch's button) is the engine's mute, the first value being the state the call started in and
-left alone. The engine has no held state of its own, so others see a held user muted and deafened,
-and a camera or screen they share goes on.
+or Telecom unable to make the call active beside another) is the engine's `setHeld`, which
+`onSetActive` lifts: the voice server pauses everything the user sends, a camera or screen included,
+sends them nothing, keeps their own mute and deafen for the hold's end, and tells the others, who
+see the user on hold rather than muted (`CallState.held` is the user's own, each participant's
+`held` the others', both in every snapshot `CallSnapshots` hands on; the engine shows the hold at
+once and clears it only on the server's word); a mute from the system (`isMuted`, a car's or a
+watch's button) is the engine's mute, the first value being the state the call started in and left
+alone. The notification shows no hold; `Phase.HELD` is where the interface reads it.
 
 `CallService` runs for the call's length with the types `phoneCall` and `microphone`
 (`FOREGROUND_SERVICE_PHONE_CALL` and `FOREGROUND_SERVICE_MICROPHONE` in the manifest, with
@@ -174,16 +177,19 @@ app's process on the emulator, WebRTC on the real `JavaAudioDeviceModule`: it jo
 channel's call, has a second participant brought in from a browser, reads both sides' statistics for
 the other's sound (the browser's as the loudest sample off its received tracks, `loudness` in
 `calls/page.ts`, since Chromium's own level statistics read zero behind the muted element it plays
-each track in), cuts its socket and watches the engine take its place back with `resume`, and
-leaves. Around that it checks the system's side: Telecom holds the call as outgoing (`dialing`) and
-then active, and `dumpsys telecom` (run through the instrumentation's shell) names the call by the
-id Telecom gave it; the call's service runs in the foreground with its `CallStyle` notification
-posted, and the audio mode is the communication mode; the routes are Telecom's endpoints, each with
-a kind, one current, and selecting the loudspeaker (and the earpiece again, where the device has
-one) moves the call there; and leaving ends Telecom's call, stops the service, takes the
-notification down, empties the routes, and gives the audio mode back. What the browser must hear is
-what the device's microphone carried, which the device's own `media-source` statistics tell: sound,
-when a tone is played to it, or silence, as on an emulator whose host audio never reaches it.
+each track in), puts the call on hold and releases it (the browser's report, `onHold` in
+`calls/page.ts`, lists the device's user meanwhile, neither side's packets reach the other, and the
+release waits for the server's word), cuts its socket and watches the engine take its place back
+with `resume`, and leaves; its log line also names what the signalling socket negotiated. Around
+that it checks the system's side: Telecom holds the call as outgoing (`dialing`) and then active,
+and `dumpsys telecom` (run through the instrumentation's shell) names the call by the id Telecom
+gave it; the call's service runs in the foreground with its `CallStyle` notification posted, and the
+audio mode is the communication mode; the routes are Telecom's endpoints, each with a kind, one
+current, and selecting the loudspeaker (and the earpiece again, where the device has one) moves the
+call there; and leaving ends Telecom's call, stops the service, takes the notification down, empties
+the routes, and gives the audio mode back. What the browser must hear is what the device's
+microphone carried, which the device's own `media-source` statistics tell: sound, when a tone is
+played to it, or silence, as on an emulator whose host audio never reaches it.
 `scripts/check_mobile_call.py --platform android` at the repository's root runs it end to end, with
 the same deployment and browser the iOS check uses: a deployment of its own serving the call page
 (`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the voice
@@ -215,10 +221,10 @@ interface commands the engine:
       connected starts on it, connecting it during a call moves the call to it, disconnecting it
       moves the call back, and with `BLUETOOTH_CONNECT` granted Telecom names every headset.
 - [ ] A wired or USB headset: listed as `WIRED_HEADSET`, taken on connection, given up on removal.
-- [ ] A phone call interrupting ours: the ring holds the call (`onSetInactive`, the user shown muted
-      and deafened to the others), hanging the phone call up or declining it resumes ours
-      (`onSetActive`) with the user's own mute and deafen back, and ending ours from the phone's
-      call screen or a watch leaves the engine's call.
+- [ ] A phone call interrupting ours: the ring holds the call (`onSetInactive`, the user shown on
+      hold to the others, who hear nothing of them, and hearing nothing themself), hanging the phone
+      call up or declining it resumes ours (`onSetActive`) with the user's own mute and deafen
+      standing, and ending ours from the phone's call screen or a watch leaves the engine's call.
 - [ ] A navigation prompt or an alarm over the call: what Telecom's audio focus does with it, and
       whether the call is held or plays on beside it.
 - [ ] The notification: Hang up leaves the call, a tap opens the app, and on Android 14 and later

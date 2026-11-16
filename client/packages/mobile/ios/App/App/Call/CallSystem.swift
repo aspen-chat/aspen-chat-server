@@ -8,7 +8,8 @@ import WebRTC
 /// DM call is an outgoing call started from the app (`CXStartCallAction`), reported connected
 /// when the engine is, and ended with `CXEndCallAction` when the user leaves or reported ended,
 /// with the reason, when the engine's state says the call is over; the system's own End, mute,
-/// and hold reach the engine through the provider's actions. CallKit owns the audio session's
+/// and hold reach the engine through the provider's actions, and an interruption by another
+/// session holds the engine's call too. CallKit owns the audio session's
 /// activation: the session is configured in the start action, activated by CallKit, and WebRTC's
 /// audio runs between `didActivate` and `didDeactivate` (`CallAudio`), which CallKit also calls
 /// around an interruption by another call. So the app never activates the session itself, and on
@@ -25,8 +26,8 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         /// Whether the system has the audio session active for the call: between `didActivate`
         /// and `didDeactivate`. False while another call interrupts ours.
         var audioActive: Bool
-        /// Whether the system holds the call: the engine shows the user muted and deafened
-        /// meanwhile, and their own mute and deafen come back when the hold ends.
+        /// Whether the system holds the call (`CXSetHeldCallAction`). The engine's call is on
+        /// hold while this or `interrupted` stands.
         var held: Bool
         /// Whether another audio session (a phone call, Siri, an alarm) has interrupted ours and
         /// the system has not yet given it back.
@@ -72,8 +73,8 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         /// Whether the end was asked of the system (`CXEndCallAction`), which then needs no
         /// report of the engine's idle state.
         var ending = false
-        /// The mute and deafen the user had when the system held the call, put back after.
-        var beforeHold: (muted: Bool, deafened: Bool)?
+        /// The hold last asked of the engine, so it is asked only when it changes.
+        var heldAsked = false
 
         init(uuid: UUID, engine: CallEngine, channel: String, name: String?) {
             self.uuid = uuid
@@ -128,6 +129,20 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         for listener in told {
             listener(changed)
         }
+    }
+
+    /// Keeps the engine's call on hold exactly while the system holds it or another session
+    /// has interrupted it: the voice server then pauses everything the user sends and sends
+    /// them nothing, keeping their own mute and deafen for the hold's end, and the others see
+    /// them on hold rather than muted. The peer connection stays up and the microphone track
+    /// stays open through it; `didActivate` is what resumes the audio.
+    private func applyHold(_ call: Current) {
+        let held = latest.held || latest.interrupted
+        guard call.heldAsked != held else {
+            return
+        }
+        call.heldAsked = held
+        call.engine.engine.setHeld(held: held)
     }
 
     /// Calls `listener` on the main queue with the status now and with every change after,
@@ -355,40 +370,22 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             action.fail()
             return
         }
-        if let before = current.beforeHold {
-            // Held, the user is muted by the hold; the mute asked for is theirs once it ends.
-            current.beforeHold = (action.isMuted, before.deafened)
-        } else {
-            current.engine.engine.setMuted(muted: action.isMuted)
-        }
+        // A mute asked while held is the user's own, kept beside the hold at the server for
+        // when it ends.
+        current.engine.engine.setMuted(muted: action.isMuted)
         action.fulfill()
     }
 
-    /// Holding is what the engine can do of it: the user muted and deafened, so nothing leaves
-    /// the device and the server pauses every audio consumer. The peer connection stays up, the
-    /// microphone track stays open on a sender with no track, and the engine knows no held
-    /// state of its own, so the interface shows the user muted and deafened meanwhile. The mute
-    /// and deafen put back are the state's at the hold, which includes a moderator's mute.
+    /// The system's hold (its own controls, or a phone call answered on top of ours) is the
+    /// engine's (`applyHold`).
     func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
         guard let current, current.uuid == action.callUUID else {
             action.fail()
             return
         }
-        let engine = current.engine.engine
-        if action.isOnHold {
-            if current.beforeHold == nil {
-                let state = engine.state()
-                current.beforeHold = (state.muted, state.deafened)
-                engine.setMuted(muted: true)
-                engine.setDeafened(deafened: true)
-            }
-        } else if let before = current.beforeHold {
-            current.beforeHold = nil
-            engine.setMuted(muted: before.muted)
-            engine.setDeafened(deafened: before.deafened)
-        }
-        action.fulfill()
         update { $0.held = action.isOnHold }
+        applyHold(current)
+        action.fulfill()
     }
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
@@ -402,6 +399,9 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         update {
             $0.audioActive = true
             $0.interrupted = false
+        }
+        if let current {
+            applyHold(current)
         }
     }
 
@@ -454,22 +454,24 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         }
     }
 
-    /// WebRTC's audio stops; the session is the interrupter's now. For a call the system holds,
-    /// its `didDeactivate` follows when the interrupter is another call.
+    /// WebRTC's audio stops; the session is the interrupter's now, and the engine's call goes
+    /// on hold, since the user can neither hear nor be heard. For a call the system holds, its
+    /// `didDeactivate` follows when the interrupter is another call.
     private func interruptionBegan() {
-        guard current != nil else {
+        guard let current else {
             return
         }
         RTCAudioSession.sharedInstance().isAudioEnabled = false
         update { $0.interrupted = true }
+        applyHold(current)
     }
 
     /// The interrupter is done. If the system still has our session active (it never called
-    /// `didDeactivate`: a short interruption, Siri's) WebRTC's audio runs again on it; if it
-    /// deactivated the session, `didActivate` is what resumes the call, and nothing is activated
-    /// here, as CallKit requires.
+    /// `didDeactivate`: a short interruption, Siri's) WebRTC's audio runs again on it and the
+    /// hold ends; if it deactivated the session, `didActivate` is what resumes the call, and
+    /// nothing is activated here, as CallKit requires.
     private func interruptionEnded(shouldResume: Bool) {
-        guard current != nil else {
+        guard let current else {
             return
         }
         let active = latest.audioActive
@@ -477,5 +479,6 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             RTCAudioSession.sharedInstance().isAudioEnabled = true
         }
         update { $0.interrupted = false }
+        applyHold(current)
     }
 }

@@ -6,8 +6,8 @@ import XCTest
 /// The call engine with this device's whole platform under it, against a real deployment: it
 /// joins a voice channel's call through the system (CallKit) as far as the simulator's CallKit
 /// takes an outgoing call, then, driven directly, joins, is heard by and hears a second
-/// participant in a browser, mutes and unmutes, takes its socket back after the socket is cut,
-/// and leaves.
+/// participant in a browser, mutes and unmutes, holds the call and releases it, takes its
+/// socket back after the socket is cut, and leaves.
 /// `scripts/check_mobile_call.py` at the repository's root runs the deployment, the browser, and
 /// this test, and gives it what it reads from the environment (passed on by `xcodebuild test`
 /// with a `TEST_RUNNER_` prefix); without them it skips.
@@ -37,6 +37,13 @@ final class CallEngineTests: XCTestCase {
             lock.lock()
             defer { lock.unlock() }
             return opened.count
+        }
+
+        /// What the socket opened last negotiated (`Sec-WebSocket-Extensions`), or "none".
+        var latestExtensions: String {
+            lock.lock()
+            defer { lock.unlock() }
+            return (opened.last as? CallSocket)?.negotiatedExtensions ?? "none"
         }
 
         /// Closes the socket opened last from this side, with no `leave` sent on it, as a
@@ -238,6 +245,32 @@ final class CallEngineTests: XCTestCase {
         await MainActor.run { call.setMuted(false) }
         _ = try await until("the unmute unmutes", seconds: 15, call) { !$0.muted }
 
+        // On hold, as `CallSystem` puts the call for CallKit's hold action and for an
+        // interruption (the simulator's CallKit holds no call to do it through): shown at once,
+        // confirmed by the server, which tells the browser, and the server sends neither side
+        // the other's sound meanwhile. The release shows only on the server's word, and the
+        // sound comes back with it.
+        call.engine.setHeld(held: true)
+        let held = try await until("the hold shows", seconds: 10, call) { $0.held }
+        XCTAssertFalse(held.muted, "the hold is beside the mute, not a mute")
+        try await untilReported("the browser sees the phone on hold", seconds: 15) { try await self.browserOnHold() == [user] }
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        let heldPhone = try await inboundAudio(connection)
+        let heldBrowser = try await browserInbound()
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let heldPhoneLater = try await inboundAudio(connection)
+        let heldBrowserLater = try await browserInbound()
+        XCTAssertLessThan(heldPhoneLater.packets - heldPhone.packets, 20, "held, the phone is sent nothing: \(heldPhone) then \(heldPhoneLater)")
+        XCTAssertLessThan(heldBrowserLater.packets - heldBrowser.packets, 20, "held, the browser is sent nothing: \(heldBrowser) then \(heldBrowserLater)")
+        call.engine.setHeld(held: false)
+        _ = try await until("the server lifts the hold", seconds: 15, call) { !$0.held }
+        try await untilReported("the browser sees the phone off hold", seconds: 15) { try await self.browserOnHold().isEmpty }
+        let released = try await inboundAudio(connection)
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let releasedLater = try await inboundAudio(connection)
+        XCTAssertGreaterThan(releasedLater.packets, released.packets + 50, "released, the sound comes back: \(released) then \(releasedLater)")
+        let hold = "held (the browser listed \(user) on hold; \(heldPhoneLater.packets - heldPhone.packets) packets reached the phone and \(heldBrowserLater.packets - heldBrowser.packets) the browser in 2 s) and released (\(releasedLater.packets - released.packets) packets in 2 s)"
+
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
         // flowing meanwhile on the same peer connection.
         let session = connected.session
@@ -266,7 +299,7 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; resumed on socket 2 with session \(session ?? "?"); left")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); resumed on socket 2 with session \(session ?? "?"); the signalling socket negotiated \(sockets.latestExtensions); left")
     }
 
     // MARK: Helpers
@@ -354,6 +387,18 @@ final class CallEngineTests: XCTestCase {
         }
     }
 
+    /// Waits until `holds`, read from the helper each time, or fails after `seconds`.
+    private func untilReported(_ what: String, seconds: Double, holds: @escaping () async throws -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while try await !holds() {
+            if Date() > deadline {
+                XCTFail("\(what) did not happen within \(seconds) s")
+                throw Stopped()
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
     /// Whether `holds` came true within `seconds`.
     private func waiting(seconds: Double, for holds: @escaping () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
@@ -418,6 +463,12 @@ final class CallEngineTests: XCTestCase {
             samples += (stream["samples"] as? NSNumber)?.intValue ?? 0
         }
         return (packets, samples)
+    }
+
+    /// Whom the browser's call shows on hold, from the helper's report of it.
+    private func browserOnHold() async throws -> [String] {
+        let report = try await get(helper.appendingPathComponent("second-participant/report"))
+        return try XCTUnwrap(report["onHold"] as? [String])
     }
 
     /// The loudest sample the browser's audio slots carried over a second, off their tracks (the

@@ -48,6 +48,8 @@ export interface CallReport {
   readonly cameras: readonly string[];
   readonly screens: readonly string[];
   readonly sharing: boolean;
+  /** The others the voice server says are on hold (`VoiceCallState.onHold`). */
+  readonly onHold: readonly string[];
   /** The media sections the server's description has, idle ones among them. */
   readonly sections: readonly SectionReport[];
   /** The media sections of the browser's own answer, as it last applied one. */
@@ -509,6 +511,7 @@ window.aspenCall = {
       cameras: state?.cameras.map((camera) => camera.user) ?? [],
       screens: state?.screens.map((screen) => screen.user) ?? [],
       sharing: state?.sharingScreen ?? false,
+      onHold: state?.onHold ?? [],
       sections: remoteSections(),
       signalling: sockets.at(-1)?.extensions ?? null,
       answered: sectionsOf(

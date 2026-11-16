@@ -70,6 +70,14 @@ final class CallSocket: Socket, @unchecked Sendable {
         self.task = task
     }
 
+    /// The extensions the upgrade negotiated (`Sec-WebSocket-Extensions` of the server's
+    /// answer), `nil` when none were. URLSession offers `permessage-deflate` on every WebSocket
+    /// of its own accord, with no switch, so against the voice server this names it and the
+    /// offers arrive compressed; the proof's log line says what it negotiated.
+    var negotiatedExtensions: String? {
+        (task.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Sec-WebSocket-Extensions")
+    }
+
     func sendText(text: String) async throws {
         do {
             try await task.send(.string(text))

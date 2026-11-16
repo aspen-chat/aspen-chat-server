@@ -48,7 +48,8 @@ import org.junit.runner.RunWith
  * The call engine with this device's whole platform under it, against a real deployment: it joins
  * a voice channel's call, which Telecom holds as the app's own call (dialing, then active) with the
  * call's service and notification up and its routes listed and switched, is heard by and hears a
- * second participant in a browser, takes its socket back after the socket is cut, and leaves,
+ * second participant in a browser, holds the call and releases it, takes its socket back after the
+ * socket is cut, and leaves,
  * which ends the system's side too. `scripts/check_mobile_call.py --platform android`
  * at the repository's root runs the deployment, the browser, and this test, and gives it what it
  * reads from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.<name>`);
@@ -78,6 +79,10 @@ class CallEngineTest {
 
         val connections: Int
             get() = synchronized(opened) { opened.size }
+
+        /** What the socket opened last negotiated (`Sec-WebSocket-Extensions`), or "none". */
+        val latestExtensions: String
+            get() = synchronized(opened) { (opened.lastOrNull() as? CallSocket)?.negotiatedExtensions ?: "none" }
 
         /** Closes the socket opened last from this side, with no `leave` sent on it, as a network that drops it would. */
         fun cut() {
@@ -281,6 +286,33 @@ class CallEngineTest {
                 assertTrue("and hears the microphone's silence in it: $browserPeak (this side's source: $source)", browserPeak < 0.01)
             }
 
+            // On hold, as `CallTelecom` puts the call for Telecom's `onSetInactive` (which the
+            // emulator, with no other call, never asks): shown at once, confirmed by the server,
+            // which tells the browser, and the server sends neither side the other's sound
+            // meanwhile. The release shows only on the server's word, and the sound comes back
+            // with it.
+            call.engine.setHeld(true)
+            val held = until("the hold shows", 10, call) { it.held }
+            assertTrue("the hold is beside the mute, not a mute", !held.muted)
+            awaitTrue("the browser sees the phone on hold", 15) { browserOnHold(helper) == listOf(user) }
+            delay(1_000)
+            val heldPhone = inboundAudio(connection)
+            val heldBrowser = browserInbound(helper)
+            delay(2_000)
+            val heldPhoneLater = inboundAudio(connection)
+            val heldBrowserLater = browserInbound(helper)
+            assertTrue("held, the phone is sent nothing: $heldPhone then $heldPhoneLater", heldPhoneLater.packets - heldPhone.packets < 20)
+            assertTrue("held, the browser is sent nothing: $heldBrowser then $heldBrowserLater", heldBrowserLater.first - heldBrowser.first < 20)
+            call.engine.setHeld(false)
+            until("the server lifts the hold", 15, call) { !it.held }
+            awaitTrue("the browser sees the phone off hold", 15) { browserOnHold(helper).isEmpty() }
+            val released = inboundAudio(connection)
+            delay(2_000)
+            val releasedLater = inboundAudio(connection)
+            assertTrue("released, the sound comes back: $released then $releasedLater", releasedLater.packets > released.packets + 50)
+            val hold = "held (the browser listed $user on hold; ${heldPhoneLater.packets - heldPhone.packets} packets reached the phone " +
+                "and ${heldBrowserLater.first - heldBrowser.first} the browser in 2 s) and released (${releasedLater.packets - released.packets} packets in 2 s)"
+
             // The socket cut: the engine takes its place back with `resume` on a new socket, media
             // flowing meanwhile on the same peer connection.
             val session = connected.session
@@ -326,8 +358,8 @@ class CallEngineTest {
                     "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone source " +
                     "${if (microphoneSounding) "sounded" else "was silent"} (energy ${source.energy}, level ${source.level}); " +
                     "the browser received ${browserAfter.first - browserBefore.first} packets and " +
-                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; " +
-                    "resumed on socket 2 with session $session; left",
+                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; " +
+                    "resumed on socket 2 with session $session; the signalling socket negotiated ${sockets.latestExtensions}; left",
             )
         } finally {
             listening.cancel()
@@ -435,6 +467,12 @@ class CallEngineTest {
     private suspend fun sourceAudio(connection: PeerConnection): SourceAudio {
         val source = entries(connection).firstOrNull { it.optString("type") == "media-source" && it.optString("kind") == "audio" }
         return SourceAudio(source?.optDouble("totalAudioEnergy", 0.0) ?: 0.0, source?.optDouble("audioLevel", 0.0) ?: 0.0)
+    }
+
+    /** Whom the browser's call shows on hold, from the helper's report of it. */
+    private fun browserOnHold(helper: String): List<String> {
+        val onHold = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("onHold")
+        return (0 until onHold.length()).map { onHold.getString(it) }
     }
 
     /** The packets and samples the browser's connection received of audio, from the helper's report of it. */

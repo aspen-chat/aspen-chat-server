@@ -52,11 +52,22 @@ class CallSocket : Socket {
     private val ended = AtomicBoolean(false)
     private var webSocket: WebSocket? = null
 
+    /**
+     * The extensions the upgrade negotiated (`Sec-WebSocket-Extensions` of the server's answer),
+     * `null` when none were. OkHttp offers `permessage-deflate` on every WebSocket and takes the
+     * server's answer when it is one it reads (no unknown parameter, no `client_max_window_bits`),
+     * so against the voice server this names it and the offers arrive compressed.
+     */
+    @Volatile
+    var negotiatedExtensions: String? = null
+        private set
+
     /** Opens the socket, resuming `opening` once the upgrade is answered, with the socket or the refusal. */
     internal fun open(client: OkHttpClient, request: Request, opening: Continuation<Socket>) {
         val waiting = AtomicReference<Continuation<Socket>?>(opening)
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                negotiatedExtensions = response.header("Sec-WebSocket-Extensions")
                 waiting.getAndSet(null)?.resume(this@CallSocket)
             }
 

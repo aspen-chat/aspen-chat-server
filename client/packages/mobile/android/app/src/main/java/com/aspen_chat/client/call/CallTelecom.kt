@@ -36,8 +36,8 @@ import kotlinx.coroutines.withContext
  * cause the engine's end says; once Telecom lets it go, the routes are detached, the service
  * stopped, and the mode given back. What Telecom asks goes to the engine: its disconnect leaves,
  * its hold (`onSetInactive`, a phone call taken, or an interruption Telecom's own audio focus
- * tells it of) mutes and deafens the user until it sets the call active again, and a mute from
- * the system is the engine's mute.
+ * tells it of) is the engine's hold until it sets the call active again (`onSetActive`), and a
+ * mute from the system is the engine's mute.
  *
  * The incoming direction (a DM call ringing this phone, reported from a push before the engine
  * joins) is a later piece; `attributes` is where it will differ.
@@ -90,8 +90,6 @@ class CallTelecom(
         var endWanted: DisconnectCause? = null
         var disconnectedByTelecom = false
         var refused = false
-        /** The user's own mute and deafen before the call was held, put back when it resumes. */
-        var beforeHold: Pair<Boolean, Boolean>? = null
     }
 
     private fun stateChanged(state: CallState) {
@@ -221,23 +219,20 @@ class CallTelecom(
     }
 
     /**
-     * Mutes and deafens the user while Telecom holds the call (`onSetInactive`), and puts their own
-     * mute and deafen back when it sets the call active again. The engine has no held state of its
-     * own: others see the user muted and deafened, and a camera or screen the user shares goes on.
+     * Telecom's hold (`onSetInactive`) is the engine's: the voice server pauses everything the
+     * user sends, a camera or screen included, sends them nothing, and keeps their own mute and
+     * deafen for when Telecom sets the call active again (`onSetActive`); the others see them on
+     * hold rather than muted.
      */
     private fun held(call: SystemCall, held: Boolean) {
-        val before = call.beforeHold
-        if (held && before == null) {
-            val state = snapshots.latest ?: engine.state()
-            call.beforeHold = state.muted to state.deafened
-            engine.setMuted(true)
-            engine.setDeafened(true)
-            call.phase = Phase.HELD
-        } else if (!held && before != null) {
-            call.beforeHold = null
-            engine.setMuted(before.first)
-            engine.setDeafened(before.second)
-            call.phase = if (call.activeAsked) Phase.ACTIVE else Phase.DIALING
+        if (held == (call.phase == Phase.HELD)) {
+            return
+        }
+        engine.setHeld(held)
+        call.phase = when {
+            held -> Phase.HELD
+            call.activeAsked -> Phase.ACTIVE
+            else -> Phase.DIALING
         }
     }
 

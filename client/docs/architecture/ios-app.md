@@ -150,7 +150,7 @@ Each file under `Call/` implements one of the engine's interfaces over the platf
 | `CallEngine.swift`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                 |
 | `CallSnapshots.swift`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main queue                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `CallHttp.swift`           | `Http`                                                                       | URLSession: no cookies, no redirects followed, every status answered as a response                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `CallSockets.swift`        | `SocketFactory`, `Socket`                                                    | `URLSessionWebSocketTask`, which answers pings itself; `connect` waits for the upgrade, so a refusal is a `TransportError`                                                                                                                                                                                                                                                                                                                                                            |
+| `CallSockets.swift`        | `SocketFactory`, `Socket`                                                    | `URLSessionWebSocketTask`, which answers pings itself and offers `permessage-deflate` on every socket of its own accord (no switch; seen in the upgrade request CFNetwork sends), so the voice server's offers arrive compressed (`negotiatedExtensions` is the server's answer, `permessage-deflate; server_no_context_takeover; client_no_context_takeover` in the proof); `connect` waits for the upgrade, so a refusal is a `TransportError`                                      |
 | `CallCredentials.swift`    | `Credentials`                                                                | The account at the deployment among those `PushStateStore` keeps (the keychain item the web view writes on sign-in): its session token for each request, renewed through `TokenRefresh` (shared with the notification service extension) and written back when the API server refuses it                                                                                                                                                                                              |
 | `CallTracks.swift`         | The track ids the engine passes around                                       | WebRTC tracks by their own `trackId`: the microphone, and each receiver's track                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallPeerConnection.swift` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `RTCPeerConnection`, unified plan, `max-bundle`, RTCP muxed. Transceivers are numbered in the order first seen and told apart by their sender's id, since `transceivers` wraps the native ones anew on every read; a sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its audio track's source's; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values |
@@ -193,23 +193,28 @@ engine makes itself, with the call's handle updated; a call of another deploymen
 and reported ended first.
 
 The system's mute action is the engine's `setMuted`; the app's own mute goes through a
-`CXSetMutedCallAction` so the system's controls show the same. Hold is what the engine can do of it:
-`CXSetHeldCallAction` mutes and deafens (the microphone's track leaves its sender, the server pauses
-every audio consumer), and the hold's end puts back the mute and deafen the state showed at the
-hold, which includes a moderator's mute. The engine has no held state of its own, so the interface
-shows the user muted and deafened meanwhile; the peer connection stays up and the microphone track
-stays open.
+`CXSetMutedCallAction` so the system's controls show the same. The system's hold is the engine's:
+`CXSetHeldCallAction` calls `setHeld`, and so does an interruption, so the engine's call is on hold
+exactly while `Status.held` or `Status.interrupted` stands (`applyHold`, which asks the engine only
+when that changes). The voice server then pauses everything the user sends and sends them nothing,
+keeps their own mute and deafen for the hold's end, and tells the others, who see the user on hold
+rather than muted (`CallState.held` is the user's own, each participant's `held` the others'; the
+engine shows the hold at once and clears it only on the server's word). A mute asked while held is
+the user's own, kept beside the hold. The peer connection stays up and the microphone track stays
+open through a hold; the audio session's handling is unchanged, `didActivate` resuming the audio.
 
 Interruptions follow CallKit's rules: the app never activates the session. Before iOS 27 it watches
 `interruptionNotification`; from iOS 27, `didBecomeInactiveNotification` with the system as source
 and `resumptionRecommendationNotification`, which replace it. On an interruption's start WebRTC's
-audio is stopped (`isAudioEnabled = false`) and `Status.interrupted` set; a phone call answered on
-top of ours also holds it through `CXSetHeldCallAction` and deactivates the session through
-`didDeactivate`, and when it ends CallKit activates the session again and `didActivate` resumes the
-call. An interruption that ends with the session still active in the system's eyes (no
-`didDeactivate` came: a short one, Siri's) has WebRTC's audio started again on it. WebRTC's own
-`RTCAudioSession` also reactivates the session itself on an interruption's end while its activation
-count is above zero, which is the library's doing and not the app's.
+audio is stopped (`isAudioEnabled = false`), `Status.interrupted` set, and the engine's call put on
+hold, since the user can neither hear nor be heard; a phone call answered on top of ours also holds
+it through `CXSetHeldCallAction` and deactivates the session through `didDeactivate`, and when it
+ends CallKit activates the session again and `didActivate` resumes the call, the hold ending with
+the interruption unless the system still holds the call. An interruption that ends with the session
+still active in the system's eyes (no `didDeactivate` came: a short one, Siri's) has WebRTC's audio
+started again on it, and the hold ends with it. WebRTC's own `RTCAudioSession` also reactivates the
+session itself on an interruption's end while its activation count is above zero, which is the
+library's doing and not the app's.
 
 `Info.plist` declares the `audio` and `voip` background modes, so a call goes on with the app in the
 background and, later, VoIP pushes reach it. `providerDidReset` leaves the engine and stops WebRTC's
@@ -248,17 +253,20 @@ radio. These stand to be checked on an iPhone:
       device module (the simulator runs on `ToneAudioDevice`): both sides hear each other, with the
       app in the foreground, in the background, and locked.
 - [ ] The system's mute and hold actions (`CXSetMutedCallAction`, `CXSetHeldCallAction`) reach the
-      engine, and the hold's end puts the mute and deafen back; the app's own mute shows in the
-      system's controls.
+      engine: the others see the user on hold and hear nothing of them, the user hears nothing, and
+      the hold's end brings both back with the user's own mute standing; the app's own mute shows in
+      the system's controls.
 - [ ] The receiver is listed, chosen, and heard at the ear; the proximity sensor turns the screen
       off there and back on when the call moves to the loudspeaker.
 - [ ] A Bluetooth headset is listed by kind with its name, chosen, and the call moves to it;
       choosing the loudspeaker brings it back; connecting a headset during a call takes the call and
       ends the choice; disconnecting it leaves the call on the choice made before.
 - [ ] A wired headset does the same, and a car over Bluetooth is listed as `car`.
-- [ ] A phone call answered on top of ours holds it (muted and deafened), and when it ends ours
-      resumes through `didActivate`, with the same route; a phone call declined leaves ours running.
-- [ ] Siri, an alarm, and a timer interrupt and give the session back.
+- [ ] A phone call answered on top of ours holds it (the others see it on hold), and when it ends
+      ours resumes through `didActivate`, with the same route and off hold; a phone call declined
+      leaves ours running.
+- [ ] Siri, an alarm, and a timer interrupt, holding the call for their length, and give the session
+      back.
 - [ ] The system's call UI on the lock screen ends, mutes, and holds the call, and shows the name
       given to `join`.
 - [ ] A call held for an hour with the screen locked stays connected.
@@ -275,7 +283,10 @@ then, driving the engine directly with the test standing in for `didActivate`, i
 second participant brought in from a browser, reads both sides' statistics for the other's sound
 (the browser's as the loudest sample off its received tracks, `loudness` in `calls/page.ts`, since
 Chromium's own level statistics read zero behind the muted element it plays each track in), mutes
-and unmutes, cuts its socket and watches the engine take its place back with `resume`, and leaves.
+and unmutes, puts the call on hold and releases it (the browser's report, `onHold` in
+`calls/page.ts`, lists the simulator's user meanwhile, neither side's packets reach the other, and
+the release waits for the server's word), cuts its socket and watches the engine take its place back
+with `resume`, and leaves; its log line also names what the signalling socket negotiated.
 `AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
 for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
 choice. `scripts/check_mobile_call.py --platform ios` at the repository's root runs them end to end
