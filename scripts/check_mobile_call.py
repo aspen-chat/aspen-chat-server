@@ -6,8 +6,10 @@ Runs a deployment of its own (`stack.py`), whose web client is the call page of 
 call code (`client/packages/protocol/calls/`), and runs the platform's tests of the engine against
 it: the engine's own (`CallEngineTests` in the iOS app's `AppTests`, `CallEngineTest` in the Android
 app's `androidTest`), in which the engine joins the call, a second participant is brought in from
-Chromium here with a tone as its microphone, each side's statistics show the other's sound, the
-socket is cut and resumed, and the call is left; and the web view's bridge to it
+Chromium here with a tone as its microphone, each side's statistics show the other's sound, a file
+is sent each way between them and its bytes compared by hash (the browser's offer accepted directly,
+the phone's through the relay), the socket is cut and resumed, and the call is left; and the web
+view's bridge to it
 (`AspenCallPluginTests`, `AspenCallPluginTest`), in which the app's own page drives the `AspenCall`
 plugin through the Capacitor bridge, joins the same channel, and reads the engine's snapshots and
 routes as they reach it; and, on iOS, the rings' (`CallRingsTests`, against a stand-in deployment
@@ -236,10 +238,15 @@ def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
     `POST /second-participant/show-video` has his page show others' video,
     `POST /second-participant/camera/start` and `/camera/stop` turn his fake camera on and off,
     `GET /second-participant/camera-sample?user=<id>` is a frame of that user's camera as his page
-    plays it (`CameraSample`, or `null`), and `POST /second-participant/leave`; `POST /ring` has Bob
-    call the device's user in their DM and answers the ring the deployment holds for them
-    (`Dm.ring`), `GET /ring` that ring while it stands (`{"ring": null}` once it does not), and
-    `POST /ring/end` has Bob leave the DM's call."""
+    plays it (`CameraSample`, or `null`), `POST /second-participant/offer`
+    (`{"name", "size", "allowDirect"}`) has him offer a file and answers its id and SHA-256,
+    `GET /second-participant/files` his page's files, `POST /second-participant/accept`
+    (`{"offer", "mode"}`) has him accept one into memory,
+    `GET /second-participant/received?offer=…&peer=…` the SHA-256 of what he received (`null`
+    until it has all arrived), and `POST /second-participant/leave`; `POST /ring` has Bob call the
+    device's user in their DM and answers the ring the deployment holds for them (`Dm.ring`),
+    `GET /ring` that ring while it stands (`{"ring": null}` once it does not), and `POST /ring/end`
+    has Bob leave the DM's call."""
 
     class Handler(BaseHTTPRequestHandler):
         def answer(self, status: int, body: str) -> None:
@@ -268,6 +275,11 @@ def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
                     self.answer(200 if second.ask("camera on") == "ok" else 500, "{}")
                 elif self.path == "/second-participant/camera/stop":
                     self.answer(200 if second.ask("camera off") == "ok" else 500, "{}")
+                elif self.path == "/second-participant/offer":
+                    self.answer(200, second.ask("offer " + json.dumps(self.body())))
+                elif self.path == "/second-participant/accept":
+                    asked = self.body()
+                    self.answer(200, second.ask(f"accept {asked['offer']} {asked['mode']}"))
                 elif self.path == "/ring":
                     self.answer(200, json.dumps(dm.ring()))
                 elif self.path == "/ring/end":
@@ -281,13 +293,19 @@ def helper(second: Second, bob: str, dm: Dm) -> ThreadingHTTPServer:
         def do_GET(self) -> None:  # noqa: N802
             try:
                 parsed = urlparse(self.path)
+                query = parse_qs(parsed.query)
                 if parsed.path == "/second-participant/report":
                     self.answer(200, second.ask("report"))
                 elif parsed.path == "/second-participant/loudness":
                     self.answer(200, json.dumps({"peak": float(second.ask("loudness"))}))
                 elif parsed.path == "/second-participant/camera-sample":
-                    user = parse_qs(parsed.query).get("user", [""])[0]
+                    user = query.get("user", [""])[0]
                     self.answer(200, second.ask(f"sample {user}"))
+                elif parsed.path == "/second-participant/files":
+                    self.answer(200, second.ask("files"))
+                elif parsed.path == "/second-participant/received":
+                    offer, peer = query.get("offer", [""])[0], query.get("peer", [""])[0]
+                    self.answer(200, second.ask(f"received {offer} {peer}"))
                 elif parsed.path == "/ring":
                     self.answer(200, json.dumps({"ring": dm.standing()}))
                 else:

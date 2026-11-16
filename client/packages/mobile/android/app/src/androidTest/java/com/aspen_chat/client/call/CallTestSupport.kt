@@ -177,12 +177,17 @@ object CallTestSupport {
         http("POST", "$helper/ring/end")
     }
 
-    /** The body of `url`'s answer, which must be `200`. */
-    fun http(method: String, url: String): String {
+    /** The body of `url`'s answer, which must be `200`; `body` is sent as JSON when given. */
+    fun http(method: String, url: String, body: String? = null): String {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = 60_000
         connection.readTimeout = 60_000
+        if (body != null) {
+            connection.doOutput = true
+            connection.setRequestProperty("content-type", "application/json")
+            connection.outputStream.use { it.write(body.toByteArray()) }
+        }
         val status = connection.responseCode
         val body = (if (status < 400) connection.inputStream else connection.errorStream)?.bufferedReader()?.readText() ?: ""
         assertEquals("$method $url: $body", 200, status)

@@ -221,13 +221,22 @@ The same holds below the UI:
 
 ## File transfers in calls
 
-`FileTransfers` handles file transfers in calls:
+`FileTransfers` handles file transfers in calls in a browser:
 
 - `VoiceCall` feeds it its signalling frames and carries its state as `files`.
 - Its peer connections are injected (`createPeerConnection`), so `transfers.test.ts` runs whole
   transfers between two fakes.
 
-The repository's `docs/architecture/file-transfers.md` describes the flow.
+In the mobile apps the call engine handles them (`voice/native-calls.md`, Files): `NativeCall` maps
+the engine's `files` to the same `FilesState` and forwards the same commands, and the file itself
+never crosses to the page. The `Call` interface takes both: `offerFile` a `Blob` from a browser's
+picker or a `PickedFile` the native side holds by reference, `acceptOffer` a `FileSink` that names
+the place the native side opened by `destination`. `FilesState.failure`, a file command that failed
+before any transfer came of it, is only ever set by the engine; a browser's is always `null`, and
+`dismissFileFailure` clears it.
+
+The repository's `docs/architecture/file-transfers.md` describes the flow, and how the two
+implementations decide alike.
 
 ### File names
 
@@ -235,17 +244,23 @@ An offered file's name is shown and saved without format and control characters 
 Attachments' names are shown the same way. **Why:** a bidirectional override must not make `gpj.exe`
 read as `exe.jpg`.
 
-### Saving on mobile
+### Files on mobile
 
-In the mobile apps, a receiver chooses where a file goes through `AspenFilesPlugin`:
+In the mobile apps, a receiver chooses where a file goes, and a sender the file to offer, through
+`AspenFilesPlugin`, whose files `FileRegistry` holds by id for the call engine (`CallFiles`) to read
+and write:
 
-| Platform | Code                                 | Behaviour                                                                             |
-| -------- | ------------------------------------ | ------------------------------------------------------------------------------------- |
-| Android  | `android/.../files/`                 | `DocumentSinkTest` checks the native side on a device                                 |
-| iOS      | `ios/App/App/AspenFilesPlugin.swift` | The system's save picker moves an empty file where the user says; it is written there |
+| Platform | Code                                                       | Behaviour                                                                                                                                                |
+| -------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Android  | `android/.../files/`                                       | The create-document picker names a received file (`DocumentSink`; `DocumentSinkTest` checks it on a device), the open-document picker a file to offer    |
+| iOS      | `ios/App/App/AspenFilesPlugin.swift`, `FileRegistry.swift` | The system's save picker moves an empty file where the user says, and it is written there; the open picker chooses a file to offer, held with its access |
 
-`filesBridge.ts` wraps the plugin as a `FileSink`, writing through the bridge in base64 pieces of
-about a megabyte.
+`filesBridge.ts` wraps the plugin: `nativeChooseDestination` as a `FileSink` naming its
+`destination`, which a browser-side call writes through the bridge in base64 pieces of about a
+megabyte and a native call's engine writes natively; `nativePickFile` as a `PickedFile`, with
+`nativeReleaseFile` for one the offer dialog closes without offering. The offer dialog
+(`OfferFileDialog`) picks through the system's picker when the call is native (`nativeCalls()`), and
+through the browser's `FileTrigger` otherwise.
 
 ### iOS plugin registration
 

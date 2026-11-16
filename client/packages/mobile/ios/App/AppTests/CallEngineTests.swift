@@ -1,5 +1,6 @@
 import AVFoundation
 import CallKit
+import CryptoKit
 import UIKit
 import XCTest
 @testable import App
@@ -11,8 +12,10 @@ import XCTest
 /// browser's camera and draws it (`CallVideo`, a renderer counting frames and reporting the
 /// picture's shape where the page would put its hole, and the picture in picture started on
 /// it), sends a camera of its own (in software, `SyntheticVideoCapturer`) that the browser
-/// decodes and sees a picture in, moves it to the other camera, takes its socket back after the
-/// socket is cut with video flowing on, and leaves.
+/// decodes and sees a picture in, moves it to the other camera, receives a file the browser
+/// offers directly and sends it one through the relay, each compared by hash and each cueing
+/// the transfer sounds, takes its socket back after the socket is cut with video flowing on,
+/// and leaves.
 /// `scripts/check_mobile_call.py` at the repository's root runs the deployment, the browser, and
 /// this test, and gives it what it reads from the environment (passed on by `xcodebuild test`
 /// with a `TEST_RUNNER_` prefix); without them it skips.
@@ -442,11 +445,87 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(moved.track, opened.track)
         let video = "watched the browser's camera (\(remoteRenderer.framesRendered) frames drawn, \(remoteShape.width)×\(remoteShape.height)) in its hole \(remoteBox); sent a camera the browser decoded (\(try await browserVideoFrames()) frames, a frame of brightness \(Int(sample.brightness)) at \(sample.width)×\(sample.height)) with its preview \(selfShape.width)×\(selfShape.height) (rotation \(selfShape.rotation)°) in \(selfBox); moved it to \(moved.device.id)"
 
+        // Files. The browser offers one: the offer reaches the engine, the test chooses a place as
+        // the picker would (a file in the temporary directory, held by the registry as the plugin
+        // holds a placed file), accepts it directly, and the bytes written are the bytes offered.
+        XCTAssertTrue(connected.grants.transferFiles, "the channel grants Transfer files")
+        let browserOffer = try await post(
+            helper.appendingPathComponent("second-participant/offer"),
+            body: ["name": "from-browser.bin", "size": 300_000, "allowDirect": true]
+        )
+        let browserOfferId = try XCTUnwrap(browserOffer["offer"] as? String)
+        let offeredHash = try XCTUnwrap(browserOffer["sha256"] as? String)
+        let offered = try await until("the browser's offer reaches the simulator", seconds: 15, call) {
+            $0.files.offers.contains { $0.id == browserOfferId }
+        }
+        let standing = try XCTUnwrap(offered.files.offers.first { $0.id == browserOfferId })
+        XCTAssertEqual(standing.from, bob)
+        XCTAssertEqual(standing.size, 300_000)
+        XCTAssertFalse(standing.own)
+        let receivedURL = FileManager.default.temporaryDirectory.appendingPathComponent("received-\(browserOfferId).bin")
+        try Data().write(to: receivedURL)
+        let destination = try FileRegistry.shared.addReceived(receivedURL)
+        call.engine.acceptOffer(offer: browserOfferId, mode: .directPreferred, destination: destination)
+        let receivedDone = try await until("the browser's file arrives", seconds: 60, call) {
+            $0.files.transfers.contains { $0.offer == browserOfferId && $0.status == .completed }
+        }
+        let receivedTransfer = try XCTUnwrap(receivedDone.files.transfers.first { $0.offer == browserOfferId })
+        XCTAssertEqual(receivedTransfer.role, .receiver)
+        XCTAssertEqual(receivedTransfer.bytes, 300_000)
+        XCTAssertEqual(receivedTransfer.route, .direct)
+        XCTAssertEqual(try sha256(of: receivedURL), offeredHash, "the bytes written are the bytes offered")
+        try await untilReported("the browser sees its transfer completed", seconds: 15) {
+            try await self.browserTransfers().contains { $0["offer"] as? String == browserOfferId && $0["status"] as? String == "completed" }
+        }
+        XCTAssertNil(receivedDone.files.failure, "the files' commands failed nowhere")
+        // The engine gives a cue again only past its repeat gap (`SoundCue::repeat_gap`, the web's
+        // 250 ms), and a direct transfer over loopback can complete within it, so the second
+        // transfer waits past the gap for its cues to be told apart from the first's.
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        // And the simulator offers one, which the browser accepts through the relay alone: the
+        // engine reads the picked file as the plugin would hold it, and the browser's hash of
+        // what arrived is the file's.
+        let sentURL = FileManager.default.temporaryDirectory.appendingPathComponent("from-simulator.bin")
+        try Data((0..<400_000).map { UInt8($0 % 251) }).write(to: sentURL)
+        let reference = FileRegistry.shared.addPicked(sentURL)
+        let phoneOffer = UUID().uuidString.lowercased()
+        call.engine.offerFile(offer: phoneOffer, reference: reference, name: "from-simulator.bin", allowDirect: true, validForSeconds: 60)
+        let own = try await until("the simulator's offer stands", seconds: 15, call) {
+            $0.files.offers.contains { $0.id == phoneOffer && $0.own }
+        }
+        XCTAssertEqual(own.files.offers.first { $0.id == phoneOffer }?.size, 400_000)
+        try await untilReported("the browser sees the simulator's offer", seconds: 15) {
+            try await self.browserOffers().contains { $0["id"] as? String == phoneOffer }
+        }
+        _ = try await post(helper.appendingPathComponent("second-participant/accept"), body: ["offer": phoneOffer, "mode": "relayOnly"])
+        let sentDone = try await until("the simulator's file is sent", seconds: 90, call) {
+            $0.files.transfers.contains { $0.offer == phoneOffer && $0.status == .completed }
+        }
+        let sentTransfer = try XCTUnwrap(sentDone.files.transfers.first { $0.offer == phoneOffer })
+        XCTAssertEqual(sentTransfer.role, .sender)
+        XCTAssertEqual(sentTransfer.mode, .relayOnly)
+        XCTAssertEqual(sentTransfer.bytes, 400_000)
+        XCTAssertEqual(sentTransfer.route, .relayed, "a relay-only transfer travels through the relay")
+        var browserHash: String?
+        try await untilReported("the browser has the simulator's file", seconds: 30) {
+            let answer = try await self.get(try XCTUnwrap(URL(string: "second-participant/received?offer=\(phoneOffer)&peer=\(user)", relativeTo: self.helper)))
+            browserHash = answer["sha256"] as? String
+            return browserHash != nil
+        }
+        XCTAssertEqual(browserHash, try sha256(of: sentURL), "the bytes received are the bytes sent")
+        let browserRoute = try await browserTransfers().first { $0["offer"] as? String == phoneOffer }?["route"] as? String ?? "?"
+        call.engine.withdrawOffer(offer: phoneOffer)
+        _ = try await until("the simulator's offer is withdrawn", seconds: 15, call) { !$0.files.offers.contains { $0.id == phoneOffer } }
+        let files = "received \(receivedTransfer.bytes) bytes of the browser's file \(receivedTransfer.route.map { "\($0)" } ?? "?") (hash matched), sent \(sentTransfer.bytes) bytes of the simulator's \(sentTransfer.route.map { "\($0)" } ?? "?") (the browser read it \(browserRoute); hash matched)"
+
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
         // flowing meanwhile on the same peer connection, and the call connected throughout, as
         // the web client's stays through its own resume; the new socket's frames say the resume
         // was presented and answered `ready`.
         let session = connected.session
+        // The transfers' connections are closed; the call's own is the one that stays.
+        let connectionsBeforeCut = peerConnections.created.count
         seen.clear()
         sockets.cut()
         try await untilTrue("the engine presents the resume on a new socket", seconds: 20) {
@@ -456,7 +535,7 @@ final class CallEngineTests: XCTestCase {
         XCTAssertFalse(seen.statuses.contains(.rejoining), "a resume within the grace keeps the call connected: \(seen.statuses)")
         XCTAssertEqual(resumed.session, session, "the same session")
         XCTAssertEqual(sockets.connections, socketsBefore + 2, "one socket more")
-        XCTAssertEqual(peerConnections.created.count, connectionsBefore + 1, "the same peer connection")
+        XCTAssertEqual(peerConnections.created.count, connectionsBeforeCut, "the same peer connection")
         XCTAssertTrue(resumed.slots.contains { $0.user == bob }, "the slots stand")
         let afterResume = try await inboundAudio(connection)
         let framesAfterResume = remoteRenderer.framesRendered
@@ -486,14 +565,18 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        // Leaving is the leaving sound, on the session the test still holds active, and the
-        // resume within the grace was no loss: the joining as the engine connected and as the
-        // browser joined, then the leaving.
+        // Leaving is the leaving sound, on the session the test still holds active, each transfer
+        // was its acceptance and its completion, and the resume within the grace was no loss: the
+        // joining as the engine connected and as the browser joined, the two transfers, then the
+        // leaving.
         try await untilTrue("the leaving is played", seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
         let played = sounds.played
         XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
-        XCTAssertEqual(played.map(\.cue), [.callJoined, .callJoined, .callLeft], "a resume within the grace is no loss")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?"), connected throughout, with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
+        XCTAssertEqual(
+            played.map(\.cue),
+            [.callJoined, .callJoined, .transferAccepted, .transferComplete, .transferAccepted, .transferComplete, .callLeft],
+            "each transfer is an acceptance and a completion, and a resume within the grace is no loss")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); \(files); resumed on socket 2 with session \(session ?? "?"), connected throughout, with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
     }
 
     // MARK: Helpers
@@ -659,10 +742,14 @@ final class CallEngineTests: XCTestCase {
         return true
     }
 
-    private func post(_ url: URL) async throws -> [String: Any] {
+    private func post(_ url: URL, body: [String: Any]? = nil) async throws -> [String: Any] {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 60
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200, String(decoding: data, as: UTF8.self))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -711,6 +798,22 @@ final class CallEngineTests: XCTestCase {
             samples += (stream["samples"] as? NSNumber)?.intValue ?? 0
         }
         return (packets, samples)
+    }
+
+    /// The offers the browser's call shows, from the helper's report of its files.
+    private func browserOffers() async throws -> [[String: Any]] {
+        let files = try await get(helper.appendingPathComponent("second-participant/files"))
+        return try XCTUnwrap(files["offers"] as? [[String: Any]])
+    }
+
+    /// The transfers the browser's call shows, from the helper's report of its files.
+    private func browserTransfers() async throws -> [[String: Any]] {
+        let files = try await get(helper.appendingPathComponent("second-participant/files"))
+        return try XCTUnwrap(files["transfers"] as? [[String: Any]])
+    }
+
+    private func sha256(of url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Whom the browser's call shows on hold, from the helper's report of it.

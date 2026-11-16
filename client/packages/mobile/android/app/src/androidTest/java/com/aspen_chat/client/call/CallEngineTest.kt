@@ -6,8 +6,11 @@ import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.aspen_chat.client.files.DocumentSink
+import com.aspen_chat.client.files.FileRegistry
 import com.aspen_chat.client.push.PushStore
 import com.aspen_chat.client.call.CallTestSupport.argument
 import com.aspen_chat.client.call.CallTestSupport.awaitTrue
@@ -39,7 +42,14 @@ import com.aspen_chat.client.voice.Socket
 import com.aspen_chat.client.voice.SocketFactory
 import com.aspen_chat.client.voice.SoundCue
 import com.aspen_chat.client.voice.TrackId
+import com.aspen_chat.client.voice.TransferMode
+import com.aspen_chat.client.voice.TransferRole
+import com.aspen_chat.client.voice.TransferRoute
+import com.aspen_chat.client.voice.TransferStatus
 import com.aspen_chat.client.voice.WatchedVideo
+import java.io.File
+import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -70,8 +80,10 @@ import org.junit.runner.RunWith
  * second participant in a browser, holds the call and releases it, watches the browser's camera
  * (its track retained as `CallVideo` retains one, a sink counting its frames and reading their
  * shape), sends the emulator's own camera (`CallCamera`), which the browser decodes and sees a
- * picture in, moves it to the other camera, takes its socket back after the socket is cut with
- * video flowing on, and leaves, which ends the system's side too. `scripts/check_mobile_call.py --platform android`
+ * picture in, moves it to the other camera, receives a file the browser offers directly and sends
+ * it one through the relay, each compared by hash and each cueing the transfer sounds, takes its
+ * socket back after the socket is cut with video flowing on, and leaves, which ends the system's
+ * side too. `scripts/check_mobile_call.py --platform android`
  * at the repository's root runs the deployment, the browser, and this test, and gives it what it
  * reads from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.<name>`);
  * without them it is skipped.
@@ -497,11 +509,80 @@ class CallEngineTest {
                 "sent the camera ${opened.second.id} (preview ${selfShape.first}×${selfShape.second} at ${selfShape.third}°), which the browser decoded " +
                 "(${browserVideoFrames(helper)} frames, a frame of brightness ${sample.brightness.toInt()} and spread ${sample.spread.toInt()} at ${sample.width}×${sample.height}); $moved"
 
+            // Files. The browser offers one: the offer reaches the engine, the test chooses a
+            // place as the picker would (a file in the cache, held by the registry as the plugin
+            // holds a document), accepts it directly, and the bytes written are the bytes offered.
+            assertTrue("the channel grants Transfer files", connected.grants.transferFiles)
+            val browserOffer = JSONObject(
+                http("POST", "$helper/second-participant/offer", """{"name":"from-browser.bin","size":300000,"allowDirect":true}"""),
+            )
+            val browserOfferId = browserOffer.getString("offer")
+            val offeredHash = browserOffer.getString("sha256")
+            val offered = until("the browser's offer reaches the phone", 15, call) { state ->
+                state.files.offers.any { it.id == browserOfferId }
+            }
+            val standing = offered.files.offers.single { it.id == browserOfferId }
+            assertEquals(bob, standing.from)
+            assertEquals(300000uL, standing.size)
+            assertEquals(false, standing.own)
+            val receivedFile = File(context.cacheDir, "received-$browserOfferId.bin")
+            val destination = FileRegistry.shared().addReceived(DocumentSink.open(context.contentResolver, Uri.fromFile(receivedFile)))
+            call.engine.acceptOffer(browserOfferId, TransferMode.DIRECT_PREFERRED, destination)
+            val receivedDone = until("the browser's file arrives", 60, call) { state ->
+                state.files.transfers.any { it.offer == browserOfferId && it.status == TransferStatus.COMPLETED }
+            }
+            val receivedTransfer = receivedDone.files.transfers.single { it.offer == browserOfferId }
+            assertEquals(TransferRole.RECEIVER, receivedTransfer.role)
+            assertEquals(300000uL, receivedTransfer.bytes)
+            assertEquals(TransferRoute.DIRECT, receivedTransfer.route)
+            assertEquals("the bytes written are the bytes offered", offeredHash, sha256(receivedFile))
+            awaitTrue("the browser sees its transfer completed", 15) {
+                browserTransfers(helper).any { it.getString("offer") == browserOfferId && it.getString("status") == "completed" }
+            }
+            assertNull("the files' commands failed nowhere", receivedDone.files.failure)
+            // The engine gives a cue again only past its repeat gap (`SoundCue::repeat_gap`, the
+            // web's 250 ms), and a direct transfer over loopback completes within it here, so the
+            // second transfer waits past the gap for its cues to be told apart from the first's.
+            delay(300)
+
+            // And the phone offers one, which the browser accepts through the relay alone: the
+            // engine reads the picked file as the plugin would hold it, and the browser's hash of
+            // what arrived is the file's.
+            val sentFile = File(context.cacheDir, "from-phone.bin")
+            sentFile.writeBytes(ByteArray(400000) { (it % 251).toByte() })
+            val reference = FileRegistry.shared().addPicked(Uri.fromFile(sentFile))
+            val phoneOffer = UUID.randomUUID().toString()
+            call.engine.offerFile(phoneOffer, reference, "from-phone.bin", true, 60u)
+            val own = until("the phone's offer stands", 15, call) { state -> state.files.offers.any { it.id == phoneOffer && it.own } }
+            assertEquals(400000uL, own.files.offers.single { it.id == phoneOffer }.size)
+            awaitTrue("the browser sees the phone's offer", 15) { browserOffers(helper).any { it.getString("id") == phoneOffer } }
+            http("POST", "$helper/second-participant/accept", """{"offer":"$phoneOffer","mode":"relayOnly"}""")
+            val sentDone = until("the phone's file is sent", 90, call) { state ->
+                state.files.transfers.any { it.offer == phoneOffer && it.status == TransferStatus.COMPLETED }
+            }
+            val sentTransfer = sentDone.files.transfers.single { it.offer == phoneOffer }
+            assertEquals(TransferRole.SENDER, sentTransfer.role)
+            assertEquals(TransferMode.RELAY_ONLY, sentTransfer.mode)
+            assertEquals(400000uL, sentTransfer.bytes)
+            assertEquals("a relay-only transfer travels through the relay", TransferRoute.RELAYED, sentTransfer.route)
+            val browserHash = awaitValue("the browser has the phone's file", 30) {
+                val answer = JSONObject(http("GET", "$helper/second-participant/received?offer=$phoneOffer&peer=$user"))
+                if (answer.isNull("sha256")) null else answer.getString("sha256")
+            }
+            assertEquals("the bytes received are the bytes sent", sha256(sentFile), browserHash)
+            val browserRoute = browserTransfers(helper).single { it.getString("offer") == phoneOffer }.optString("route")
+            call.engine.withdrawOffer(phoneOffer)
+            until("the phone's offer is withdrawn", 15, call) { state -> state.files.offers.none { it.id == phoneOffer } }
+            val files = "received ${receivedTransfer.bytes} bytes of the browser's file ${receivedTransfer.route} (hash matched), " +
+                "sent ${sentTransfer.bytes} bytes of the phone's ${sentTransfer.route} (the browser read it $browserRoute; hash matched)"
+
             // The socket cut: the engine takes its place back with `resume` on a new socket, media
             // flowing meanwhile on the same peer connection, and the call connected throughout,
             // as the web client's stays through its own resume; the new socket's frames say the
             // resume was presented and answered `ready`.
             val session = connected.session
+            // The transfers' connections are closed; the call's own is the one that stays.
+            val connectionsBeforeCut = peerConnections.count
             seen.clear()
             sockets.cut()
             awaitTrue("the engine presents the resume on a new socket", 20) {
@@ -511,7 +592,7 @@ class CallEngineTest {
             assertTrue("a resume within the grace keeps the call connected: ${seen.statuses}", seen.statuses.none { it == CallStatus.REJOINING })
             assertEquals("the same session", session, resumed.session)
             assertEquals("one socket more", 2, sockets.connections)
-            assertEquals("the same peer connection", 1, peerConnections.count)
+            assertEquals("the same peer connection", connectionsBeforeCut, peerConnections.count)
             assertTrue("the slots stand", resumed.slots.any { it.user == bob })
             val afterResume = inboundAudio(connection)
             val framesAfterResume = remoteFrames.frames
@@ -551,15 +632,21 @@ class CallEngineTest {
             assertNull(call.routes.currentKind)
             val telecomAfter = telecomLines(callId)
             assertTrue("Telecom no longer holds the call $callId:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })
-            // Leaving is the leaving sound, and the resume within the grace was no loss: the
-            // joining as the engine connected and as the browser joined, then the leaving.
+            // Leaving is the leaving sound, each transfer was its acceptance and its completion,
+            // and the resume within the grace was no loss: the joining as the engine connected and
+            // as the browser joined, the two transfers, then the leaving.
             awaitTrue("the leaving is played", 10) { sounds.played.any { it.cue == SoundCue.CALL_LEFT } }
             soundsListening.cancel()
             val played = sounds.played
             assertTrue("every sound's player played as it was given: $played", played.all { it.playing })
             assertEquals(
-                "a resume within the grace is no loss",
-                listOf(SoundCue.CALL_JOINED, SoundCue.CALL_JOINED, SoundCue.CALL_LEFT),
+                "each transfer is an acceptance and a completion, and a resume within the grace is no loss",
+                listOf(
+                    SoundCue.CALL_JOINED, SoundCue.CALL_JOINED,
+                    SoundCue.TRANSFER_ACCEPTED, SoundCue.TRANSFER_COMPLETE,
+                    SoundCue.TRANSFER_ACCEPTED, SoundCue.TRANSFER_COMPLETE,
+                    SoundCue.CALL_LEFT,
+                ),
                 played.map { it.cue },
             )
             println("call-engine-test: left; Telecom's call ended, the service and its notification are down, routes empty, audio mode $modeBefore again")
@@ -569,7 +656,7 @@ class CallEngineTest {
                     "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone, expected $expectedMicrophone, " +
                     "measured energy ${source.energy} and level ${source.level} at its source; " +
                     "the browser received ${browserAfter.first - browserBefore.first} packets and " +
-                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; $video; " +
+                    "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; $video; $files; " +
                     "resumed on socket 2 with session $session, connected throughout, with video flowing on; camera off; the signalling socket negotiated ${sockets.latestExtensions}; left",
             )
         } finally {
@@ -579,7 +666,7 @@ class CallEngineTest {
         }
     }
 
-    // --- Helpers the camera needs; the rest are `CallTestSupport`'s --------------------------
+    // --- Helpers the camera and the files need; the rest are `CallTestSupport`'s ------------
 
     /** Opens `camera` on `id` for `origin`'s engine, on the main thread, and answers the track and the camera opened. */
     private suspend fun cameraStarted(camera: CallCamera, id: String?, origin: String): Pair<TrackId, CallCameraDevice> =
@@ -608,4 +695,19 @@ class CallEngineTest {
             delay(500)
         }
     }
+
+    /** The offers the browser's call shows, from the helper's report of its files. */
+    private fun browserOffers(helper: String): List<JSONObject> {
+        val offers = JSONObject(http("GET", "$helper/second-participant/files")).getJSONArray("offers")
+        return (0 until offers.length()).map { offers.getJSONObject(it) }
+    }
+
+    /** The transfers the browser's call shows, from the helper's report of its files. */
+    private fun browserTransfers(helper: String): List<JSONObject> {
+        val transfers = JSONObject(http("GET", "$helper/second-participant/files")).getJSONArray("transfers")
+        return (0 until transfers.length()).map { transfers.getJSONObject(it) }
+    }
+
+    private fun sha256(file: File): String =
+        MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
 }

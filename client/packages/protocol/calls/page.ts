@@ -14,6 +14,7 @@ import {
   browserVoiceMedia,
   type CallConnection,
   type Session,
+  type TransferMode,
   type VoiceCallState,
 } from "../src";
 
@@ -39,6 +40,31 @@ export interface SectionReport {
   readonly direction: "sendrecv" | "sendonly" | "recvonly" | "inactive";
   readonly stream: string | null;
   readonly ssrcs: readonly number[];
+}
+
+/** The call's files as the page sees them (`VoiceCallState.files`), less what a browser alone holds. */
+export interface FilesReport {
+  readonly offers: readonly {
+    readonly id: string;
+    readonly from: string;
+    readonly name: string;
+    readonly size: number;
+    readonly allowDirect: boolean;
+    readonly own: boolean;
+  }[];
+  readonly transfers: readonly {
+    readonly offer: string;
+    readonly peer: string;
+    readonly role: "sender" | "receiver";
+    readonly mode: TransferMode;
+    readonly name: string;
+    readonly size: number;
+    readonly bytes: number;
+    readonly status: string;
+    readonly route: string | null;
+    readonly endedBy: string | null;
+  }[];
+  readonly relayMbps: number | null;
 }
 
 export interface CallReport {
@@ -116,9 +142,33 @@ declare global {
       cameraSample(user: string): Promise<CameraSample | null>;
       sync(streams: readonly string[], delayMs: number, seconds: number): Promise<SyncReport[]>;
       reference(delayMs: number, seconds: number): Promise<SyncReport>;
+      /**
+       * Offers `size` bytes of `pattern` as `name`, for a minute; the offer's id and the SHA-256
+       * of what was offered, as hex.
+       */
+      offerFile(
+        name: string,
+        size: number,
+        allowDirect: boolean,
+      ): Promise<{ offer: string; sha256: string }>;
+      files(): FilesReport;
+      /** Accepts `offer` in `mode`, holding the file in memory for `receivedHash`. */
+      acceptOffer(offer: string, mode: TransferMode): void;
+      /** The SHA-256 of the file received from `peer` for `offer`, as hex, once it has all arrived. */
+      receivedHash(offer: string, peer: string): Promise<string | null>;
       leave(): void;
     };
   }
+}
+
+/** Bytes that are not all alike, so a chunk out of place would show; the phones' tests write the same. */
+function pattern(size: number): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(new ArrayBuffer(size)).map((_, i) => i % 251);
+}
+
+async function sha256(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 allowLoopbackPlainText(true);
@@ -574,6 +624,52 @@ window.aspenCall = {
       sender.close();
       receiver.close();
     }
+  },
+  async offerFile(name, size, allowDirect) {
+    if (call === null) {
+      throw new Error("no call");
+    }
+    const bytes = pattern(size);
+    const offer = call.offerFile(new Blob([bytes]), name, allowDirect, 60);
+    return { offer, sha256: await sha256(bytes) };
+  },
+  files() {
+    const files = call?.state.files;
+    return {
+      offers: (files?.offers ?? []).map((o) => ({
+        id: o.id,
+        from: o.from,
+        name: o.name,
+        size: o.size,
+        allowDirect: o.allowDirect,
+        own: o.own,
+      })),
+      transfers: (files?.transfers ?? []).map((t) => ({
+        offer: t.offer,
+        peer: t.peer,
+        role: t.role,
+        mode: t.mode,
+        name: t.name,
+        size: t.size,
+        bytes: t.bytes,
+        status: t.status,
+        route: t.route,
+        endedBy: t.endedBy,
+      })),
+      relayMbps: files?.relayMbps ?? null,
+    };
+  },
+  acceptOffer(offer, mode) {
+    call?.acceptOffer(offer, mode);
+  },
+  async receivedHash(offer, peer) {
+    const transfer = call?.state.files.transfers.find(
+      (t) => t.offer === offer && t.peer === peer && t.role === "receiver",
+    );
+    if (transfer?.file == null) {
+      return null;
+    }
+    return sha256(await transfer.file.arrayBuffer());
   },
   async report() {
     const state = call?.state;

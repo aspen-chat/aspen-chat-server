@@ -7,14 +7,18 @@
  * `loudness`, since the browser's own level statistics read zero), `show` starts showing others'
  * video (`showVideo`), `camera on` and `camera off` turn Chromium's fake camera on and off,
  * `sample <user>` prints a `CameraSample` of that user's camera as the page plays it (or `null`),
- * each printing `ok` or the JSON, and `leave` leaves and exits.
+ * `offer <json>` offers a file of `size` bytes as `name` (`{"name", "size", "allowDirect"}`) and
+ * prints its id and the SHA-256 of what was offered, `files` prints the page's `FilesReport`,
+ * `accept <offer> <mode>` accepts an offer into memory, `received <offer> <peer>` prints the
+ * SHA-256 of the file received, or `null` while it has not all arrived, each printing `ok` or
+ * the JSON, and `leave` leaves and exits.
  *
  * ASPEN_CALL_SECOND='{"base": …, "channel": …, "session": <session>, "tone": "tone.wav"}' tsx calls/second.ts
  */
 
 import { chromium } from "@playwright/test";
 import { createInterface } from "node:readline";
-import type { Session } from "../src";
+import type { Session, TransferMode } from "../src";
 import type { CallReport } from "./page";
 
 interface Arguments {
@@ -74,31 +78,67 @@ console.log("connected");
 
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
-  if (line.trim() === "report") {
+  const [command, ...rest] = line.trim().split(" ");
+  if (command === "report") {
     console.log(JSON.stringify(await report()));
-  } else if (line.trim() === "loudness") {
+  } else if (command === "loudness") {
     console.log(JSON.stringify(await page.evaluate(() => window.aspenCall?.loudness() ?? 0)));
-  } else if (line.trim() === "show") {
+  } else if (command === "show") {
     await page.evaluate(() => {
       window.aspenCall?.showVideo();
     });
     console.log("ok");
-  } else if (line.trim() === "camera on") {
+  } else if (command === "camera" && rest[0] === "on") {
     await page.evaluate(() => window.aspenCall?.startCamera());
     console.log("ok");
-  } else if (line.trim() === "camera off") {
+  } else if (command === "camera" && rest[0] === "off") {
     await page.evaluate(() => {
       window.aspenCall?.stopCamera();
     });
     console.log("ok");
-  } else if (line.startsWith("sample ")) {
-    const user = line.slice("sample ".length).trim();
+  } else if (command === "sample") {
+    const user = rest[0] ?? "";
     console.log(
       JSON.stringify(
         await page.evaluate((who) => window.aspenCall?.cameraSample(who) ?? null, user),
       ),
     );
-  } else if (line.trim() === "leave") {
+  } else if (command === "offer") {
+    const asked = JSON.parse(rest.join(" ")) as {
+      name: string;
+      size: number;
+      allowDirect: boolean;
+    };
+    console.log(
+      JSON.stringify(
+        await page.evaluate(
+          ([name, size, allowDirect]) => window.aspenCall?.offerFile(name, size, allowDirect),
+          [asked.name, asked.size, asked.allowDirect] as const,
+        ),
+      ),
+    );
+  } else if (command === "files") {
+    console.log(JSON.stringify(await page.evaluate(() => window.aspenCall?.files())));
+  } else if (command === "accept") {
+    const [offer, mode] = rest;
+    await page.evaluate(
+      ([offer, mode]) => {
+        window.aspenCall?.acceptOffer(offer, mode);
+      },
+      [offer ?? "", (mode ?? "directPreferred") as TransferMode] as const,
+    );
+    console.log("{}");
+  } else if (command === "received") {
+    const [offer, peer] = rest;
+    console.log(
+      JSON.stringify({
+        sha256: await page.evaluate(
+          ([offer, peer]) => window.aspenCall?.receivedHash(offer, peer),
+          [offer ?? "", peer ?? ""] as const,
+        ),
+      }),
+    );
+  } else if (command === "leave") {
     break;
   }
 }
