@@ -91,7 +91,7 @@ export function ProfileCard({ user, extra }: { user: User; extra?: ReactNode }) 
     <div className="flex w-72 flex-col gap-2 p-2">
       <div className={planeClass}>
         <div className="flex items-center gap-3">
-          <Avatar name={name} iconId={user.icon} size="lg" />
+          <AvatarZoom name={name} iconId={user.icon} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="truncate text-base font-semibold" style={{ color: nameColor }}>
@@ -194,6 +194,65 @@ export function ProfileCard({ user, extra }: { user: User; extra?: ReactNode }) 
         </div>
       )}
     </div>
+  );
+}
+
+/** How long the pointer rests on the card's picture before it opens larger, as a tooltip waits. */
+const ZOOM_HOVER_DELAY_MS = 400;
+
+/**
+ * The card's picture, which opens four times as large in a popover of its own when the pointer
+ * rests on it or when it is clicked or tapped. That popover is a child of the card's, so it goes
+ * when the card does, and a click anywhere else, the card included, puts it away. Initials are
+ * not worth enlarging, so a user without an icon gets the picture alone.
+ */
+function AvatarZoom({ name, iconId }: { name: string; iconId: string | null | undefined }) {
+  const m = useMessages();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const hover = useRef<number | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+  useEffect(
+    () => () => {
+      window.clearTimeout(hover.current);
+    },
+    [],
+  );
+  if (iconId == null) {
+    return <Avatar name={name} iconId={iconId} size="lg" />;
+  }
+  return (
+    <>
+      <Button
+        ref={trigger}
+        aria-label={format(m.profile.enlargePicture, { name })}
+        onHoverStart={() => {
+          hover.current = window.setTimeout(() => {
+            setOpen(true);
+          }, ZOOM_HOVER_DELAY_MS);
+        }}
+        onHoverEnd={() => {
+          window.clearTimeout(hover.current);
+        }}
+        onPress={() => {
+          window.clearTimeout(hover.current);
+          setOpen(true);
+        }}
+        className="shrink-0 cursor-zoom-in rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <Avatar name={name} iconId={iconId} size="lg" />
+      </Button>
+      <Popover
+        triggerRef={trigger}
+        isOpen={open}
+        onOpenChange={setOpen}
+        placement="bottom start"
+        className="rounded-lg border border-line bg-surface p-2 shadow-lg"
+      >
+        <Dialog aria-label={format(m.profile.pictureLabel, { name })} className="outline-none">
+          <Avatar name={name} iconId={iconId} size="xl" />
+        </Dialog>
+      </Popover>
+    </>
   );
 }
 

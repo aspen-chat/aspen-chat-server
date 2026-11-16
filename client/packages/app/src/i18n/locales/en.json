@@ -688,6 +688,8 @@
     "bioPlaceholder": "A few words about yourself",
     "saving": "Saving…",
     "cardLabel": "Profile of {name}",
+    "enlargePicture": "Show {name}'s picture larger",
+    "pictureLabel": "{name}'s picture",
     "roles": "Roles",
     "noRoles": "No roles here yet.",
     "addRole": "Give {name} a role",

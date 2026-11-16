@@ -17,7 +17,7 @@ export function Avatar({
 }: {
   name: string;
   iconId?: string | null | undefined;
-  size?: "xs" | "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg" | "xl";
 }) {
   const icon = useIcon(iconId ?? undefined);
   const src = mediaUrl(icon?.downloadUrl);
@@ -27,6 +27,7 @@ export function Avatar({
   // Initials fill a circle of a set size, so they keep their size however large the text
   // around them is drawn (`type-scale` in `styles.css`).
   const dimensions = {
+    xl: "h-48 w-48 text-[4rem]",
     lg: "h-12 w-12 text-[1rem]",
     md: "h-11 w-11 text-[0.9375rem]",
     sm: "h-7 w-7 text-[0.75rem]",

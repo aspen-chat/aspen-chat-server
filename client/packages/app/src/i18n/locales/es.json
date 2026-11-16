@@ -688,6 +688,8 @@
     "bioPlaceholder": "Unas palabras sobre ti",
     "saving": "Guardando…",
     "cardLabel": "Perfil de {name}",
+    "enlargePicture": "Ver la foto de {name} más grande",
+    "pictureLabel": "Foto de {name}",
     "roles": "Roles",
     "noRoles": "Aún no hay roles aquí.",
     "addRole": "Dar un rol a {name}",
