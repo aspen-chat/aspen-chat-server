@@ -401,8 +401,9 @@ or what an operator must open, route, or back up updates it in the same commit.
    (`calls/drive.ts`), Chromium with Chromium and then with Firefox: each hears the other on an
    audio slot, a camera arrives only once it is watched, a shared screen and a camera arrive
    together, a screen's sound is stereo without DTX, and leaving takes it all away. It needs the
-   client's dependencies installed and Playwright's Chromium and Firefox
-   (`pnpm --filter @aspen/app exec playwright install chromium firefox`).
+   client's dependencies installed, Playwright's Chromium and Firefox
+   (`pnpm --filter @aspen/app exec playwright install chromium firefox`), and a sound server
+   (PulseAudio, or PipeWire's), without which Firefox plays and records only silence.
 
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,

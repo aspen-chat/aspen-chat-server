@@ -80,6 +80,7 @@ declare global {
       stopScreenShare(): void;
       showVideo(): void;
       setMuted(muted: boolean): void;
+      soundOutput(): Promise<AudioContextState | "timedOut">;
       report(): Promise<CallReport>;
       loudness(): Promise<number>;
       sync(
@@ -213,6 +214,28 @@ window.aspenCall = {
   },
   setMuted(muted) {
     call?.setMuted(muted);
+  },
+  /**
+   * Whether this browser can play sound at all: the state an `AudioContext` reaches, `running`
+   * where it can. Firefox opens a sound device for every audio graph, its fake microphone's
+   * among them, and with no sound server to open one on, its contexts stay `suspended` (and
+   * `resume` never settles) and its fake microphone records silence. Opening one on PulseAudio
+   * takes Firefox up to about two seconds.
+   */
+  async soundOutput() {
+    const context = new AudioContext();
+    try {
+      return await Promise.race([
+        context.resume().then(() => context.state),
+        new Promise<"timedOut">((resolve) => {
+          setTimeout(() => {
+            resolve("timedOut");
+          }, 10_000);
+        }),
+      ]);
+    } finally {
+      void context.close();
+    }
   },
   /**
    * The loudest sample the audio slots carried over a second, read off their tracks. The

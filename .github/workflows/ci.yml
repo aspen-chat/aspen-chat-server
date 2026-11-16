@@ -103,10 +103,15 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+      # The runner has no sound server, without which Firefox plays and records only silence;
+      # PulseAudio with no sound card gives it a null sink and that sink's monitor.
       - name: Calls between real browsers
         run: |
           (cd client && pnpm install --frozen-lockfile)
           pnpm --dir client --filter @aspen/app exec playwright install --with-deps chromium firefox
+          sudo apt-get install -y --no-install-recommends pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl info
           python3 scripts/check_calls.py --bin target/debug
 
   # The API, event, and signalling schemas the client's code generator reads, written by the two

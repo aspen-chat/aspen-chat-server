@@ -178,6 +178,17 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
   try {
     const ann = await open(annBrowser, args.ann, "Ann");
     const bob = await open(bobBrowserLaunched, args.bob, "Bob");
+    // Without a sound server a browser may hear and record nothing however well the call works.
+    for (const [who, page] of [
+      ["Ann", ann],
+      ["Bob", bob],
+    ] as const) {
+      const output = await page.evaluate(() => window.aspenCall?.soundOutput());
+      check(`${who}'s browser plays sound`, output === "running", {
+        state: output,
+        fix: "run a sound server (PulseAudio, or PipeWire's) where the browsers run",
+      });
+    }
     const connected = (r: CallReport) => r.status === "connected" && r.connection === "connected";
     const [annJoined, bobJoined] = await Promise.all([
       until(ann, connected),
