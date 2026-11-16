@@ -15,6 +15,13 @@ platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android l
   as that type. The platform layers' `AspenCall` plugins hand the string to the web view untouched,
   beside the deployment's origin, and never convert a field; a field added to the state reaches the
   page by regenerating. Each snapshot's `revision` is what the page orders them by.
+- **The call's sounds as cues.** Beside each snapshot the observer is told which of the call's
+  sounds the change cues (`CallObserver::play_sound`, a `SoundCue`: the call joined, left, lost,
+  back, a share started, a transfer accepted or complete), derived in `sounds` from the engine's own
+  transitions by the web client's rules, repeats already spaced. The platform plays the cue's
+  recording on the call's own audio path: iOS on the session CallKit activated, Android as a voice
+  communication, each at most two of one cue at once; the apps' layers say how
+  (`client/docs/architecture/ios-app.md` and `android-builds.md`, Sounds).
 - **No microphone, no join where the user may speak.** `set_microphone(None)` before `join` is how a
   plugin joins when the system refused the microphone: the engine fails the join with
   `ErrorKind::Microphone` where the channel grants Speak, and joins to listen where it does not, as

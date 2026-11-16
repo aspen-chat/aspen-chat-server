@@ -106,11 +106,20 @@ play in their own players, through the system's default output (see
 Every file but `ringtone.wav` and `dial-tone.wav` is in `sounds/aspen-sound-effects-pack/`: the
 Aspen Sound Effects Pack, © 2026 by Kayla Wardle, unmodified and under CC BY-SA 4.0 rather than the
 app's license, with its `NOTICE` and `LICENSE` beside it, which the attributions page lists (see
-[About](about.md)). A sound added from the pack goes there too.
+[About](about.md)). A sound added from the pack goes there too. The mobile apps' call engines play
+the call's sounds from this same directory: the iOS app bundles it as a folder reference and the
+Android app's Gradle build copies its recordings into raw resources (`ios-app.md` and
+`android-builds.md`, Sounds), so a sound changed here changes on the phones with the next build.
 
 `PlaySounds` decides when the call's and the connection's sounds play, for every deployment the user
 uses: `watchCallSounds` (`src/features/voice/callSounds.ts`) and `watchConnectionSounds`
-(`connectionSounds.ts`).
+(`connectionSounds.ts`). In the mobile apps the call's sounds are not the page's: the call engine
+derives the same cues from its own state and plays the same recordings on the call's audio session
+(`Call.playsOwnSounds`, which `NativeCall` answers `true`; see
+[native calls](voice/native-calls.md#sounds)), so they are heard on the receiver, loudspeaker, or
+headset the call uses and with the app in the background, and `watchCallSounds` plays nothing for
+such a call. The chime, the ringtone, the dial tone, and the connection's sounds stay the page's
+everywhere.
 
 - Someone else joining, leaving, or starting a share, and a transfer the user is not a side of
   beginning, are not played while the user is deafened.

@@ -6,6 +6,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.ParcelFileDescriptor
 import android.os.ParcelUuid
 import android.service.notification.StatusBarNotification
@@ -24,6 +25,7 @@ import com.aspen_chat.client.voice.PeerConnectionFactory
 import com.aspen_chat.client.voice.PeerConnectionObserver
 import com.aspen_chat.client.voice.Socket
 import com.aspen_chat.client.voice.SocketFactory
+import com.aspen_chat.client.voice.SoundCue
 import com.aspen_chat.client.voice.StatsOf
 import com.aspen_chat.client.voice.TrackId
 import com.aspen_chat.client.voice.WatchedVideo
@@ -142,6 +144,35 @@ class CallEngineTest {
         }
     }
 
+    /**
+     * Each of the call's sounds as the layer started playing it, on the main thread: the cue,
+     * whether its player was playing as it was given, and, for the first joining, the lines of
+     * `dumpsys audio` naming this process's players at that moment, the system's own word on
+     * what plays and as what.
+     */
+    class SoundsSeen : CallSounds.Listener {
+        data class Played(val cue: SoundCue, val playing: Boolean, val players: List<String>)
+
+        private val recorded = ArrayList<Played>()
+
+        override fun played(cue: SoundCue, player: MediaPlayer) {
+            val first = synchronized(recorded) { recorded.none { it.cue == SoundCue.CALL_JOINED } }
+            val players = if (cue == SoundCue.CALL_JOINED && first) audioPlayerLines() else emptyList()
+            synchronized(recorded) { recorded.add(Played(cue, player.isPlaying, players)) }
+        }
+
+        val played: List<Played>
+            get() = synchronized(recorded) { recorded.toList() }
+
+        /** The lines of `dumpsys audio` that name a player of this process. */
+        private fun audioPlayerLines(): List<String> {
+            val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys audio")
+            val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
+            val pid = "/${android.os.Process.myPid()}"
+            return text.lines().filter { it.contains(pid) && it.contains("AudioAttributes") }
+        }
+    }
+
     /** Snapshots as the listener saw them, on the main thread. */
     class Seen : CallSnapshots.Listener {
         private val snapshots = ArrayList<CallState>()
@@ -224,6 +255,11 @@ class CallEngineTest {
             call.engine.setMicrophone(microphone)
             assertEquals(CallTelecom.Phase.IDLE, call.telecom.phase)
             assertTrue("no routes outside a call", call.routes.routes.isEmpty())
+            // The call's sounds, as the engine cues them and the layer plays them: each is
+            // recorded as it starts, with the player's state, and for the first the system's own
+            // word on it (`dumpsys audio`'s players, read on the spot while it plays).
+            val sounds = SoundsSeen()
+            val soundsListening = call.sounds.listen(sounds)
             call.engine.join(channel)
 
             // The system's call follows the engine's: outgoing while the engine joins, and
@@ -233,6 +269,13 @@ class CallEngineTest {
 
             // Joined: the microphone is sent and the renewed session token is kept.
             val connected = until("the call connects", 40, call) { it.status == CallStatus.CONNECTED }
+            awaitTrue("the joining is played", 10) { sounds.played.any { it.cue == SoundCue.CALL_JOINED } }
+            val joined = sounds.played.first { it.cue == SoundCue.CALL_JOINED }
+            assertTrue("the player plays as the cue is given", joined.playing)
+            assertEquals("nothing before the connection, and the joining once", listOf(SoundCue.CALL_JOINED), sounds.played.map { it.cue })
+            val voicePlayers = joined.players.filter { it.contains("USAGE_VOICE_COMMUNICATION") }
+            assertTrue("the system lists the sound as a voice communication player of this process:\n${joined.players}", voicePlayers.isNotEmpty())
+            assertTrue("and as started:\n$voicePlayers", voicePlayers.any { it.contains("started") })
             untilTelecom("the system call is active", 20, call) { it == CallTelecom.Phase.ACTIVE }
             val callId = call.telecom.callId ?: throw AssertionError("Telecom gave the call no id")
             val telecomActive = telecomLines(callId)
@@ -291,6 +334,9 @@ class CallEngineTest {
             }
             assertTrue(heard.audioSlots.toInt() > 0)
             assertEquals("every slot has a track", heard.slots.size, heard.slots.count { it.track != null })
+            // Someone else joining is the joining sound again, played as the first was.
+            awaitTrue("the browser's joining is played", 10) { sounds.played.count { it.cue == SoundCue.CALL_JOINED } == 2 }
+            assertTrue(sounds.played.all { it.playing })
             val before = inboundAudio(connection)
             delay(4_000)
             val after = inboundAudio(connection)
@@ -447,7 +493,14 @@ class CallEngineTest {
             assertNull(call.routes.currentKind)
             val telecomAfter = telecomLines(callId)
             assertTrue("Telecom no longer holds the call $callId:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })
+            // Leaving is the leaving sound, and a resume within the grace was no loss.
+            awaitTrue("the leaving is played", 10) { sounds.played.any { it.cue == SoundCue.CALL_LEFT } }
+            soundsListening.cancel()
+            val played = sounds.played
+            assertTrue("every sound's player played as it was given: $played", played.all { it.playing })
+            assertTrue("a resume within the grace is no loss: ${played.map { it.cue }}", played.none { it.cue == SoundCue.DISCONNECTED || it.cue == SoundCue.RECONNECTED })
             println("call-engine-test: left; Telecom's call ended, the service and its notification are down, routes empty, audio mode $modeBefore again")
+            println("call-engine-test: the sounds ${played.map { it.cue }} each played by a MediaPlayer as a voice communication (${voicePlayers.first().trim()})")
             println(
                 "call-engine-test: joined, heard ${after.packets - before.packets} packets of the browser's tone in 4 s " +
                     "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone source " +

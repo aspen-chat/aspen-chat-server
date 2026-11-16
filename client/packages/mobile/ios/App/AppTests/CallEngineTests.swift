@@ -195,10 +195,22 @@ final class CallEngineTests: XCTestCase {
         // The system's join opened a socket and a peer connection of its own, as far as it got.
         let socketsBefore = sockets.connections
         let connectionsBefore = peerConnections.created.count
+        // The call's sounds, as the engine cues them and the layer plays them on the session the
+        // test activated as CallKit would: each is recorded as it starts, with the player's state
+        // and the session's category and mode at that moment.
+        let sounds = SoundsSeen()
+        let soundsListening = await MainActor.run { call.audio.sounds.listen { sounds.add($0) } }
+        defer { soundsListening.cancel() }
         call.engine.setMicrophone(track: microphone)
         call.engine.join(channel: channel)
         defer { call.engine.leave() }
         let connected = try await until("the call connects", seconds: 40, call) { $0.status == .connected }
+        try await untilTrue("the joining is played", seconds: 10) { sounds.played.contains { $0.cue == .callJoined } }
+        let joined = try XCTUnwrap(sounds.played.first { $0.cue == .callJoined })
+        XCTAssertTrue(joined.playing, "the player plays as the cue is given")
+        XCTAssertEqual(joined.category, .playAndRecord, "on the call's session")
+        XCTAssertEqual(joined.mode, .voiceChat)
+        XCTAssertEqual(sounds.played.map(\.cue), [.callJoined], "nothing before the connection, and the joining once")
         XCTAssertEqual(connected.channel, channel)
         XCTAssertEqual(connected.user, user)
         XCTAssertNotNil(connected.session)
@@ -224,6 +236,9 @@ final class CallEngineTests: XCTestCase {
         }
         XCTAssertGreaterThan(heard.audioSlots, 0)
         XCTAssertEqual(heard.slots.filter { $0.track != nil }.count, heard.slots.count, "every slot has a track")
+        // Someone else joining is the joining sound again, played as the first was.
+        try await untilTrue("the browser's joining is played", seconds: 10) { sounds.played.filter { $0.cue == .callJoined }.count == 2 }
+        XCTAssertTrue(sounds.played.allSatisfy(\.playing))
         let before = try await inboundAudio(connection)
         try await Task.sleep(nanoseconds: 4_000_000_000)
         let after = try await inboundAudio(connection)
@@ -400,7 +415,12 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left")
+        // Leaving is the leaving sound, on the session the test still holds active.
+        try await untilTrue("the leaving is played", seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
+        let played = sounds.played
+        XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
+        XCTAssertFalse(played.contains { $0.cue == .disconnected || $0.cue == .reconnected }, "a resume within the grace is no loss: \(played.map(\.cue))")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played by an AVAudioPlayer on the active session (\(joined.category.rawValue), \(joined.mode.rawValue))")
     }
 
     // MARK: Helpers
@@ -445,6 +465,32 @@ final class CallEngineTests: XCTestCase {
         }
 
         var values: [Bool] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recorded
+        }
+    }
+
+    /// Each of the call's sounds as the layer started playing it, on the main queue: the cue,
+    /// whether its player was playing as it was given, and the session's category and mode then.
+    final class SoundsSeen: @unchecked Sendable {
+        struct Played {
+            let cue: SoundCue
+            let playing: Bool
+            let category: AVAudioSession.Category
+            let mode: AVAudioSession.Mode
+        }
+
+        private let lock = NSLock()
+        private var recorded: [Played] = []
+
+        func add(_ played: CallSounds.Played) {
+            lock.held {
+                recorded.append(Played(cue: played.cue, playing: played.player.isPlaying, category: played.category, mode: played.mode))
+            }
+        }
+
+        var played: [Played] {
             lock.lock()
             defer { lock.unlock() }
             return recorded

@@ -105,20 +105,27 @@ in the participants' order (`watchedOf`), again whenever a snapshot changes that
 nothing shows them; the engine cuts the list to `maxWatchedVideo`. Outside a call nothing is asked,
 since the engine keeps nothing to watch.
 
-What a native call has no counterpart for is never a silent no-op:
+What a native call has no counterpart for is never a silent no-op, and what it does differently the
+`Call` interface states as a capability the page reads, never by asking which platform it runs on:
 
 - Screen sharing (browser and external) and the file transfers reject or throw
   `NativeCallUnavailableError`, naming what is missing; the controls that would ask are hidden by
   the grants above.
 - `setAudioDevices` takes the system's default microphone and speaker (the phone's one microphone is
   what is sent, and the route is where the call plays) and rejects either chosen by id, which the
-  engine has no counterpart for.
+  engine has no counterpart for, so `NativeCall.hasAudioDeviceChoice` is `false` (`VoiceCall`'s is
+  `true`) and the microphone and speaker selects are left out of Settings' Audio and video section
+  and of the mute and deafen buttons' popovers (`listsMicrophones` and `listsSpeakers` in
+  `deviceControls.ts`; [the call screen](call-screen.md), Device arrows), where the phone's route
+  picker (`usePhoneOutputs`, the Speaker button) is what applies. The camera is still chosen by id,
+  among the phone's.
 - The microphone is sent as the phone captures it: neither platform's audio device module applies a
   gain over it, so `NativeCall.hasInputVolume` is `false` (`VoiceCall`'s is `true`), the sync never
   calls `setInputVolume` on it (`applyVolumes` in `sync.ts`), the input volume slider is left out of
-  Settings and of the mute button's popover, whose arrow goes with it
-  ([the call screen](call-screen.md), Device arrows), and `setInputVolume` throws
+  Settings and of the mute button's popover, whose arrow goes with it, and `setInputVolume` throws
   `NativeCallUnavailableError` should anything call it.
+- The call's sounds are the engine's, so `NativeCall.playsOwnSounds` is `true` and `watchCallSounds`
+  plays none for it (Sounds below).
 
 ## The microphone and the system's permission
 
@@ -198,29 +205,38 @@ How each platform draws the surfaces, captures the camera, and shows a picture i
 
 ## Sounds
 
-The call's sounds (`callSounds.ts`: joining, leaving, shares, transfers, losing and regaining the
-call) stay in the page in this stage, played through Web Audio as everywhere else; the engine takes
-them over in a later stage. On the simulator, with the call's audio session configured for a call
-(play and record, voice chat) and active, as CallKit has it in a call, the page's `AudioContext`
-resumes to `running` and its clock advances (`AspenCallPluginTests` reports both: 0.152 s of clock
-over a 300 ms wait in the proof, the web view's context starting up within it), so nothing in the
-session's configuration stops the page's sounds; whether they are heard on a device while CallKit
-holds the call, and through the route the call plays on, is on the device checklist (`ios-app.md`).
+The call's sounds are the engine's: `voice_client::sounds` derives from each change of its snapshot
+the same cues `callSounds.ts` derives from `VoiceCallState` and the store (the call connecting and
+someone else joining, leaving and another device taking the call over, the call lost under the user
+and back again, a share starting; the transfer cues once the snapshot carries transfers), by the
+same rules (who is there at the connection taken as found, nothing of the others while deafened,
+each cue given again only after the web's repeat gap), and tells the platform through
+`CallObserver.playSound(cue)`, a `SoundCue` enum that crosses UniFFI beside the snapshot and adds
+nothing to its JSON. Each platform plays the cue's recording, the web client's own file of the Aspen
+Sound Effects Pack, on the call's audio path (iOS: `CallSounds.swift`, an `AVAudioPlayer` on the
+session CallKit activated; Android: `CallSounds.kt`, a `MediaPlayer` as a voice communication; see
+`ios-app.md` and `android-builds.md`, Sounds), so a sound follows the route the call plays on, takes
+the call's volume, and plays with the app in the background, which the page's Web Audio could not
+promise. `NativeCall.playsOwnSounds` is `true` (`VoiceCall`'s is `false`), and `watchCallSounds`
+watches and plays nothing for a call that plays its own; the page's other sounds (the chime, the
+ringtone, a deployment lost) stay in the page.
 
 ## The stages
 
 The native call's bridge is built in stages, each adding to the same plugin and the same
-`NativeCall`; the first two are in place:
+`NativeCall`; voice, video, and the sounds are in place:
 
 1. Voice: join, leave, mute, deafen, hold, server mutes, per-person volume, session endings, the
    routes.
 2. Video: the engine's `videos` as surfaces behind a transparent web view, `showVideo` sending
    `watch`, the camera (`startCamera`, `stopCamera`, `cameraError`, the flip), and `canCamera` from
    the snapshot's grants.
-3. Screen sharing from the phone (`canShare`, `startScreenShare`).
-4. File transfers in the engine (`canTransfer`, `files`, and the offer and transfer commands).
-5. The call's sounds and rings in the engine, from the same cues the page derives today.
-6. The microphone chosen by device (`setAudioDevices` by id). A gain on it is not planned: the
+3. The call's sounds in the engine (Sounds above).
+4. Screen sharing from the phone (`canShare`, `startScreenShare`).
+5. File transfers in the engine (`canTransfer`, `files`, and the offer and transfer commands), whose
+   two sound cues come with them.
+6. Rings in the engine.
+7. The microphone chosen by device (`setAudioDevices` by id). A gain on it is not planned: the
    phones' audio device modules apply none, which `hasInputVolume` says.
 
 ## Proofs
@@ -228,9 +244,15 @@ The native call's bridge is built in stages, each adding to the same plugin and 
 - `src/api/nativeCall.test.ts` (Vitest, a fake plugin): every mapping, parsing, revision ordering,
   the re-read on waking, each forwarded command, the volumes, the join's outcomes, the video (the
   videos as surfaces, the watching following what is shown, the camera's start, facing, failures,
-  choice, and stop), the missing input volume, and the rejections. `src/api/audioRoute.test.tsx`
-  reads the outputs off the typed routes; `test/sync.test.ts` in the protocol package checks that
-  the sync never tells a call without `hasInputVolume` the microphone's volume.
+  choice, and stop), the capabilities (`playsOwnSounds`, no `hasAudioDeviceChoice`, no
+  `hasInputVolume`), and the rejections. `src/api/audioRoute.test.tsx` reads the outputs off the
+  typed routes; `test/sync.test.ts` in the protocol package checks that the sync never tells a call
+  without `hasInputVolume` the microphone's volume; `src/features/voice/callSounds.test.ts` that
+  `watchCallSounds` plays nothing for a call that plays its own; and
+  `src/features/voice/deviceControls.test.ts` that the microphone and speaker selects are left out
+  for a call without `hasAudioDeviceChoice`.
+- `voice_client/tests/sounds.rs` drives the engine's cues through the fakes, one scenario per cue.
 - `AppTests/AspenCallPluginTests` (iOS) and `androidTest`'s `AspenCallPluginTest` (Android) drive
   the real bridge from the app's own page, as `scripts/check_mobile_call.py` runs them beside the
-  engine's tests against a deployment of its own (`ios-app.md` and `android-builds.md`, The proof).
+  engine's tests against a deployment of its own (`ios-app.md` and `android-builds.md`, The proof);
+  the engine's tests there also watch the sounds play on the call's audio path.

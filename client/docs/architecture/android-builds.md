@@ -52,9 +52,10 @@ WebSockets through interfaces each platform implements. The Android implementati
 `app/src/main/java/com/aspen_chat/client/call/`, Kotlin, compiled into the app with the engine's
 generated Kotlin package (`com.aspen_chat.client.voice`): the engine's platform, the system's call
 (Telecom), the routes, the Capacitor plugin the web view commands it through and reads its state
-from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side), and the call's video: the
-camera, the pictures drawn behind the web view, and the picture-in-picture mode (Video below). The
-call's sounds and a DM call ringing the phone are later pieces.
+from (`AspenCallPlugin`; `voice/native-calls.md` is the page's side), the call's video: the camera,
+the pictures drawn behind the web view, and the picture-in-picture mode (Video below), and the
+call's sounds, played as a voice communication (Sounds below). A DM call ringing the phone is a
+later piece.
 
 ### What the app packages, and where it comes from
 
@@ -84,7 +85,8 @@ engine) where Android allows:
 | File                    | Implements                                                                   | Over                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CallEngine.kt`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `CallSnapshots.kt`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main thread                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `CallSnapshots.kt`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main thread; hands each sound the engine cues (`playSound`) to `CallSounds`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `CallSounds.kt`         | The call's sounds                                                            | One `MediaPlayer` per cue (two while one plays) with the attributes of a voice call (`USAGE_VOICE_COMMUNICATION`), on the recordings `copyCallSounds` lays out as raw resources, asking for no audio focus; see Sounds below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `CallHttp.kt`           | `Http`                                                                       | OkHttp: no cookies, no redirects followed, every status answered as a response; a bodiless POST, which the engine's are, is sent with an empty body, since OkHttp refuses one without                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `CallSockets.kt`        | `SocketFactory`, `Socket`                                                    | OkHttp's WebSocket, which answers pings itself and offers `permessage-deflate` on every socket (`RealWebSocket.connect` sets the header; no switch), so the voice server's offers arrive compressed (`negotiatedExtensions` is the server's answer, `permessage-deflate; server_no_context_takeover; client_no_context_takeover` in the proof); `connect` waits for the upgrade, so a refusal is a `TransportException`; frames queue for `receive`, and a close from either side ends the queue                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `CallCredentials.kt`    | `Credentials`                                                                | The account at the deployment among those `PushStore` keeps (the state the web view writes on sign-in): its session token for each request, renewed through `SessionRefresh` (shared with the push handler) and written back when the API server refuses it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -181,6 +183,25 @@ through `routes` (`voice/native-calls.md`, Where the call plays); the web view's
 route of its own. The endpoints Telecom offers before a call (`getAvailableStartingCallEndpoints`),
 for a Speaker button shown before joining, are not read yet.
 
+### Sounds
+
+The call's sounds are the engine's cues (`CallObserver.playSound`, derived in `voice_client::sounds`
+from the call's own transitions; `voice/native-calls.md`, Sounds), played by `CallSounds`: each cue
+is a recording of the Aspen Sound Effects Pack, the web client's own files, which the Gradle task
+`copyCallSounds` (`app/build.gradle`, with the call layer) copies from
+`client/packages/app/src/features/notifications/sounds/aspen-sound-effects-pack` into
+`build/callSounds/res/raw/` under the names Android allows (`call-joined.wav` as `call_joined`), a
+resource directory of the app's, so the two never differ. Each is played by a `MediaPlayer` with
+`USAGE_VOICE_COMMUNICATION` and `CONTENT_TYPE_SONIFICATION`, which the system routes where Telecom
+routes the call (the earpiece, the loudspeaker, a headset) at the call's volume, mixed with the
+voices and playing with the app in the background. No audio focus is asked for: Telecom holds it for
+the call, and a request of the app's own beside it would displace Telecom's (The system's call
+above). A cue plays as it arrives: the audio mode is set for the call on the engine's first snapshot
+of it, before any cue, and given back only once Telecom has let the call go, after the leaving's. At
+most two of one cue play at once (`MAX_PLAYING_PER_CUE`, the web client's `MAX_PLAYING_PER_SOUND`),
+a third not being heard; the engine spaces repeats of a cue itself. `play` takes the cue on the
+engine's thread and posts to the main thread; `CallEngine.close` releases the players.
+
 ### The proof
 
 `androidTest`'s `CallEngineTest` runs the engine with this layer against a real deployment, in the
@@ -209,26 +230,30 @@ again, where the device has one) moves the call there; and leaving ends Telecom'
 service, takes the notification down, empties the routes, and gives the audio mode back. What the
 browser must hear is what the device's microphone carried, which the device's own `media-source`
 statistics tell: sound, when a tone is played to it, or silence, as on an emulator whose host audio
-never reaches it. `AspenCallPluginTest` drives the bridge itself: it launches `MainActivity`, which
-loads the web shell with the plugin registered, and runs `Capacitor.registerPlugin("AspenCall")` in
-the page through the bridge's web view, as the app's `NativeCall` does. From the page it reads a
-fresh snapshot (the engine's JSON, idle, revision 0, of its origin) and the empty routes of no call,
-has malformed commands refused by name, joins the channel through the plugin and watches the
-`joining` and `connected` snapshots reach the page, moves the call to the loudspeaker (and the
-earpiece again, where the device has one) and watches the `routes` events say so as Telecom's
-current endpoint changes, clears the choice, mutes and unmutes, and then drives the video:
-`cameras()` lists the emulator's cameras with their facings, `startCamera` opens the front one and
-the snapshot shows the camera among `sources`, a hole reported with `setTiles` for its track has its
-shape come back as a `shape` event and its surface view laid out at the hole's rectangle in device
-pixels and drawing (`onFirstFrameRendered`), `switchCamera` moves to the back one, a second
-participant from the browser turns its camera on and `setWatched` has the snapshot show its track,
-whose hole hears its shape and draws too, the activity enters the picture-in-picture mode on it
-(`enterPictureInPicture`, standing for the user's leaving) and the page hears `pip` while
-`isInPictureInPictureMode` holds, starting the activity again leaves the mode and the page hears
-that too, the browser decodes the camera, malformed `setWatched` and `setTiles` are refused by name,
-and `stopCamera` takes the source out of the snapshot and the capture off; then it leaves: the
-snapshots arrive in revision order with none twice, a fresh `state()` is the latest published, the
-renewed session token is kept, and the routes empty again.
+never reaches it. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
+played as the engine connects and again as the browser joins, the leaving as the call is left, no
+loss is said of the resume within the grace, each a `MediaPlayer` playing as the cue is given, and
+for the first the system's own word on it, `dumpsys audio`'s players read on the spot: one of this
+process with `USAGE_VOICE_COMMUNICATION`, started, which the log line quotes. `AspenCallPluginTest`
+drives the bridge itself: it launches `MainActivity`, which loads the web shell with the plugin
+registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page through the bridge's web
+view, as the app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON,
+idle, revision 0, of its origin) and the empty routes of no call, has malformed commands refused by
+name, joins the channel through the plugin and watches the `joining` and `connected` snapshots reach
+the page, moves the call to the loudspeaker (and the earpiece again, where the device has one) and
+watches the `routes` events say so as Telecom's current endpoint changes, clears the choice, mutes
+and unmutes, and then drives the video: `cameras()` lists the emulator's cameras with their facings,
+`startCamera` opens the front one and the snapshot shows the camera among `sources`, a hole reported
+with `setTiles` for its track has its shape come back as a `shape` event and its surface view laid
+out at the hole's rectangle in device pixels and drawing (`onFirstFrameRendered`), `switchCamera`
+moves to the back one, a second participant from the browser turns its camera on and `setWatched`
+has the snapshot show its track, whose hole hears its shape and draws too, the activity enters the
+picture-in-picture mode on it (`enterPictureInPicture`, standing for the user's leaving) and the
+page hears `pip` while `isInPictureInPictureMode` holds, starting the activity again leaves the mode
+and the page hears that too, the browser decodes the camera, malformed `setWatched` and `setTiles`
+are refused by name, and `stopCamera` takes the source out of the snapshot and the capture off; then
+it leaves: the snapshots arrive in revision order with none twice, a fresh `state()` is the latest
+published, the renewed session token is kept, and the routes empty again.
 `scripts/check_mobile_call.py --platform android` at the repository's root runs both end to end,
 with the same deployment and browser the iOS check uses: a deployment of its own serving the call
 page (`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the
@@ -342,6 +367,11 @@ interface commands the engine:
       standing, and ending ours from the phone's call screen or a watch leaves the engine's call.
 - [ ] A navigation prompt or an alarm over the call: what Telecom's audio focus does with it, and
       whether the call is held or plays on beside it.
+- [ ] The call's sounds (`CallSounds`): the joining is heard as the call connects and as someone
+      else joins, the leaving as someone leaves and as the user leaves, a share starting, and the
+      call lost and back (cut the network for a few seconds), each on the earpiece, on the
+      loudspeaker, and on a headset, with the app in the foreground, in the background, and the
+      screen off, at the call's volume beside the voices; and none while a phone call holds ours.
 - [ ] The notification: Hang up leaves the call, a tap opens the app, and on Android 14 and later
       the call outlives the app in the background and the screen off for an hour, with the battery
       use the system attributes to it recorded.

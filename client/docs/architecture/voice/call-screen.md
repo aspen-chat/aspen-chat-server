@@ -38,10 +38,13 @@ Mute, deafen, and camera each have a small upward arrow at their end (`WithDevic
   microphone's choice and volume still apply, and only where there is a microphone or a volume to
   offer (`useMicrophoneOptions`, `deviceControls.ts`): the volume where the call applies one
   (`Call.hasInputVolume`, which the mobile apps' native calls answer `false`, since neither phone's
-  audio device module applies a gain), and the microphone's choice on a computer. A phone whose call
-  its engine carries has neither, and its mute button stands alone; its input volume slider is left
-  out of Settings' Audio and video section too. The camera's shows with the camera button, unless
-  the camera flips.
+  audio device module applies a gain), and the microphone's choice on a computer where the call
+  takes one by id (`Call.hasAudioDeviceChoice`, which the native calls answer `false` too: the
+  phone's own microphone is sent, and the routes are where the call plays). A phone whose call its
+  engine carries has neither, and its mute button stands alone; its input volume slider and its
+  microphone and speaker selects are left out of Settings' Audio and video section too
+  (`listsMicrophones`, `listsSpeakers`). The camera's shows with the camera button, unless the
+  camera flips.
 - The popovers write the same preferences as Settings' Audio and video section, which also has the
   two volumes, so both always agree.
 - Where the browser does not name devices yet, the popover shows the same notice and Allow button as
