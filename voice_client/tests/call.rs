@@ -1581,7 +1581,11 @@ async fn a_dropped_socket_is_resumed_within_the_grace_with_media_kept() {
     a.close();
     settle().await;
     let state = w.state();
-    assert_eq!(state.status, CallStatus::Rejoining);
+    assert_eq!(
+        state.status,
+        CallStatus::Connected,
+        "a resume within the grace keeps the call connected, as the web client's stays"
+    );
     assert_eq!(
         state.session,
         Some(w.session),
@@ -1727,10 +1731,11 @@ async fn a_resume_that_cannot_reach_the_server_is_retried_within_the_grace_then_
     a.set(Behaviour::Refuse);
     a.close();
     settle().await;
-    assert_eq!(w.state().status, CallStatus::Rejoining);
+    assert_eq!(w.state().status, CallStatus::Connected);
     let tries = || w.sockets.connected.lock().unwrap().len() - 1;
     assert_eq!(tries(), 1);
-    // Tried again every pause while a try could still finish within the grace.
+    // Tried again every pause while a try could still finish within the grace, the call
+    // connected throughout.
     let mut elapsed = Duration::ZERO;
     while elapsed + PAUSE + PAUSE + READY_TIMEOUT <= RESUME_GRACE {
         advance(PAUSE).await;
@@ -1740,11 +1745,17 @@ async fn a_resume_that_cannot_reach_the_server_is_retried_within_the_grace_then_
             1,
             "resuming, not rejoining, at {elapsed:?}"
         );
+        assert_eq!(
+            w.state().status,
+            CallStatus::Connected,
+            "still connected at {elapsed:?}"
+        );
     }
     assert!(tries() > 2);
     assert_eq!(w.state().session, Some(w.session));
     // Past it, the channel is joined again as after a server that went silent, after a pause.
     advance(PAUSE).await;
+    assert_eq!(w.state().status, CallStatus::Rejoining);
     assert_eq!(w.state().session, None);
     assert!(w.pcs.latest().is_closed());
     assert_eq!(w.http.offers_asked(), 1);
@@ -2340,7 +2351,7 @@ async fn a_ready_after_a_resume_carries_who_is_on_hold() {
     a.received();
     a.close();
     settle().await;
-    assert_eq!(w.state().status, CallStatus::Rejoining);
+    assert_eq!(w.state().status, CallStatus::Connected);
     assert!(w.state().held, "the hold stands through the resume");
     let bob = Uuid::now_v7();
     a.ready(
@@ -2370,4 +2381,55 @@ async fn a_ready_after_a_resume_carries_who_is_on_hold() {
             .iter()
             .any(|f| matches!(f, ClientMessage::SetState { .. }))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn what_is_asked_while_the_socket_is_down_is_asked_again_once_the_call_is_taken_back() {
+    let w = World::new(0.5);
+    let bob = Uuid::now_v7();
+    let (_, a) = w.connected(A).await;
+    a.received();
+    a.close();
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    // Asked of a socket that is gone: shown at once, as in a connected call, and lost there.
+    w.send(Command::SetMuted(true));
+    let watched = vec![WatchedVideo {
+        user: bob,
+        source: MediaSource::Camera,
+    }];
+    w.send(Command::SetWatched(watched.clone()));
+    settle().await;
+    assert!(w.state().muted);
+    assert_eq!(w.state().watching, watched);
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Resume {
+            secret: "secret-1".to_string()
+        }],
+        "the dropped socket carried nothing"
+    );
+    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    let again = a.received();
+    assert!(
+        again.contains(&ClientMessage::SetState {
+            muted: true,
+            deafened: false,
+            held: false
+        }),
+        "the mute is asked again: {again:?}"
+    );
+    assert!(
+        again.contains(&ClientMessage::Watch { video: watched }),
+        "the watch is asked again: {again:?}"
+    );
+    // The second drop, with nothing asked meanwhile, asks nothing again.
+    a.close();
+    settle().await;
+    a.received();
+    a.ready(w.session, w.user, Vec::new(), "secret-3");
+    settle().await;
+    assert!(a.received().is_empty());
 }

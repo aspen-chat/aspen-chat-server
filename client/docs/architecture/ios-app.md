@@ -499,40 +499,43 @@ Chromium's own level statistics read zero behind the muted element it plays each
 and unmutes, puts the call on hold and releases it (the browser's report, `onHold` in
 `calls/page.ts`, lists the simulator's user meanwhile, neither side's packets reach the other, and
 the release waits for the server's word), cuts its socket and watches the engine take its place back
-with `resume`, and leaves; its log line also names what the signalling socket negotiated. Between
-the hold and the cut it proves the video both ways: the browser shows video and turns Chromium's
-fake camera on, the engine is asked to watch it, and the track that arrives is drawn by
-`CallEngine.video` where the page would put its hole, the renderer counting frames (at least five)
-and reporting an upright shape and its layer lying in the rectangle given; then a camera in software
-(`SyntheticVideoCapturer`, 320 by 240 frames carried at 90 degrees as a phone's upright camera's
-are) is opened through `CallCamera` on the test's own factory and sent as the engine's camera, its
-preview drawn 240 by 320, and the browser decodes its frames (`framesDecoded` in `calls/page.ts`'s
-report) and sees a picture in them (`cameraSample`: a frame drawn to a canvas, brighter than black
-and taller than wide); the camera is moved to the other synthetic camera with the track kept; video
-flows on across the resume; and the camera is stopped before the leave. The picture in picture is
-started on the browser's camera where the system supports one, and the simulator's does not, which
-the log line says. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
-played as the engine connects and again as the browser joins, the leaving as the call is left, the
-cut socket is said lost and, with the resume, back, and each is a player playing as the cue is
-given, on the session the test activated as CallKit would (play and record, voice chat), which the
-log line names too; the players are in software (`SoftwareSoundPlayer`, Sounds above), each having
-read its bundled recording, since the simulator's audio server starts no output for a test process.
-`AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
-for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
-choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app,
-whose `MainViewController` has loaded the web shell with the plugin registered, so the test finds
-its `WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the app's
-`NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision 0, of
-its origin), the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker and
-reads `AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice
-stands; the simulator has no receiver port) and clears it, mutes and unmutes outside a call and sees
-each in a snapshot, has malformed commands refused by name, reports whether the page's
-`AudioContext` runs with the call's session active, and joins the channel through the plugin: the
-start action's `joining` snapshot reaches the page, then the simulator's daemon ends the call and
-its `idle` does, in revision order, with no snapshot twice, and a fresh `state()` is the latest
-published. Then, since the simulator's CallKit holds no call, it joins the engine the plugin made
-directly (`AspenCallPlugin.engine(at:)` is internal for it), the test standing in for `didActivate`,
-and drives the video from the page: `cameras()` lists the two synthetic cameras with their facings,
+with `resume`, the call connected throughout, and leaves; its log line also names what the
+signalling socket negotiated. Between the hold and the cut it proves the video both ways: the
+browser shows video and turns Chromium's fake camera on, the engine is asked to watch it, and the
+track that arrives is drawn by `CallEngine.video` where the page would put its hole, the renderer
+counting frames (at least five) and reporting an upright shape and its layer lying in the rectangle
+given; then a camera in software (`SyntheticVideoCapturer`, 320 by 240 frames carried at 90 degrees
+as a phone's upright camera's are) is opened through `CallCamera` on the test's own factory and sent
+as the engine's camera, its preview drawn 240 by 320, and the browser decodes its frames
+(`framesDecoded` in `calls/page.ts`'s report) and sees a picture in them (`cameraSample`: a frame
+drawn to a canvas, brighter than black and taller than wide); the camera is moved to the other
+synthetic camera with the track kept; video flows on across the resume; and the camera is stopped
+before the leave. The picture in picture is started on the browser's camera where the system
+supports one, and the simulator's does not, which the log line says. Through it all it watches the
+call's sounds (`CallSounds.listen`): the joining is played as the engine connects and again as the
+browser joins, the leaving as the call is left, and those three alone, since a socket taken back
+within the grace keeps the call connected and is no loss (the new socket's frames, read through the
+test's `WatchedSocket`, say the `resume` was presented and answered `ready`, and no snapshot showed
+`rejoining`), and each is a player playing as the cue is given, on the session the test activated as
+CallKit would (play and record, voice chat), which the log line names too; the players are in
+software (`SoftwareSoundPlayer`, Sounds above), each having read its bundled recording, since the
+simulator's audio server starts no output for a test process. `AppTests/CallRoutesTests` reads the
+simulator's routes (its loudspeaker in use, a receiver listed for the iPhone idiom), the kind of
+each port type, and the proximity rule, and holds and resets a choice.
+`AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app, whose
+`MainViewController` has loaded the web shell with the plugin registered, so the test finds its
+`WKWebView` and runs `Capacitor.registerPlugin("AspenCall")` in the page, as the app's `NativeCall`
+does. From the page it reads a fresh snapshot (the engine's JSON, idle, revision 0, of its origin),
+the routes (the receiver listed, the loudspeaker in use), chooses the loudspeaker and reads
+`AVAudioSession.currentRoute` as the built-in speaker, chooses the receiver (the choice stands; the
+simulator has no receiver port) and clears it, mutes and unmutes outside a call and sees each in a
+snapshot, has malformed commands refused by name, reports whether the page's `AudioContext` runs
+with the call's session active, and joins the channel through the plugin: the start action's
+`joining` snapshot reaches the page, then the simulator's daemon ends the call and its `idle` does,
+in revision order, with no snapshot twice, and a fresh `state()` is the latest published. Then,
+since the simulator's CallKit holds no call, it joins the engine the plugin made directly
+(`AspenCallPlugin.engine(at:)` is internal for it), the test standing in for `didActivate`, and
+drives the video from the page: `cameras()` lists the two synthetic cameras with their facings,
 `startCamera` opens the front one and the snapshot shows the camera among `sources`, a hole reported
 with `setTiles` for its track has its shape come back as a `shape` event (240 by 320) and its layer
 laid out in the rectangle given, `switchCamera` moves to the back one, a second participant from the

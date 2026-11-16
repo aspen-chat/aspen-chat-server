@@ -109,11 +109,19 @@ class CallDeviceTest {
             it.contains("isForeground=") || it.contains("foregroundServiceType=") || it.contains(CallService::class.java.name)
         }.map { it.trim() }
 
-    /** The call notification's record in `dumpsys notification`, by package and id. */
-    private fun notificationRecord(): String? =
-        shell("dumpsys notification --noredact").lines().firstOrNull {
-            it.contains("pkg=${context.packageName}") && it.contains("id=${CallService.NOTIFICATION_ID}")
-        }?.trim()
+    /**
+     * The record in `dumpsys notification` of the notification the system gave `key`
+     * (`StatusBarNotification.key`, which the record line carries whole), or `null` while the
+     * dump lists none; `dumpLines` is what the dump last named of the package, for a failure to
+     * quote.
+     */
+    private var dumpLines: List<String> = emptyList()
+
+    private fun notificationRecordOf(key: String): String? {
+        val lines = shell("dumpsys notification --noredact").lines()
+        dumpLines = lines.filter { it.contains(context.packageName) }.map { it.trim() }
+        return lines.firstOrNull { it.contains("NotificationRecord(") && it.contains("key=$key") }?.trim()
+    }
 
     /**
      * The call notification's record in `dumpsys notification`'s posted list (`Notification List`)
@@ -225,7 +233,12 @@ class CallDeviceTest {
             val service = awaitValue("the call's service runs in the foreground", 10) {
                 serviceLines().takeIf { lines -> lines.any { it.contains("isForeground=true") } }
             }
-            val record = awaitValue("the call's notification is listed", 10) { notificationRecord() }
+            val posted = awaitValue("the app sees the call's notification posted", 10) { callNotification(context) }
+            val record = try {
+                awaitValue("the system's dump lists the call's notification ${posted.key}", 10) { notificationRecordOf(posted.key) }
+            } catch (missing: AssertionError) {
+                throw AssertionError("${missing.message}; the dump last named the package in: $dumpLines", missing)
+            }
             assertTrue("a CallStyle notification: $record", record.contains("CallStyle"))
             println("call-device-test: service ${service.filter { it.contains("isForeground=") || it.contains("foregroundServiceType=") }}; notification $record")
 
@@ -252,7 +265,7 @@ class CallDeviceTest {
             until("the call is left", 10, call) { it.status == CallStatus.IDLE }
             untilTelecom("the system call ends", 20, call) { it == CallTelecom.Phase.IDLE }
             awaitTrue("the service leaves the foreground", 10) { serviceLines().none { it.contains("isForeground=true") } }
-            awaitTrue("the notification is gone from the system's list", 10) { notificationRecord() == null }
+            awaitTrue("the notification is gone from the system's list", 10) { callNotification(context) == null && notificationRecordOf(posted.key) == null }
             awaitTrue("the proximity wake lock is not held", 10) { !proximityLockHeld() }
             val telecomAfter = telecomLines(callId)
             assertTrue("Telecom no longer holds the call:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })

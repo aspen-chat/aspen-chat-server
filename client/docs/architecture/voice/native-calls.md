@@ -210,14 +210,16 @@ the same cues `callSounds.ts` derives from `VoiceCallState` and the store (the c
 someone else joining, leaving and another device taking the call over, the call lost under the user
 and back again, a share starting; the transfer cues once the snapshot carries transfers), by the
 same rules (who is there at the connection taken as found, nothing of the others while deafened,
-each cue given again only after the web's repeat gap), and tells the platform through
-`CallObserver.playSound(cue)`, a `SoundCue` enum that crosses UniFFI beside the snapshot and adds
-nothing to its JSON. Each platform plays the cue's recording, the web client's own file of the Aspen
-Sound Effects Pack, on the call's audio path (iOS: `CallSounds.swift`, an `AVAudioPlayer` on the
-session CallKit activated; Android: `CallSounds.kt`, a `MediaPlayer` as a voice communication; see
-`ios-app.md` and `android-builds.md`, Sounds), so a sound follows the route the call plays on, takes
-the call's volume, and plays with the app in the background, which the page's Web Audio could not
-promise. `NativeCall.playsOwnSounds` is `true` (`VoiceCall`'s is `false`), and `watchCallSounds`
+each cue given again only after the web's repeat gap, and a signalling socket taken back with
+`resume` within the server's grace no loss at all, the call staying `connected` through it as the
+web's does, lost only once the grace runs out or the resume is refused), and tells the platform
+through `CallObserver.playSound(cue)`, a `SoundCue` enum that crosses UniFFI beside the snapshot and
+adds nothing to its JSON. Each platform plays the cue's recording, the web client's own file of the
+Aspen Sound Effects Pack, on the call's audio path (iOS: `CallSounds.swift`, an `AVAudioPlayer` on
+the session CallKit activated; Android: `CallSounds.kt`, a `MediaPlayer` as a voice communication;
+see `ios-app.md` and `android-builds.md`, Sounds), so a sound follows the route the call plays on,
+takes the call's volume, and plays with the app in the background, which the page's Web Audio could
+not promise. `NativeCall.playsOwnSounds` is `true` (`VoiceCall`'s is `false`), and `watchCallSounds`
 watches and plays nothing for a call that plays its own; the page's other sounds (the chime, the
 ringtone, a deployment lost) stay in the page.
 

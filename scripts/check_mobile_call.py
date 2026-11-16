@@ -589,6 +589,55 @@ class Android:
     def where(self, serial: str) -> str:
         return f"the phone {serial}" if self.device else f"the emulator {serial}"
 
+    def ready_phone(self, serial: str) -> None:
+        """Refuses a phone whose state would fail a test from inside rather than let it: the
+        bridge's test launches `MainActivity` and enters the picture in picture, which needs the
+        activity resumed, so the screen must be on with no lock screen over it, and must stay so
+        through the engine's test before it, so Stay awake (Developer options) must be on, since
+        the phone is on USB. A screen that is off, or a swipe lock screen (`CredentialType: NONE`
+        in `dumpsys lock_settings` with the lock screen not disabled), is woken and dismissed
+        here and said so; a PIN, pattern, or password lock screen that is showing is the owner's
+        to unlock, or to set to Swipe, and is refused by name. The lock-screen ring tests sleep
+        the screen themselves and work over either kind."""
+        stay_on = adb("shell", "settings", "get", "global", "stay_on_while_plugged_in", serial=serial)
+        usb = 2  # BatteryManager.BATTERY_PLUGGED_USB
+        if not stay_on.isdigit() or int(stay_on) & usb == 0:
+            raise Failed(f"{self.where(serial)} does not stay awake on USB (stay_on_while_plugged_in is {stay_on or 'unset'}): "
+                         "turn Stay awake on in Developer options, so the screen is still on when the bridge's test needs "
+                         "the activity resumed, and run again")
+        credential = "unknown"
+        for line in adb("shell", "dumpsys", "lock_settings", serial=serial).splitlines():
+            if line.strip().startswith("CredentialType:"):
+                credential = line.split(":", 1)[1].strip()
+                break
+        lock_disabled = adb("shell", "locksettings", "get-disabled", serial=serial).strip() == "true"
+        secure = credential not in ("NONE", "unknown")
+
+        def keyguard_showing() -> bool:
+            policy = adb("shell", "dumpsys", "window", "policy", serial=serial)
+            delegate = policy.find("KeyguardServiceDelegate")
+            lines = policy[delegate:].splitlines()[1:12] if delegate >= 0 else []
+            return any(line.strip() == "showing=true" for line in lines)
+
+        def awake() -> bool:
+            return any(line.strip() == "mWakefulness=Awake" for line in adb("shell", "dumpsys", "power", serial=serial).splitlines())
+
+        if secure and (keyguard_showing() or not awake()):
+            raise Failed(f"{self.where(serial)} is behind its {credential} lock screen (dumpsys lock_settings): "
+                         "unlock it and leave the screen on, or set the lock to Swipe in Settings, Security, and run again")
+        done = []
+        if not awake():
+            adb("shell", "input", "keyevent", "KEYCODE_WAKEUP", serial=serial)
+            wait_for("the phone's screen to wake", awake, 10)
+            done.append("woke the screen")
+        if keyguard_showing():
+            adb("shell", "wm", "dismiss-keyguard", serial=serial)
+            wait_for("the swipe lock screen to be dismissed", lambda: not keyguard_showing(), 10)
+            done.append("dismissed the swipe lock screen")
+        lock = "no lock screen" if lock_disabled else f"a {'swipe' if not secure else credential} lock screen"
+        say(f"{self.where(serial)} is awake with {lock}, not showing, and stays awake on USB"
+            + (f" ({', '.join(done)})" if done else ""))
+
     def record_trailing(self, variables: dict[str, str]) -> Path:
         """Runs the trailing test alone, with the device's screen recorded around it, and pulls the
         recording here."""
@@ -623,6 +672,8 @@ class Android:
 
     def run(self, variables: dict[str, str]) -> None:
         serial = self.serial()
+        if self.device:
+            self.ready_phone(serial)
         classes = [*ANDROID_TESTS, ANDROID_DEVICE_TEST] if self.device else ANDROID_TESTS
         # The device's log is followed for the run's length into `logcat.txt`: a phone's log is
         # busy enough that a dump at the end would have lost the tests' first lines.

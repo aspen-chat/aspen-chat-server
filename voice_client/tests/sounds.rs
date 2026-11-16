@@ -1,13 +1,14 @@
 //! The call's sounds as the observer is told to play them, from the engine's own transitions
 //! against the scripted fakes: one scenario for each cue the engine gives, and the changes that
-//! give none (a resume's `ready`, the user's own state echoed back, a snapshot read again).
+//! give none (a socket dropped and taken back within the grace, the user's own state echoed
+//! back, a snapshot read again).
 
 mod support;
 
 use std::time::Duration;
 use support::*;
 use uuid::Uuid;
-use voice_client::call::Command;
+use voice_client::call::{Command, READY_TIMEOUT, RESUME_GRACE};
 use voice_client::peer_connection::{ConnectionState, TrackId};
 use voice_client::sounds::SoundCue;
 use voice_client::state::{CallStatus, EndedReason, SessionEndReason};
@@ -276,7 +277,7 @@ async fn an_end_the_call_bar_explains_is_a_disconnection() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_dropped_socket_is_a_disconnection_and_its_resume_a_reconnection() {
+async fn a_dropped_socket_taken_back_within_the_grace_is_no_sound() {
     let w = World::new(0.5);
     let (_, a) = w.connected(A).await;
     w.sounds();
@@ -288,15 +289,34 @@ async fn a_dropped_socket_is_a_disconnection_and_its_resume_a_reconnection() {
     });
     settle().await;
     w.sounds();
+    // The call stays connected while the socket is taken back, as the web client's does, so
+    // the drop is no loss.
+    tokio::time::advance(Duration::from_secs(1)).await;
     a.close();
     settle().await;
-    assert_eq!(w.state().status, CallStatus::Rejoining);
-    assert_eq!(w.sounds(), vec![SoundCue::Disconnected]);
-    // The resume's `ready` restates who is there, Bob gone meanwhile: back, and nothing of him.
-    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert_eq!(w.sounds(), vec![]);
+    // Nor is the resume's `ready` a return; it restates who is there, Bob gone meanwhile and
+    // Carol come, which is heard as any leaving and joining of a connected call, as the web
+    // client hears them from its event stream while its socket is down.
+    let carol = Uuid::now_v7();
+    a.ready(w.session, w.user, vec![person(carol, &[])], "secret-2");
     settle().await;
     assert_eq!(w.state().status, CallStatus::Connected);
-    assert_eq!(w.sounds(), vec![SoundCue::Reconnected]);
+    assert_eq!(
+        w.sounds(),
+        vec![SoundCue::CallJoined, SoundCue::CallLeft],
+        "Carol came and Bob went while the socket was down"
+    );
+    // Taken back again with no one come or gone: silent.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    a.received();
+    a.close();
+    settle().await;
+    a.ready(w.session, w.user, vec![person(carol, &[])], "secret-3");
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert_eq!(w.sounds(), vec![]);
     // The sections restated, and the user's own state answered, change nothing heard.
     a.sections(vec![slot("0", 0)]);
     a.send(&ServerMessage::ParticipantState {
@@ -307,16 +327,68 @@ async fn a_dropped_socket_is_a_disconnection_and_its_resume_a_reconnection() {
     });
     settle().await;
     assert_eq!(w.sounds(), vec![]);
-    // Dropped again within half a minute: said once.
-    a.received();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_resume_the_server_refuses_is_a_disconnection_and_its_rejoin_a_reconnection() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    w.sounds();
     a.close();
+    settle().await;
+    assert_eq!(w.sounds(), vec![]);
+    a.send(&ServerMessage::Error {
+        detail: "there is nothing to resume; join the call again".to_string(),
+        fatal: true,
+        retry_after_seconds: None,
+        refused: None,
+    });
+    settle().await;
+    assert_eq!(w.state().status, CallStatus::Rejoining);
+    assert_eq!(w.sounds(), vec![SoundCue::Disconnected]);
+    advance(PAUSE).await;
+    assert_eq!(w.http.offers_asked(), 2);
+    w.admit(&a).await;
+    assert_eq!(w.state().status, CallStatus::Connected);
+    assert_eq!(w.sounds(), vec![SoundCue::Reconnected]);
+    // Refused again within half a minute: said once.
+    a.close();
+    settle().await;
+    a.send(&ServerMessage::Error {
+        detail: "there is nothing to resume; join the call again".to_string(),
+        fatal: true,
+        retry_after_seconds: None,
+        refused: None,
+    });
     settle().await;
     assert_eq!(w.state().status, CallStatus::Rejoining);
     assert_eq!(w.sounds(), vec![]);
-    a.ready(w.session, w.user, Vec::new(), "secret-3");
-    settle().await;
+    advance(PAUSE).await;
+    w.admit(&a).await;
     assert_eq!(w.state().status, CallStatus::Connected);
     assert_eq!(w.sounds(), vec![]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_resume_that_fails_for_the_whole_grace_is_a_disconnection_at_its_end() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    w.sounds();
+    a.set(Behaviour::Refuse);
+    a.close();
+    settle().await;
+    // Tried again and again within the grace, silently.
+    let mut elapsed = Duration::ZERO;
+    while elapsed + PAUSE + PAUSE + READY_TIMEOUT <= RESUME_GRACE {
+        advance(PAUSE).await;
+        elapsed += PAUSE;
+        assert_eq!(w.state().status, CallStatus::Connected, "at {elapsed:?}");
+        assert_eq!(w.sounds(), vec![], "at {elapsed:?}");
+    }
+    // Past it, the call is lost.
+    advance(PAUSE).await;
+    assert_eq!(w.state().status, CallStatus::Rejoining);
+    assert_eq!(w.sounds(), vec![SoundCue::Disconnected]);
 }
 
 #[tokio::test(start_paused = true)]

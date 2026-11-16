@@ -6,9 +6,10 @@
 //! - `CallJoined` when the user's call connects, and when someone else joins it;
 //! - `CallLeft` when the user leaves (another of their clients taking the call over counts), and
 //!   when someone else leaves it;
-//! - `Disconnected` when the call is lost under them: a dropped socket or a lost server (which
-//!   the engine takes back or rejoins), a fatal error, or an end the call bar explains (removed,
-//!   access lost, idle);
+//! - `Disconnected` when the call is lost under them: a lost server or a dropped socket the
+//!   server would not give back (which the engine rejoins; one taken back with `resume` within
+//!   the grace keeps the call `Connected` and is no sound, as in the web client), a fatal
+//!   error, or an end the call bar explains (removed, access lost, idle);
 //! - `Reconnected` when a call lost that way is connected again;
 //! - `StreamStarted` when the user, or someone else in the call, starts sharing a screen;
 //! - `TransferAccepted` and `TransferComplete` are given by nothing: the snapshot carries no file
@@ -16,11 +17,13 @@
 //!
 //! Moving to another call gives only the joining. Others' comings and goings and their shares are
 //! not given while the user is deafened, and are compared only while the call is connected: who
-//! is there as it connects, and what they share, is taken as found, silently, so a resume's
-//! `ready` restating the participants gives nothing, and neither does the user's own participant
-//! should the server ever list it. Each cue is given again only after its `repeat_gap`, as the
-//! web client's `playSound` plays one: several people joining at once are heard as one, and a
-//! call dropped twice within half a minute is said lost once.
+//! is there as it connects, and what they share, is taken as found, silently, and the user's own
+//! participant, should the server ever list it, is no one. The call stays connected through a
+//! resume, so whoever a resume's `ready` lists come or gone since is heard as any joining or
+//! leaving, as the web client hears them from its event stream while its socket is down. Each
+//! cue is given again only after its `repeat_gap`, as the web client's `playSound` plays one:
+//! several people joining at once are heard as one, and a call lost twice within half a minute
+//! is said lost once.
 //!
 //! The platform decides how a cue sounds: which file, that at most two of one cue play at once
 //! (the web client's `MAX_PLAYING_PER_SOUND`), and what becomes of one that arrives before the

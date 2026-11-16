@@ -34,6 +34,7 @@ import com.aspen_chat.client.voice.MediaSource
 import com.aspen_chat.client.voice.PeerConnection
 import com.aspen_chat.client.voice.PeerConnectionFactory
 import com.aspen_chat.client.voice.PeerConnectionObserver
+import com.aspen_chat.client.voice.Received
 import com.aspen_chat.client.voice.Socket
 import com.aspen_chat.client.voice.SocketFactory
 import com.aspen_chat.client.voice.SoundCue
@@ -92,12 +93,13 @@ class CallEngineTest {
     /** `CallSockets` with every socket opened kept, so the test can cut the live one. */
     class CuttableSockets : SocketFactory {
         private val real = CallSockets()
-        private val opened = ArrayList<Socket>()
+        private val opened = ArrayList<WatchedSocket>()
 
         override suspend fun connect(url: String, bearer: String?): ConnectedSocket {
             val connected = real.connect(url, bearer)
-            synchronized(opened) { opened.add(connected.socket) }
-            return connected
+            val watched = WatchedSocket(connected.socket)
+            synchronized(opened) { opened.add(watched) }
+            return ConnectedSocket(watched)
         }
 
         val connections: Int
@@ -105,12 +107,47 @@ class CallEngineTest {
 
         /** What the socket opened last negotiated (`Sec-WebSocket-Extensions`), or "none". */
         val latestExtensions: String
-            get() = synchronized(opened) { (opened.lastOrNull() as? CallSocket)?.negotiatedExtensions ?: "none" }
+            get() = synchronized(opened) { (opened.lastOrNull()?.real as? CallSocket)?.negotiatedExtensions ?: "none" }
+
+        /** The kinds of the frames sent on the socket opened last, in order. */
+        val latestSent: List<String>
+            get() = synchronized(opened) { opened.lastOrNull()?.sent() ?: emptyList() }
+
+        /** The kinds of the frames received on the socket opened last, in order. */
+        val latestReceived: List<String>
+            get() = synchronized(opened) { opened.lastOrNull()?.received() ?: emptyList() }
 
         /** Closes the socket opened last from this side, with no `leave` sent on it, as a network that drops it would. */
         fun cut() {
             synchronized(opened) { opened.lastOrNull() }?.closeSocket()
         }
+    }
+
+    /** A socket of `real`'s with the kind (`type`) of each frame sent and received on it kept, as the engine's own proof reads its frames. */
+    class WatchedSocket(val real: Socket) : Socket {
+        private val sentKinds = ArrayList<String>()
+        private val receivedKinds = ArrayList<String>()
+
+        override suspend fun sendText(text: String) {
+            synchronized(sentKinds) { sentKinds.add(kindOf(text)) }
+            real.sendText(text)
+        }
+
+        override suspend fun receive(): Received {
+            val received = real.receive()
+            if (received is Received.Text) {
+                synchronized(receivedKinds) { receivedKinds.add(kindOf(received.v1)) }
+            }
+            return received
+        }
+
+        override fun closeSocket() = real.closeSocket()
+
+        fun sent(): List<String> = synchronized(sentKinds) { sentKinds.toList() }
+
+        fun received(): List<String> = synchronized(receivedKinds) { receivedKinds.toList() }
+
+        private fun kindOf(text: String): String = JSONObject(text).optString("type", "?")
     }
 
     /** Peer connections from `real`, with every one made kept for its statistics. */
@@ -461,13 +498,17 @@ class CallEngineTest {
                 "(${browserVideoFrames(helper)} frames, a frame of brightness ${sample.brightness.toInt()} and spread ${sample.spread.toInt()} at ${sample.width}×${sample.height}); $moved"
 
             // The socket cut: the engine takes its place back with `resume` on a new socket, media
-            // flowing meanwhile on the same peer connection.
+            // flowing meanwhile on the same peer connection, and the call connected throughout,
+            // as the web client's stays through its own resume; the new socket's frames say the
+            // resume was presented and answered `ready`.
             val session = connected.session
             seen.clear()
             sockets.cut()
-            val resumed = until("the call resumes", 20, call) { state ->
-                state.status == CallStatus.CONNECTED && seen.statuses.contains(CallStatus.REJOINING)
+            awaitTrue("the engine presents the resume on a new socket", 20) {
+                sockets.connections == 2 && sockets.latestSent.firstOrNull() == "resume" && sockets.latestReceived.contains("ready")
             }
+            val resumed = until("the call is connected once taken back", 10, call) { it.status == CallStatus.CONNECTED }
+            assertTrue("a resume within the grace keeps the call connected: ${seen.statuses}", seen.statuses.none { it == CallStatus.REJOINING })
             assertEquals("the same session", session, resumed.session)
             assertEquals("one socket more", 2, sockets.connections)
             assertEquals("the same peer connection", 1, peerConnections.count)
@@ -510,14 +551,15 @@ class CallEngineTest {
             assertNull(call.routes.currentKind)
             val telecomAfter = telecomLines(callId)
             assertTrue("Telecom no longer holds the call $callId:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })
-            // Leaving is the leaving sound; the cut socket was said lost and, with the resume,
-            // back, as the web's call says of its own rejoining.
+            // Leaving is the leaving sound, and the resume within the grace was no loss: the
+            // joining as the engine connected and as the browser joined, then the leaving.
             awaitTrue("the leaving is played", 10) { sounds.played.any { it.cue == SoundCue.CALL_LEFT } }
             soundsListening.cancel()
             val played = sounds.played
             assertTrue("every sound's player played as it was given: $played", played.all { it.playing })
             assertEquals(
-                listOf(SoundCue.CALL_JOINED, SoundCue.CALL_JOINED, SoundCue.DISCONNECTED, SoundCue.RECONNECTED, SoundCue.CALL_LEFT),
+                "a resume within the grace is no loss",
+                listOf(SoundCue.CALL_JOINED, SoundCue.CALL_JOINED, SoundCue.CALL_LEFT),
                 played.map { it.cue },
             )
             println("call-engine-test: left; Telecom's call ended, the service and its notification are down, routes empty, audio mode $modeBefore again")
@@ -528,7 +570,7 @@ class CallEngineTest {
                     "measured energy ${source.energy} and level ${source.level} at its source; " +
                     "the browser received ${browserAfter.first - browserBefore.first} packets and " +
                     "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; $video; " +
-                    "resumed on socket 2 with session $session with video flowing on; camera off; the signalling socket negotiated ${sockets.latestExtensions}; left",
+                    "resumed on socket 2 with session $session, connected throughout, with video flowing on; camera off; the signalling socket negotiated ${sockets.latestExtensions}; left",
             )
         } finally {
             listening.cancel()

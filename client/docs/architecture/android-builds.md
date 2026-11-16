@@ -349,87 +349,99 @@ the other's sound (the browser's as the loudest sample off its received tracks, 
 each track in), puts the call on hold and releases it (the browser's report, `onHold` in
 `calls/page.ts`, lists the device's user meanwhile, neither side's packets reach the other, and the
 release waits for the server's word), cuts its socket and watches the engine take its place back
-with `resume`, and leaves; its log line also names what the signalling socket negotiated. Between
-the hold and the cut it proves the video both ways: the browser shows video and turns Chromium's
-fake camera on, the engine is asked to watch it, and the track that arrives is retained as
-`CallVideo` retains one and given a sink that counts its frames (at least five) and reads their
-upright shape (drawing needs a window, which the bridge's proof has); then the emulator's front
-camera is opened through `CallCamera` and sent as the engine's camera, its own frames counted with
-their rotation, and the browser decodes its frames (`framesDecoded` in `calls/page.ts`'s report) and
-sees a picture in them (`cameraSample`: a frame drawn to a canvas, brighter than black); the camera
-is moved to the back camera with the track kept; video flows on across the resume; and the camera is
-stopped before the leave. Around that it checks the system's side: Telecom holds the call as
-outgoing (`dialing`) and then active, and `dumpsys telecom` (run through the instrumentation's
-shell) names the call by the id Telecom gave it; the call's service runs in the foreground with its
-`CallStyle` notification posted, and the audio mode is the communication mode; the routes are
-Telecom's endpoints, each with a kind, one current, and selecting the loudspeaker (and the earpiece
-again, where the device has one) moves the call there; and leaving ends Telecom's call, stops the
-service, takes the notification down, empties the routes, and gives the audio mode back. What the
-browser must hear is what the device's microphone carried, which the device's own `media-source`
-statistics tell: sound, when a tone is played to it, or silence, as on an emulator whose host audio
-never reaches it. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
-played as the engine connects and again as the browser joins, the leaving as the call is left, no
-loss is said of the resume within the grace, each a `MediaPlayer` playing as the cue is given, and
-for the first the system's own word on it, `dumpsys audio`'s players read on the spot: one of this
-process with `USAGE_VOICE_COMMUNICATION`, started, which the log line quotes. `AspenCallPluginTest`
-drives the bridge itself: it launches `MainActivity`, which loads the web shell with the plugin
-registered, and runs `Capacitor.registerPlugin("AspenCall")` in the page through the bridge's web
-view, as the app's `NativeCall` does. From the page it reads a fresh snapshot (the engine's JSON,
-idle, revision 0, of its origin) and the empty routes of no call, has malformed commands refused by
-name, joins the channel through the plugin and watches the `joining` and `connected` snapshots reach
-the page, moves the call to the loudspeaker (and the earpiece again, where the device has one) and
-watches the `routes` events say so as Telecom's current endpoint changes, clears the choice, mutes
-and unmutes, and then drives the video: `cameras()` lists the emulator's cameras with their facings,
-`startCamera` opens the front one and the snapshot shows the camera among `sources`, a hole reported
-with `setTiles` for its track has its shape come back as a `shape` event and its surface view laid
-out at the hole's rectangle in device pixels and drawing (`onFirstFrameRendered`), `switchCamera`
-moves to the back one, a second participant from the browser turns its camera on and `setWatched`
-has the snapshot show its track, whose hole hears its shape and draws too, the activity enters the
-picture-in-picture mode on it (`enterPictureInPicture`, standing for the user's leaving) and the
-page hears `pip` while `isInPictureInPictureMode` holds, starting the activity again leaves the mode
-and the page hears that too, the browser decodes the camera, malformed `setWatched` and `setTiles`
-are refused by name, and `stopCamera` takes the source out of the snapshot and the capture off; then
-it leaves: the snapshots arrive in revision order with none twice, a fresh `state()` is the latest
-published, the renewed session token is kept, and the routes empty again. `androidTest`'s
-`CallRingsTest` feeds `PushHandler` a `call` pointer encrypted to a key it writes into the push
-state, as the messaging service would, and checks that within five seconds the incoming call's
-notification is posted with its full-screen intent and Telecom holds the call as ringing; then,
-standing in for the deployment's event stream (a WebSocket server of the standard library's
-sockets), it takes the ring watch's `identify`, answers `ready`, and sends the ring's `voiceRing`
-`delete`, after which the call is gone and the notification with it; between, it sends the
-notification's full-screen intent itself, as the system would for a locked phone, and checks the
-incoming call screen is resumed naming the caller and the deployment, that the ringtone plays
-meanwhile, and that the ring's end closes the screen and stops it; a push that does not decrypt
-rings nothing. It needs no deployment and runs with the rest of `connectedDebugAndroidTest`.
-`scripts/check_mobile_call.py --platform android` at the repository's root runs `CallEngineTest` and
-`AspenCallPluginTest` end to end, with the same deployment and browser the iOS check uses: a
-deployment of its own serving the call page (`client/packages/protocol/calls/`), `adb reverse` so
-the emulator reaches the API server, the voice server, and the script's helper at its own loopback
-(plain HTTP there, as a development build allows; media goes to the voice server's announced address
-over the network), Chromium as the second participant with a tone WAV as its microphone and its fake
-camera (`calls/second.ts`, which the script's helper drives: showing video, the camera on and off,
-and a frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these tests
-alone, judging their JUnit reports (every class ran, none failed or erred, and none skipped but the
-trailing test, which skips itself outside `--record-trailing`) and that each printed its own line,
-with every `adb` and Gradle command pinned to the device's serial (`ANDROID_SERIAL`), so whatever
-else is attached, a phone beside the emulator or an emulator beside the phone, is never touched.
-With `--avd` it starts the emulator headless, recording the machine's microphone
-(`-allow-host-audio`, without which the emulator records silence); the emulator's PulseAudio backend
-does not start against PipeWire's server (``Could not init `pa' audio driver``), so there its
-microphone is silent. What the browser is to hear of the device's microphone is the script's to say
-(`ASPEN_CALL_MICROPHONE`, from its `--microphone`): `silent` on an emulator, where the test checks
-the device's own source measured silence and the browser heard silence; `live` on a phone, whose
-microphone hears the room, where the test checks that the browser received and decoded the phone's
-packets and reports the level it heard, whatever a room sounds like. With `--device <serial>` the
-check runs on a phone attached by USB instead (`adb reverse` works on one as on the emulator, and
-media reaches the voice server's announced address over the network the phone shares with the
-machine): an emulator's serial is refused (`emulator-<port>`, or `ro.kernel.qemu` set), `--build`
-builds the engine for the phone's ABI (`call_engine.py --abi arm64-v8a`), and `CallDeviceTest` runs
-after the engine's and the bridge's tests: what only a phone can show, read from the system itself
-through the instrumentation's shell. In a call with the browser, it selects the earpiece and then
-the loudspeaker and reads `dumpsys audio`'s active communication device and `dumpsys power`'s
-proximity wake lock after each, reads the service's foreground types and the `CallStyle`
-notification from `dumpsys activity services` and `dumpsys notification`, turns the screen off
+with `resume`, the call connected throughout, and leaves; its log line also names what the
+signalling socket negotiated. Between the hold and the cut it proves the video both ways: the
+browser shows video and turns Chromium's fake camera on, the engine is asked to watch it, and the
+track that arrives is retained as `CallVideo` retains one and given a sink that counts its frames
+(at least five) and reads their upright shape (drawing needs a window, which the bridge's proof
+has); then the emulator's front camera is opened through `CallCamera` and sent as the engine's
+camera, its own frames counted with their rotation, and the browser decodes its frames
+(`framesDecoded` in `calls/page.ts`'s report) and sees a picture in them (`cameraSample`: a frame
+drawn to a canvas, brighter than black); the camera is moved to the back camera with the track kept;
+video flows on across the resume; and the camera is stopped before the leave. Around that it checks
+the system's side: Telecom holds the call as outgoing (`dialing`) and then active, and
+`dumpsys telecom` (run through the instrumentation's shell) names the call by the id Telecom gave
+it; the call's service runs in the foreground with its `CallStyle` notification posted, and the
+audio mode is the communication mode; the routes are Telecom's endpoints, each with a kind, one
+current, and selecting the loudspeaker (and the earpiece again, where the device has one) moves the
+call there; and leaving ends Telecom's call, stops the service, takes the notification down, empties
+the routes, and gives the audio mode back. What the browser must hear is what the device's
+microphone carried, which the device's own `media-source` statistics tell: sound, when a tone is
+played to it, or silence, as on an emulator whose host audio never reaches it. Through it all it
+watches the call's sounds (`CallSounds.listen`): the joining is played as the engine connects and
+again as the browser joins, the leaving as the call is left, and those three alone, since a socket
+taken back within the grace keeps the call connected and is no loss (the new socket's frames, read
+through the test's `WatchedSocket`, say the `resume` was presented and answered `ready`, and no
+snapshot showed `rejoining`), each a `MediaPlayer` playing as the cue is given, and for the first
+the system's own word on it, `dumpsys audio`'s players read on the spot: one of this process as a
+`MediaPlayer` with `USAGE_VOICE_COMMUNICATION` and `CONTENT_TYPE_SONIFICATION`, started, which the
+log line quotes. `AspenCallPluginTest` drives the bridge itself: it launches `MainActivity`, which
+loads the web shell with the plugin registered, and runs `Capacitor.registerPlugin("AspenCall")` in
+the page through the bridge's web view, as the app's `NativeCall` does. From the page it reads a
+fresh snapshot (the engine's JSON, idle, revision 0, of its origin) and the empty routes of no call,
+has malformed commands refused by name, joins the channel through the plugin and watches the
+`joining` and `connected` snapshots reach the page, moves the call to the loudspeaker (and the
+earpiece again, where the device has one) and watches the `routes` events say so as Telecom's
+current endpoint changes, clears the choice, mutes and unmutes, and then drives the video:
+`cameras()` lists the emulator's cameras with their facings, `startCamera` opens the front one and
+the snapshot shows the camera among `sources`, a hole reported with `setTiles` for its track has its
+shape come back as a `shape` event and its surface view laid out at the hole's rectangle in device
+pixels and drawing (`onFirstFrameRendered`), `switchCamera` moves to the back one, a second
+participant from the browser turns its camera on and `setWatched` has the snapshot show its track,
+whose hole hears its shape and draws too, the activity enters the picture-in-picture mode on it
+(`enterPictureInPicture`, standing for the user's leaving) and the page hears `pip` while
+`isInPictureInPictureMode` holds, starting the activity again leaves the mode and the page hears
+that too, the browser decodes the camera, malformed `setWatched` and `setTiles` are refused by name,
+and `stopCamera` takes the source out of the snapshot and the capture off; then it leaves: the
+snapshots arrive in revision order with none twice, a fresh `state()` is the latest published, the
+renewed session token is kept, and the routes empty again. `androidTest`'s `CallRingsTest` feeds
+`PushHandler` a `call` pointer encrypted to a key it writes into the push state, as the messaging
+service would, and checks that within five seconds the incoming call's notification is posted with
+its full-screen intent and Telecom holds the call as ringing; then, standing in for the deployment's
+event stream (a WebSocket server of the standard library's sockets), it takes the ring watch's
+`identify`, answers `ready`, and sends the ring's `voiceRing` `delete`, after which the call is gone
+and the notification with it; between, it sends the notification's full-screen intent itself, as the
+system would for a locked phone, and checks the incoming call screen is resumed naming the caller
+and the deployment, that the ringtone plays meanwhile, and that the ring's end closes the screen and
+stops it; a push that does not decrypt rings nothing. It needs no deployment and runs with the rest
+of `connectedDebugAndroidTest`. `scripts/check_mobile_call.py --platform android` at the
+repository's root runs `CallEngineTest` and `AspenCallPluginTest` end to end, with the same
+deployment and browser the iOS check uses: a deployment of its own serving the call page
+(`client/packages/protocol/calls/`), `adb reverse` so the emulator reaches the API server, the voice
+server, and the script's helper at its own loopback (plain HTTP there, as a development build
+allows; media goes to the voice server's announced address over the network), Chromium as the second
+participant with a tone WAV as its microphone and its fake camera (`calls/second.ts`, which the
+script's helper drives: showing video, the camera on and off, and a frame of someone's camera
+sampled), and `gradlew connectedDebugAndroidTest` on these tests alone, judging their JUnit reports
+(every class ran, none failed or erred, and none skipped but the trailing test, which skips itself
+outside `--record-trailing`) and that each printed its own line, with every `adb` and Gradle command
+pinned to the device's serial (`ANDROID_SERIAL`), so whatever else is attached, a phone beside the
+emulator or an emulator beside the phone, is never touched. With `--avd` it starts the emulator
+headless, recording the machine's microphone (`-allow-host-audio`, without which the emulator
+records silence); the emulator's PulseAudio backend does not start against PipeWire's server
+(``Could not init `pa' audio driver``), so there its microphone is silent. What the browser is to
+hear of the device's microphone is the script's to say (`ASPEN_CALL_MICROPHONE`, from its
+`--microphone`): `silent` on an emulator, where the test checks the device's own source measured
+silence and the browser heard silence; `live` on a phone, whose microphone hears the room, where the
+test checks that the browser received and decoded the phone's packets and reports the level it
+heard, whatever a room sounds like. With `--device <serial>` the check runs on a phone attached by
+USB instead (`adb reverse` works on one as on the emulator, and media reaches the voice server's
+announced address over the network the phone shares with the machine): an emulator's serial is
+refused (`emulator-<port>`, or `ro.kernel.qemu` set), `--build` builds the engine for the phone's
+ABI (`call_engine.py --abi arm64-v8a`), and `CallDeviceTest` runs after the engine's and the
+bridge's tests: what only a phone can show, read from the system itself through the
+instrumentation's shell. Before any test the check reads the phone's state and refuses, naming what
+to change, what would fail a test from inside (`Android.ready_phone`): the bridge's test enters the
+picture in picture, which needs its activity resumed, so the screen must be on with no lock screen
+over it and must stay so through the engine's test before it, which Stay awake (Developer options)
+keeps on USB; a screen that is off, or a swipe lock screen, the check wakes and dismisses itself
+(`wm dismiss-keyguard`) and says so, and a PIN, pattern, or password lock screen showing is the
+owner's to unlock, or to set to Swipe, and is refused by its kind (`dumpsys lock_settings`). In a
+call with the browser, it selects the earpiece and then the loudspeaker and reads `dumpsys audio`'s
+active communication device and `dumpsys power`'s proximity wake lock after each, reads the
+service's foreground types and the `CallStyle` notification from `dumpsys activity services` and
+`dumpsys notification` (its record found by the key the system gave the notification the app sees
+posted, and a failure quoting what the dump named of the package), turns the screen off
 (`input keyevent KEYCODE_SLEEP`) for three minutes and forces Doze (`dumpsys deviceidle force-idle`)
 for thirty seconds, checking every half minute that the call is connected and packets reach both
 sides, and leaves. Then it feeds the push handler a `call` pointer, as `CallRingsTest` does, with

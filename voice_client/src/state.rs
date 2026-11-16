@@ -21,8 +21,9 @@ pub enum CallStatus {
     Idle,
     Joining,
     Connected,
-    /// Between calls on the same channel without the user asking: taking a dropped socket back
-    /// (`resume`), or joining the channel again after its server or the connection was lost.
+    /// Joining the channel again without the user asking, after its server or the connection
+    /// was lost, or a dropped socket could not be taken back (`resume`) within the server's
+    /// grace; a resume within it keeps the call `Connected`.
     Rejoining,
     Failed,
 }

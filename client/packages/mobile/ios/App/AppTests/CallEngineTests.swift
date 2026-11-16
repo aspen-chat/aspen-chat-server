@@ -30,12 +30,13 @@ final class CallEngineTests: XCTestCase {
     final class CuttableSockets: SocketFactory, @unchecked Sendable {
         private let real = CallSockets()
         private let lock = NSLock()
-        private(set) var opened: [Socket] = []
+        private(set) var opened: [WatchedSocket] = []
 
         func connect(url: String, bearer: String?) async throws -> ConnectedSocket {
             let connected = try await real.connect(url: url, bearer: bearer)
-            lock.held { opened.append(connected.socket) }
-            return connected
+            let watched = WatchedSocket(real: connected.socket)
+            lock.held { opened.append(watched) }
+            return ConnectedSocket(socket: watched)
         }
 
         var connections: Int {
@@ -48,7 +49,21 @@ final class CallEngineTests: XCTestCase {
         var latestExtensions: String {
             lock.lock()
             defer { lock.unlock() }
-            return (opened.last as? CallSocket)?.negotiatedExtensions ?? "none"
+            return (opened.last?.real as? CallSocket)?.negotiatedExtensions ?? "none"
+        }
+
+        /// The kinds of the frames sent on the socket opened last, in order.
+        var latestSent: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return opened.last?.sent ?? []
+        }
+
+        /// The kinds of the frames received on the socket opened last, in order.
+        var latestReceived: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return opened.last?.received ?? []
         }
 
         /// Closes the socket opened last from this side, with no `leave` sent on it, as a
@@ -58,6 +73,49 @@ final class CallEngineTests: XCTestCase {
             let latest = opened.last
             lock.unlock()
             latest?.closeSocket()
+        }
+    }
+
+    /// A socket of `real`'s with the kind (`type`) of each frame sent and received on it kept,
+    /// as the engine's own proof reads its frames.
+    final class WatchedSocket: Socket, @unchecked Sendable {
+        let real: Socket
+        private let lock = NSLock()
+        private var sentKinds: [String] = []
+        private var receivedKinds: [String] = []
+
+        init(real: Socket) {
+            self.real = real
+        }
+
+        func sendText(text: String) async throws {
+            lock.held { sentKinds.append(Self.kind(of: text)) }
+            try await real.sendText(text: text)
+        }
+
+        func receive() async -> Received {
+            let received = await real.receive()
+            if case .text(let text) = received {
+                lock.held { receivedKinds.append(Self.kind(of: text)) }
+            }
+            return received
+        }
+
+        func closeSocket() {
+            real.closeSocket()
+        }
+
+        var sent: [String] {
+            lock.held { sentKinds }
+        }
+
+        var received: [String] {
+            lock.held { receivedKinds }
+        }
+
+        private static func kind(of text: String) -> String {
+            let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+            return object?["type"] as? String ?? "?"
         }
     }
 
@@ -385,13 +443,17 @@ final class CallEngineTests: XCTestCase {
         let video = "watched the browser's camera (\(remoteRenderer.framesRendered) frames drawn, \(remoteShape.width)×\(remoteShape.height)) in its hole \(remoteBox); sent a camera the browser decoded (\(try await browserVideoFrames()) frames, a frame of brightness \(Int(sample.brightness)) at \(sample.width)×\(sample.height)) with its preview \(selfShape.width)×\(selfShape.height) (rotation \(selfShape.rotation)°) in \(selfBox); moved it to \(moved.device.id)"
 
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
-        // flowing meanwhile on the same peer connection.
+        // flowing meanwhile on the same peer connection, and the call connected throughout, as
+        // the web client's stays through its own resume; the new socket's frames say the resume
+        // was presented and answered `ready`.
         let session = connected.session
         seen.clear()
         sockets.cut()
-        let resumed = try await until("the call resumes", seconds: 20, call) { state in
-            state.status == .connected && seen.statuses.contains(.rejoining)
+        try await untilTrue("the engine presents the resume on a new socket", seconds: 20) {
+            sockets.connections == socketsBefore + 2 && sockets.latestSent.first == "resume" && sockets.latestReceived.contains("ready")
         }
+        let resumed = try await until("the call is connected once taken back", seconds: 10, call) { $0.status == .connected }
+        XCTAssertFalse(seen.statuses.contains(.rejoining), "a resume within the grace keeps the call connected: \(seen.statuses)")
         XCTAssertEqual(resumed.session, session, "the same session")
         XCTAssertEqual(sockets.connections, socketsBefore + 2, "one socket more")
         XCTAssertEqual(peerConnections.created.count, connectionsBefore + 1, "the same peer connection")
@@ -424,14 +486,14 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        // Leaving is the leaving sound, on the session the test still holds active; the cut
-        // socket was said lost and, with the resume, back, as the web's call says of its own
-        // rejoining.
+        // Leaving is the leaving sound, on the session the test still holds active, and the
+        // resume within the grace was no loss: the joining as the engine connected and as the
+        // browser joined, then the leaving.
         try await untilTrue("the leaving is played", seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
         let played = sounds.played
         XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
-        XCTAssertEqual(played.map(\.cue), [.callJoined, .callJoined, .disconnected, .reconnected, .callLeft])
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
+        XCTAssertEqual(played.map(\.cue), [.callJoined, .callJoined, .callLeft], "a resume within the grace is no loss")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?"), connected throughout, with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
     }
 
     // MARK: Helpers

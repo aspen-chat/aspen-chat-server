@@ -10,10 +10,11 @@
 //! receives, and media on a new section flows once the answer is applied.
 //!
 //! A socket that drops is first taken back with `resume` on the same server, within the grace
-//! the server keeps the participant for, media flowing meanwhile; only when that fails is the
-//! channel joined again, after a random pause of up to a second so the participants of a lost
-//! call do not all ask the API server at once. A call ended for being idle, or by the user, is
-//! not rejoined.
+//! the server keeps the participant for, media flowing meanwhile and the call still `Connected`,
+//! as the web client's stays through its own resume; only when that fails, the grace run out or
+//! the resume refused, is the call `Rejoining` and the channel joined again, after a random
+//! pause of up to a second so the participants of a lost call do not all ask the API server at
+//! once. A call ended for being idle, or by the user, is not rejoined.
 //!
 //! Everything runs on one task: commands from the engine's facade, frames from the sockets,
 //! the peer connection's state changes, and the timers all arrive as events on one queue, so no
@@ -327,6 +328,12 @@ struct Resuming {
     /// When the server's grace for the dropped socket runs out.
     deadline: Instant,
     link: Option<Link>,
+    /// What was asked of the dropped socket meanwhile and must be asked again once the call is
+    /// taken back: the user's state (`setState`), and the videos watched (`watch`). The call
+    /// stays `Connected` through a resume, so each is sent as it is asked, to a socket that is
+    /// gone; what the server kept (the hold, the silence) is not asked again.
+    state_asked: bool,
+    watch_asked: bool,
 }
 
 /// The call from `ready` on: a place on one server, its socket, and its peer connection.
@@ -702,7 +709,10 @@ impl Call {
     }
 
     async fn send_state(&mut self) {
-        if let Some(live) = &self.live {
+        if let Some(live) = &mut self.live {
+            if let Some(resuming) = &mut live.resuming {
+                resuming.state_asked = true;
+            }
             let link = live.link.clone();
             link.send(ClientMessage::SetState {
                 muted: self.asked.muted,
@@ -844,7 +854,10 @@ impl Call {
     /// more and leaves the rest out, so asking for them would only mislead the state. Sent as soon
     /// as the call has its place (`ready`); kept for it before.
     async fn set_watched(&mut self, mut video: Vec<WatchedVideo>) {
-        if let Some(live) = &self.live {
+        if let Some(live) = &mut self.live {
+            if let Some(resuming) = &mut live.resuming {
+                resuming.watch_asked = true;
+            }
             video.truncate(self.state.max_watched_video as usize);
             self.state.watching = video.clone();
             let link = live.link.clone();
@@ -2022,7 +2035,10 @@ impl Call {
     // --- Resuming ---------------------------------------------------------------------------
 
     /// The socket dropped without `leave`: the participant stays in the call for `RESUME_GRACE`,
-    /// media flowing, and is taken back with `resume` on a new socket to the same server.
+    /// media flowing, and is taken back with `resume` on a new socket to the same server. The
+    /// call stays `Connected` meanwhile, as the web client's does, so nothing is said of a drop
+    /// the resume repairs; it is `Rejoining`, and said lost, only once the grace has run out or
+    /// the server refused the resume.
     async fn start_resume(&mut self) {
         let Some(live) = &mut self.live else {
             return;
@@ -2030,8 +2046,9 @@ impl Call {
         live.resuming = Some(Resuming {
             deadline: Instant::now() + RESUME_GRACE,
             link: None,
+            state_asked: false,
+            watch_asked: false,
         });
-        self.state.status = CallStatus::Rejoining;
         self.attempt_resume();
     }
 
@@ -2082,7 +2099,10 @@ impl Call {
                 let Some(live) = &mut self.live else {
                     return;
                 };
-                let Some(link) = live.resuming.take().and_then(|r| r.link) else {
+                let Some(resuming) = live.resuming.take() else {
+                    return;
+                };
+                let Some(link) = resuming.link else {
                     return;
                 };
                 self.step += 1;
@@ -2094,8 +2114,15 @@ impl Call {
                 self.state.participants = participants.into_iter().map(participant).collect();
                 self.state.audio_slots = audio_slots;
                 self.state.max_watched_video = max_watched_video;
-                self.state.status = CallStatus::Connected;
                 self.update_silence().await;
+                // What was asked of the dropped socket is asked again; the rest the server kept.
+                if resuming.state_asked {
+                    self.send_state().await;
+                }
+                if resuming.watch_asked {
+                    let video = self.state.watching.clone();
+                    self.set_watched(video).await;
+                }
             }
             // The server would not take the participant back: the grace ran out, or the secret
             // was used. It is alive, so the channel is joined again at once.
