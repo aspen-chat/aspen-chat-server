@@ -50,6 +50,7 @@ declare global {
       showVideo(): void;
       setMuted(muted: boolean): void;
       report(): Promise<CallReport>;
+      loudness(): Promise<number>;
       leave(): void;
     };
   }
@@ -122,6 +123,39 @@ window.aspenCall = {
   },
   setMuted(muted) {
     call?.setMuted(muted);
+  },
+  /**
+   * The loudest sample the audio slots carried over a second, read off their tracks. The
+   * browser's own `audioLevel` and `totalAudioEnergy` are measured where it plays a track, and
+   * Chromium reads them after the muted element the call keeps each track playing in, so they
+   * are zero however loud the sound.
+   */
+  async loudness() {
+    if (!(connection instanceof RTCPeerConnection) || call === null) {
+      return 0;
+    }
+    const context = new AudioContext();
+    const analysers = connection
+      .getTransceivers()
+      .filter((t) => t.receiver.track.kind === "audio" && t.currentDirection !== "sendonly")
+      .map((t) => {
+        const analyser = context.createAnalyser();
+        context.createMediaStreamSource(new MediaStream([t.receiver.track])).connect(analyser);
+        return analyser;
+      });
+    const samples = new Float32Array(2048);
+    let peak = 0;
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      for (const analyser of analysers) {
+        analyser.getFloatTimeDomainData(samples);
+        for (const sample of samples) {
+          peak = Math.max(peak, Math.abs(sample));
+        }
+      }
+    }
+    await context.close();
+    return peak;
   },
   async report() {
     const state = call?.state;

@@ -144,14 +144,20 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
     const [annBefore, bobBefore] = await Promise.all([report(ann), report(bob)]);
     await sleep(4000);
     const [annAfter, bobAfter] = await Promise.all([report(ann), report(bob)]);
-    for (const [who, before, after] of [
-      ["Ann hears Bob", annBefore, annAfter],
-      ["Bob hears Ann", bobBefore, bobAfter],
+    const loudness = (page: Page) => page.evaluate(() => window.aspenCall?.loudness() ?? 0);
+    const [annLoudness, bobLoudness] = await Promise.all([loudness(ann), loudness(bob)]);
+    // The browsers' fake microphones play a tone, which decodes to sound well above silence.
+    for (const [who, before, after, peak] of [
+      ["Ann hears Bob", annBefore, annAfter, annLoudness],
+      ["Bob hears Ann", bobBefore, bobAfter, bobLoudness],
     ] as const) {
-      const sound = heard(before, after);
+      const sound = { ...heard(before, after), peak };
       check(
         who,
-        sound.packets > 150 && sound.samples > 0 && sound.concealed < sound.samples * 0.1,
+        sound.packets > 150 &&
+          sound.samples > 0 &&
+          sound.concealed < sound.samples * 0.1 &&
+          sound.peak > 0.01,
         sound,
       );
     }
