@@ -16,8 +16,9 @@ use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, Sel
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
-/// How long a DM's call rings the people it rings, unless they join or decline sooner.
-pub const RING_SECONDS: i64 = 15;
+/// How long a DM's call rings the people it rings, unless they join or decline sooner. A phone
+/// woken for the ring (`app::push`) rings for the same while by the server's clock.
+pub const RING_SECONDS: i64 = 30;
 
 /// Someone a DM's call is ringing (`voice_ring`).
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -43,7 +44,8 @@ fn ring_record(ring: &VoiceRing, channel: ChannelId) -> message_enum::VoiceRing 
 
 /// Notes who started a call, its first participant, and, in a DM or group DM, rings everyone
 /// else in it for `RING_SECONDS`, but those in do not disturb (`app::presence_override`), whom
-/// the call reaches only as the DM shows it.
+/// the call reaches only as the DM shows it. Each ring's `create` event is also what wakes the
+/// rung person's phones (`app::push`, the `call` pointer), so nothing here decides who is pushed.
 pub(super) async fn start_call(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,

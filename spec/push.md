@@ -84,13 +84,16 @@ Aspen API's are, and each `detail` says what to do.
 ```
 
 `platform` is `apns` or `fcm`; `app` is the bundle id (APNs topic) or FCM project, which must be one
-the relay holds credentials for; `environment` (APNs only) is `production` or `sandbox`. It answers
-`201` with `{ "device": "<id>", "secret": "<bearer secret>" }`. The secret authenticates every later
-call about this device, and is known only to the app.
+the relay holds credentials for; `environment` (APNs only) is `production` or `sandbox`. An `apns`
+device may also give `voipToken`, the token PushKit gave it for VoIP pushes, which is how a call
+reaches it (Calls, below); without one, calls are not sent to it. It answers `201` with
+`{ "device": "<id>", "secret": "<bearer secret>" }`. The secret authenticates every later call about
+this device, and is known only to the app.
 
-`PATCH /v1/devices/{device}` with `{ "token": "…" }` replaces the token when the platform issues a
-new one, keeping every subscription. `DELETE /v1/devices/{device}` ends the device and all its
-subscriptions, as signing out of every account on the phone does.
+`PATCH /v1/devices/{device}` with `{ "token": "…" }`, `{ "voipToken": "…" }`, or both replaces the
+tokens the platform issued anew, keeping every subscription; `voipToken` is refused for an `fcm`
+device. `DELETE /v1/devices/{device}` ends the device and all its subscriptions, as signing out of
+every account on the phone does.
 
 ### Subscriptions
 
@@ -117,7 +120,12 @@ A device has one subscription per deployment account it is signed in to.
 - `Urgency`: `high` for what a person should see now (a message for them); `low` for a pointer that
   shows nothing (`read`, `deleted`).
 - `Topic`: optional; a later message with the same topic replaces an undelivered earlier one.
-  Deployments set it to a hash of the channel id, so a burst in one channel wakes the phone once.
+  Deployments set it to the channel id, so a burst in one channel wakes the phone once, and a call's
+  to its session id, so a ring and a message never replace each other.
+- `Aspen-Push-Kind: call`: the push is a call ringing the phone (Calls, below), which the relay must
+  send as the platform's call push and cannot read from the ciphertext. Sent on a `call` pointer
+  alone; no other kind is named to the relay. A relay that does not know the header sends the push
+  as any other, and the phone shows the ring as a notification at most.
 
 Answers:
 
@@ -153,6 +161,29 @@ nothing are `low`.
 **Android (UnifiedPush)**: the distributor hands the app the RFC 8291 ciphertext, and the app does
 the same as for FCM.
 
+### Calls
+
+A push marked `Aspen-Push-Kind: call` rings the phone, so it must wake the app at once and let it
+show a call rather than a notification:
+
+**iOS**: a VoIP push (`apns-push-type: voip`, topic `<bundle id>.voip`, priority 10,
+`apns-expiration` from `TTL`, which a deployment sets to what is left of the ring) to the device's
+`voipToken`, carrying `"aspen": { "s": …, "c": … }` and no `aps`. PushKit wakes the app, whose
+handler (not the extension) decrypts and reports the call to CallKit before it returns, as Apple
+requires. A device that registered no `voipToken` is answered `201` and sent nothing: an app without
+one is of a version that could not show the call. A `voipToken` Apple says is gone is forgotten, and
+the device kept, since its alert token may still stand. Nothing is pushed when a ring ends, which
+Apple says not to do: the app learns of it through its own connection, and at the ring's `until` by
+the clock.
+
+**Android (FCM)**: a data message of high priority whatever `Urgency` says, with `"k": "call"`
+beside `s` and `c`, so the app's messaging service takes the call path before it has decrypted
+anything; the pointer's `kind` is what decides, and `k` only hurries it. The app adds the call to
+Telecom and posts its call notification, with a full-screen intent, within the five seconds a
+service started by a push has.
+
+**Android (UnifiedPush)**: the ciphertext as for any push; the app decides by the pointer's `kind`.
+
 ## The pointer
 
 What the deployment encrypts: a JSON object of at most 1024 bytes, so its ciphertext fits in an APNs
@@ -186,6 +217,11 @@ subscription's keys beside the session it registered them with.
     (`GET /api/v1/users/@me/plugin-notices/{notice}`, which answers the plugin's name as `title`,
     its text as `body`, both in the person's language, and the channel's `community` and
     `parentChannel`, and the `message` it is about, if any) and shows the title and body.
+  - `call` (`channel`, `session`, `caller`, `callerName`, `until`): the call of `session`, in the DM
+    `channel`, started by `caller`, is ringing the person until `until` (RFC 3339, on the
+    deployment's clock). The app shows an incoming call from `callerName` at once, before it reaches
+    the network (The app, below); it fetches nothing to show it. The deployment is the one the
+    subscription names, as for every pointer.
 - `badge`: how many unread messages tag the person on this deployment (the sum of their
   `ReadState.mentions`), and how many of their DMs are unread; absent when a message wakes so many
   people that working it out for each would cost too much. The app keeps each account's latest and
@@ -193,7 +229,10 @@ subscription's keys beside the session it registered them with.
 
 An app ignores a kind it does not know, and fields it does not know, as the federation protocol's
 readers do; kinds and fields are only ever added (`spec/federation.md`, How the protocol changes).
-No pointer names a person, a channel name, or any text: those come from the fetch.
+No pointer but `call` names a person, a channel name, or any text: those come from the fetch. A
+`call` names its caller, since a phone must show who is calling before it can reach the deployment,
+and that name alone (the caller's display name, or else their username; the channel's name, if a
+group DM has one, is not carried).
 
 ## The deployment's API
 
@@ -260,7 +299,41 @@ For a push, the notification code:
 3. for `read`, removes that channel's notifications up to `message`; for `deleted`, that one; either
    shows nothing; for `notice`, fetches it as the message is fetched and shows its title and body,
    with the notice id as the notification's identifier;
-4. sets the badge to the sum of every account's latest `badge`.
+4. sets the badge to the sum of every account's latest `badge`;
+5. for `call`, shows an incoming call from `callerName` through the platform's call system (CallKit,
+   Telecom) at once, fetching nothing, and then watches the ring (Rings, below).
+
+### Rings
+
+A `call` pointer reaches the phone with no one on the line yet: the ring must end on this phone when
+it ends anywhere, and answering must join the call. The app, having shown the call:
+
+1. Opens the deployment's event stream with the account's session (`GET /api/v1/events`, identifying
+   as any client does; on `401`, with a token renewed from the refresh token) and watches it for the
+   ring's end, resuming the stream from the last sequence it saw if it drops, until the ring ends:
+   - a `voiceParticipant` `create` in `channel` for the account's own user: answered on another
+     device;
+   - a `voiceRing` `delete` for `session` and the user: declined elsewhere (or answered, when the
+     participant's `create` was not seen first);
+   - a `voiceSession` `delete` for `session`, or `voiceSessionEnded` naming it: the call ended;
+   - `until`, judged against the deployment's clock from `ready`'s `serverTime`: unanswered. Nothing
+     is pushed to say any of this.
+2. On **answer**, joins the call as the account (`POST /api/v1/channels/{channel}/voice/join`, then
+   the voice server), which ends the ring at the deployment. On **decline**, ends the ring
+   (`DELETE /api/v1/channels/{channel}/voice/rings/@me`), so the person's other devices stop too.
+3. If the stream, resumed, answers `resumed: false`, reads `GET /api/v1/channels/{channel}/voice`
+   once: a call that is gone, or another session's, ended the ring; one the user is in was answered
+   elsewhere; otherwise the ring stands and the watch goes on.
+
+On iOS 26.4 and later PushKit says with each VoIP push whether the app must report a call for it
+(`PKVoIPPushMetadata.mustReport`): it is `false` when the app is in the foreground, already in a
+call, or the push was delayed too long to matter, and the app then completes the push and reports
+nothing. On earlier versions every VoIP push is reported. A VoIP push the app cannot read (no
+account for its subscription, a ciphertext that does not decrypt) is reported as a call and ended at
+once with `failed`, since an app that reports nothing for a VoIP push is terminated.
+
+The ringtone is the platform's own default on both phones: Aspen has no ringtone file of its own
+yet.
 
 ### The notification's text
 
@@ -323,6 +396,11 @@ role they hold, or everyone), unless:
 - they are in do not disturb on this deployment, which also gives the `read` pointers sent them
   meanwhile a `badge` of 0.
 
+A person is sent a `call` pointer when a DM's call starts ringing them (`app::voice::ring`), to
+every phone they have, whether or not they are using Aspen elsewhere, as a phone call rings every
+handset. Who is rung is decided before the ring exists: not those in do not disturb, and no one a
+block stands between. Nothing is sent when the ring ends.
+
 Which messages those settings ask for is part of notifications in general, not of this protocol. A
 message with no text of its own (a poll's result, a join, a community becoming large) is described
 by its `kind`, and a `communityGrew` message by its `growth` (The notification's text). When they
@@ -350,8 +428,10 @@ moved back to, which takes down nothing still shown but carries the new `badge`.
 2. **The free tier** needs no registration: each deployment key may send a fixed number of pushes a
    month (200,000 at Bitcrafters' relay, which costs it little more than bandwidth), and a relay's
    operators give a key a tier of its own when it needs more.
-3. **Calls** will ring phones with a later kind, `call`, once calls ring anywhere; it needs Apple's
-   VoIP push and CallKit, with rules of their own.
+3. **Calls** ring phones with the `call` kind, through Apple's VoIP push and CallKit on iOS and FCM
+   and Telecom on Android, which have rules of their own (Calls, Rings): the relay is told that a
+   push is a call and nothing else, a ring's end is never pushed, and a push that cannot be read is
+   still reported as a call.
 4. **The relay trusts any app that registers**, without App Attest or Play Integrity: a registered
    device only receives what deployments it subscribed to send it.
 5. **The desktop apps** keep their event stream open, and need none of this.

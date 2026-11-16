@@ -29,7 +29,8 @@ credentials, is its own repository (`aspen-push-relay`). Design notes:
 Every push is Web Push.
 
 - The payload is a pointer (`app::push::Pointer`): `message`, `read`, or `deleted`, naming a channel
-  and a message, and a `badge` count.
+  and a message, and a `badge` count; `notice`, naming a plugin's notice; or `call`, a DM's call
+  ringing the person (see [Rings](#rings)).
 - It is encrypted to the phone (RFC 8291, `app::push::webpush`, the `aspen_webpush` crate, checked
   against RFC 8291's own example).
 - It is signed with the deployment's push key (RFC 8292).
@@ -260,6 +261,31 @@ server's, so a slow or unreachable push service delays only its own pushes.
 - It is skipped until an hour has passed since the last failure.
 - The count is in Valkey (`push:failing:<subscription>`), so every server skips it.
 - Any answer clears the count.
+
+## Rings
+
+A DM's call ringing someone (`app::voice::ring`, see
+[Calls in DMs](threads-and-dms/dm-calls.md#rings)) wakes their phones with a `call` pointer, the one
+pointer that carries text: the phone must show who is calling before it can reach the network.
+
+- The dispatcher handles each `voiceRing` `create` once (a DM's copies are deduplicated in Valkey as
+  a message's are, `push:ring:<session>:<user>`), waits for the ring's row to be committed, and
+  reads its channel, its caller, and the caller's shown name (display name, else username) in one
+  query (`ring_made`).
+- Every phone of the rung person is woken, whether or not they are active elsewhere: a ring reaches
+  every device. Who is rung at all is the ring's decision (not those in do not disturb), made before
+  the ring exists; the dispatcher filters nothing.
+- The pointer carries `channel`, `session`, `caller`, `callerName`, and `until` (the ring's end, on
+  this server's clock). No badge.
+- It is sent `Urgency: high`, with its session id as its `Topic` (so it never replaces, or is
+  replaced by, a message's push in the same channel), a `TTL` of what is left of the ring (one
+  already over is not sent), and the header `Aspen-Push-Kind: call`, the one thing the relay is told
+  beyond the Web Push headers, so that it sends a VoIP push on iOS and a high-priority message on
+  Android (`spec/push.md`, Calls).
+- Nothing is pushed when the ring ends: the phone watches the event stream for the `voiceRing`
+  `delete`, the user's own `voiceParticipant` `create`, and the session's end, and stops at `until`
+  by the clock (`spec/push.md`, Rings; `voice_client/src/ring.rs` is the watcher the mobile apps
+  run).
 
 ## `read` and `deleted`
 

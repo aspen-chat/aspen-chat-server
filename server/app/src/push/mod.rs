@@ -8,8 +8,12 @@
 //! only after the transaction that published it has written it. It wakes the people a new
 //! message is for, and, for the phones it woke, says when that channel was read elsewhere or the
 //! message deleted, so the phone can take its notification down. What it woke whom for is kept
-//! in Valkey for [`REMEMBERED`]. An event is acknowledged once its pushes are decided and
-//! queued ([`queue`]); push services' answers are waited for there, never by the dispatcher.
+//! in Valkey for [`REMEMBERED`]. A DM's call ringing someone (`app::voice::ring`) wakes every
+//! phone of theirs with a `call` pointer, which carries what a phone must show before it reaches
+//! the network; nothing is pushed when the ring ends, which the phone learns of through the
+//! event stream and the ring's own end by the clock. An event is acknowledged once its pushes
+//! are decided and queued ([`queue`]); push services' answers are waited for there, never by the
+//! dispatcher.
 
 pub use aspen_webpush as webpush;
 
@@ -25,11 +29,11 @@ use crate::two_factor::Caller;
 use crate::visibility::viewers;
 use crate::{
     ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, PluginNoticeId, PushKeyId,
-    PushSubscriptionId, UserId,
+    PushSubscriptionId, UserId, VoiceSessionId,
 };
 use aspen_schema::{
     self as schema, channel, community_user, dm_recipient, message, push_key, push_subscription,
-    read_state, refresh_token,
+    read_state, refresh_token, voice_ring, voice_session,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -63,8 +67,13 @@ const FIRST_LOOK_AGAIN: Duration = Duration::from_millis(50);
 /// How long whom a message woke, and for what, is remembered: longer than anyone leaves a
 /// notification unread on a phone that has not been turned on meanwhile.
 const REMEMBERED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-/// How long a push is worth delivering to a phone that cannot be reached now.
+/// How long a push is worth delivering to a phone that cannot be reached now. A `call` pointer
+/// is worth delivering only until its ring ends (`Pointer::time_to_live`).
 const TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
+/// The header that tells the relay a push is a call, which it cannot read from the ciphertext,
+/// so that it sends the push as the platform's call push (`spec/push.md`, Calls). Sent on `call`
+/// pointers alone; the relay learns that a call is ringing the phone, and nothing else.
+const KIND_HEADER: &str = "Aspen-Push-Kind";
 /// Above this many people woken by one message, the badge count is left out: working out one
 /// not kept (`badge_of`) is several queries per person.
 const MAX_BADGED: usize = 100;
@@ -259,7 +268,7 @@ pub async fn unsubscribe(
 }
 
 /// What a push says (`spec/push.md`, The pointer).
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Pointer {
     /// A message the person should be told of.
@@ -282,6 +291,20 @@ pub enum Pointer {
         channel: ChannelId,
         notice: PluginNoticeId,
     },
+    /// A DM's call is ringing the person (`app::voice::ring`). The phone shows the call before
+    /// it reaches the network, so this one pointer names a person: the caller, as they are
+    /// shown (`callerName`, their display name or else their username, at most
+    /// `user::DISPLAY_NAME_MAX_CHARS` characters). `until` is when the ring ends, on the
+    /// server's clock; the phone stops ringing then, or sooner when the event stream says the
+    /// ring ended.
+    #[serde(rename_all = "camelCase")]
+    Call {
+        channel: ChannelId,
+        session: VoiceSessionId,
+        caller: UserId,
+        caller_name: String,
+        until: DateTime<Utc>,
+    },
 }
 
 impl Pointer {
@@ -290,7 +313,8 @@ impl Pointer {
             Pointer::Message { channel, .. }
             | Pointer::Read { channel, .. }
             | Pointer::Deleted { channel, .. }
-            | Pointer::Notice { channel, .. } => *channel,
+            | Pointer::Notice { channel, .. }
+            | Pointer::Call { channel, .. } => *channel,
         }
     }
 
@@ -298,8 +322,49 @@ impl Pointer {
     /// which a relay whose app cannot hide a notification leaves undelivered (`spec/push.md`).
     fn urgency(&self) -> &'static str {
         match self {
-            Pointer::Message { .. } | Pointer::Notice { .. } => "high",
+            Pointer::Message { .. } | Pointer::Notice { .. } | Pointer::Call { .. } => "high",
             Pointer::Read { .. } | Pointer::Deleted { .. } => "low",
+        }
+    }
+
+    /// RFC 8030's topic: a later push with the same one replaces this one at the push service if
+    /// it has not been delivered. A channel's pushes share one, so a burst in one channel wakes
+    /// the phone once; a call's is its session's, so a ring never replaces a message's push, nor
+    /// the other way round. An id without its hyphens is 32 characters of the alphabet RFC 8030
+    /// allows.
+    fn topic(&self) -> String {
+        match self {
+            Pointer::Message { .. }
+            | Pointer::Read { .. }
+            | Pointer::Deleted { .. }
+            | Pointer::Notice { .. } => self.channel().0.simple().to_string(),
+            Pointer::Call { session, .. } => session.0.simple().to_string(),
+        }
+    }
+
+    /// How long the push is worth delivering to a phone that cannot be reached now: a ring, only
+    /// until it ends (`now` is the clock it is judged by; a ring already over is worth nothing);
+    /// everything else, [`TIME_TO_LIVE`].
+    fn time_to_live(&self, now: DateTime<Utc>) -> Duration {
+        match self {
+            Pointer::Message { .. }
+            | Pointer::Read { .. }
+            | Pointer::Deleted { .. }
+            | Pointer::Notice { .. } => TIME_TO_LIVE,
+            Pointer::Call { until, .. } => (*until - now).to_std().unwrap_or(Duration::ZERO),
+        }
+    }
+
+    /// What the relay is told of the push besides the Web Push headers: that it is a call, for
+    /// the one kind the relay must send differently (`spec/push.md`, Calls); nothing of any
+    /// other.
+    fn kind_header(&self) -> Option<&'static str> {
+        match self {
+            Pointer::Message { .. }
+            | Pointer::Read { .. }
+            | Pointer::Deleted { .. }
+            | Pointer::Notice { .. } => None,
+            Pointer::Call { .. } => Some("call"),
         }
     }
 }
@@ -344,11 +409,11 @@ async fn phones_of(
 async fn wake(
     state: &GlobalServerContext,
     phones: &[PushSubscription],
-    pointer: Pointer,
+    pointer: &Pointer,
     badge: Option<i64>,
 ) {
     for subscription in phones {
-        queue::enqueue(state, subscription.clone(), pointer, badge).await;
+        queue::enqueue(state, subscription.clone(), pointer.clone(), badge).await;
     }
 }
 
@@ -391,6 +456,15 @@ async fn send(
     if subscription.push_key != *key_id {
         return Ok(Delivery::Gone);
     }
+    let now = Utc::now();
+    let time_to_live = pointer.time_to_live(now);
+    if time_to_live.is_zero() {
+        // A ring already over wakes no one.
+        return Ok(Delivery::Accepted);
+    }
+    let kind_header = pointer.kind_header();
+    let urgency = pointer.urgency();
+    let topic = pointer.topic();
     let payload = serde_json::to_vec(&Payload {
         v: 1,
         pointer,
@@ -410,18 +484,20 @@ async fn send(
         .domain
         .as_ref()
         .map(|domain| format!("https://{domain}"));
-    let authorization = key.authorization(&audience, subject.as_deref(), Utc::now().timestamp())?;
-    let response = state
+    let authorization = key.authorization(&audience, subject.as_deref(), now.timestamp())?;
+    let mut request = state
         .push_client
         .post(url)
         .header("Content-Encoding", "aes128gcm")
         .header("Content-Type", "application/octet-stream")
-        .header("TTL", TIME_TO_LIVE.as_secs().to_string())
-        .header("Urgency", pointer.urgency())
-        // A channel's id without its hyphens is 32 characters of the alphabet RFC 8030 allows,
-        // so a burst in one channel replaces what the phone has not yet received.
-        .header("Topic", pointer.channel().0.simple().to_string())
-        .header("Authorization", authorization)
+        .header("TTL", time_to_live.as_secs().max(1).to_string())
+        .header("Urgency", urgency)
+        .header("Topic", topic)
+        .header("Authorization", authorization);
+    if let Some(kind) = kind_header {
+        request = request.header(KIND_HEADER, kind);
+    }
+    let response = request
         .timeout(queue::SEND_TIMEOUT)
         .body(body)
         .send()
@@ -511,7 +587,7 @@ pub async fn notice(
         wake(
             state,
             phones.get(&user).map_or(&[], Vec::as_slice),
-            Pointer::Notice { channel, notice },
+            &Pointer::Notice { channel, notice },
             badge,
         )
         .await;
@@ -588,6 +664,9 @@ struct Seen {
     channel: Option<ChannelId>,
     last_read: Option<MessageId>,
     last_message: Option<MessageId>,
+    /// A `voiceRing`'s call, and whom it rings.
+    session: Option<VoiceSessionId>,
+    user: Option<UserId>,
 }
 
 async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> crate::Result<()> {
@@ -623,6 +702,16 @@ async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> c
                 (subject_owner(subject), seen.channel, seen.last_read)
             {
                 channel_marked_unread(state, user, channel, last_read, seen.last_message).await?;
+            }
+        }
+        // A ring's `create` is published once to each person of the DM, and only the one rung
+        // is woken; its `delete` wakes no one, as Apple's rules for call pushes ask.
+        ("voiceRing", Some("create")) => {
+            if let (Some(session), Some(user)) = (seen.session, seen.user) {
+                let key = format!("push:ring:{}:{}", session.0, user.0);
+                if first_time(state, &key).await? {
+                    released_on_failure(state, &key, ring_made(state, session, user).await).await?;
+                }
             }
         }
         _ => {}
@@ -746,6 +835,7 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
         .await?;
     let phones = &phones_of(state, &recipients).await?;
     let tagged = &tagged;
+    let pointer = &pointer;
     futures_util::stream::iter(recipients)
         .for_each_concurrent(FAN_OUT, |user| async move {
             let _ = state
@@ -780,6 +870,58 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
             .await;
         })
         .await;
+    Ok(())
+}
+
+/// Wakes every phone of `user` for the call of `session` ringing them: all of them, whether or
+/// not they are using Aspen elsewhere, since a ring reaches every device, as a phone call does.
+/// Who is rung at all (not those in do not disturb) is `app::voice::ring`'s decision, made before
+/// the ring exists; this only carries it to the phones.
+async fn ring_made(
+    state: &GlobalServerContext,
+    session: VoiceSessionId,
+    user: UserId,
+) -> crate::Result<()> {
+    use aspen_schema::user as user_table;
+    // The ring, with its channel and its caller's shown name, once the transaction that rang
+    // has committed; a ring declined or answered before then is read all the same, and the phone
+    // hears of its end through the event stream.
+    let found = once_committed(|| async move {
+        let mut conn = state.connection_pool.get().await?;
+        Ok(voice_ring::table
+            .inner_join(voice_session::table)
+            .inner_join(user_table::table.on(user_table::id.eq(voice_ring::caller)))
+            .select((
+                voice_session::channel,
+                voice_ring::caller,
+                user_table::name,
+                user_table::display_name,
+                voice_ring::until,
+            ))
+            .filter(voice_ring::session.eq(session))
+            .filter(voice_ring::user.eq(user))
+            .first::<(ChannelId, UserId, String, Option<String>, DateTime<Utc>)>(conn.as_mut())
+            .await
+            .optional()?)
+    })
+    .await?;
+    let Some((channel, caller, name, display_name, until)) = found else {
+        return Ok(());
+    };
+    let phones = phones_of(state, &[user]).await?;
+    wake(
+        state,
+        phones.get(&user).map_or(&[], Vec::as_slice),
+        &Pointer::Call {
+            channel,
+            session,
+            caller,
+            caller_name: display_name.unwrap_or(name),
+            until,
+        },
+        None,
+    )
+    .await;
     Ok(())
 }
 
@@ -822,7 +964,7 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> crate::R
     // Forgotten only now, so that a failure before here leaves it for the event's next delivery.
     state.ephemeral.del(message_key(id)).await?;
     futures_util::stream::iter(phones.values())
-        .for_each_concurrent(FAN_OUT, |phones| wake(state, phones, pointer, None))
+        .for_each_concurrent(FAN_OUT, |phones| wake(state, phones, &pointer, None))
         .await;
     Ok(())
 }
@@ -869,7 +1011,7 @@ async fn channel_read(
     wake(
         state,
         phones,
-        Pointer::Read {
+        &Pointer::Read {
             channel,
             message: last_read,
         },
@@ -920,7 +1062,7 @@ async fn channel_marked_unread(
     wake(
         state,
         phones,
-        Pointer::Read {
+        &Pointer::Read {
             channel,
             message: last_read,
         },
@@ -1182,4 +1324,75 @@ async fn count_badge(state: &GlobalServerContext, user: UserId) -> crate::Result
         .filter(|s| s.last_message.is_some_and(|last| last > s.last_read))
         .count() as i64;
     Ok(tags + unread_dms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_pointer_names_the_ring_and_fits_a_push() {
+        let channel = ChannelId::new();
+        let session = VoiceSessionId::new();
+        let caller = UserId::new();
+        let until = DateTime::parse_from_rfc3339("2026-11-15T12:00:30Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let pointer = Pointer::Call {
+            channel,
+            session,
+            caller,
+            // The longest name a person can have, of the widest characters.
+            caller_name: "\u{1F600}".repeat(crate::user::DISPLAY_NAME_MAX_CHARS),
+            until,
+        };
+        let json = serde_json::to_value(Payload {
+            v: 1,
+            pointer: pointer.clone(),
+            badge: None,
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "call");
+        assert_eq!(json["channel"], channel.0.to_string());
+        assert_eq!(json["session"], session.0.to_string());
+        assert_eq!(json["caller"], caller.0.to_string());
+        assert_eq!(json["callerName"].as_str().unwrap().chars().count(), 32);
+        assert_eq!(json["until"], "2026-11-15T12:00:30Z");
+        assert!(json.get("badge").is_none());
+        // `spec/push.md`: a pointer is at most 1024 bytes, so its ciphertext fits an APNs payload.
+        assert!(serde_json::to_vec(&json).unwrap().len() <= 1024);
+
+        assert_eq!(pointer.urgency(), "high");
+        assert_eq!(pointer.kind_header(), Some("call"));
+        assert_eq!(pointer.topic(), session.0.simple().to_string());
+        let before = until - chrono::Duration::seconds(12);
+        assert_eq!(pointer.time_to_live(before), Duration::from_secs(12));
+        assert_eq!(pointer.time_to_live(until), Duration::ZERO);
+        assert_eq!(
+            pointer.time_to_live(until + chrono::Duration::seconds(1)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn every_other_pointer_is_topic_by_channel_with_a_day_to_live_and_no_kind_header() {
+        let channel = ChannelId::new();
+        let message = MessageId::new();
+        let now = Utc::now();
+        for pointer in [
+            Pointer::Message { channel, message },
+            Pointer::Read { channel, message },
+            Pointer::Deleted { channel, message },
+            Pointer::Notice {
+                channel,
+                notice: PluginNoticeId::new(),
+            },
+        ] {
+            assert_eq!(pointer.topic(), channel.0.simple().to_string());
+            assert_eq!(pointer.time_to_live(now), TIME_TO_LIVE);
+            assert_eq!(pointer.kind_header(), None);
+        }
+        assert_eq!(Pointer::Read { channel, message }.urgency(), "low");
+        assert_eq!(Pointer::Message { channel, message }.urgency(), "high");
+    }
 }

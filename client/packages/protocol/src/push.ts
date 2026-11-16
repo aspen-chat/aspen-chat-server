@@ -88,6 +88,16 @@ export type PushPointer =
       readonly channel: string;
       readonly notice: string;
       readonly badge?: number;
+    }
+  | {
+      /** A DM's call ringing the phone, shown from these fields alone (spec/push.md, Calls). */
+      readonly kind: "call";
+      readonly channel: string;
+      readonly session: string;
+      readonly caller: string;
+      readonly callerName: string;
+      /** When the ring ends, RFC 3339 on the deployment's clock. */
+      readonly until: string;
     };
 
 const encode = (bytes: Uint8Array): string =>
@@ -196,9 +206,21 @@ export function parsePointer(plaintext: Uint8Array): PushPointer | null {
   if (typeof value !== "object" || value === null) {
     return null;
   }
-  const { v, kind, channel, message, notice, badge } = value as Record<string, unknown>;
+  const { v, kind, channel, message, notice, badge, session, caller, callerName, until } =
+    value as Record<string, unknown>;
   if (v !== 1 || typeof channel !== "string") {
     return null;
+  }
+  if (kind === "call") {
+    if (
+      typeof session !== "string" ||
+      typeof caller !== "string" ||
+      typeof callerName !== "string" ||
+      typeof until !== "string"
+    ) {
+      return null;
+    }
+    return { kind, channel, session, caller, callerName, until };
   }
   if (kind === "notice") {
     if (typeof notice !== "string") {

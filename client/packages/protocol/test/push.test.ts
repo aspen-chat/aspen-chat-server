@@ -69,7 +69,27 @@ describe("parsePointer", () => {
       badge: 1,
     });
     expect(read({ v: 1, kind: "notice", channel: "c", message: "m" })).toBeNull();
+    expect(
+      read({
+        v: 1,
+        kind: "call",
+        channel: "c",
+        session: "s",
+        caller: "u",
+        callerName: "Alice",
+        until: "2026-11-15T12:00:30Z",
+        later: 1,
+      }),
+    ).toEqual({
+      kind: "call",
+      channel: "c",
+      session: "s",
+      caller: "u",
+      callerName: "Alice",
+      until: "2026-11-15T12:00:30Z",
+    });
     expect(read({ v: 1, kind: "call", channel: "c", message: "m" })).toBeNull();
+    expect(read({ v: 1, kind: "ring", channel: "c", session: "s" })).toBeNull();
     expect(read({ v: 2, kind: "message", channel: "c", message: "m" })).toBeNull();
   });
 });
