@@ -68,6 +68,20 @@ export interface SyncReport {
   readonly offsets: readonly (number | null)[];
   /** Each side's SSRC as last measured, and how many sender reports the browser had for it. */
   readonly sides: Readonly<Record<"audio" | "video", { ssrc: number; reports: number } | null>>;
+  /** Where each side's delay went over the last half second measured. */
+  readonly delays: Readonly<Record<"audio" | "video", DelayReport | null>>;
+}
+
+/**
+ * A received track's delays in milliseconds, averaged over an interval: what its jitter buffer
+ * held each sample or frame, what it aimed to hold (the synchronised target among what it
+ * weighs), and for sound what the output device added after it (`media-playout`, where the
+ * browser reports one). `null` where the browser emitted nothing to average over.
+ */
+export interface DelayReport {
+  readonly jitterBuffer: number | null;
+  readonly target: number | null;
+  readonly playout: number | null;
 }
 
 declare global {
@@ -118,6 +132,33 @@ function number(value: unknown): number {
 }
 
 const NO_SIDES: SyncReport["sides"] = { audio: null, video: null };
+const NO_DELAYS: SyncReport["delays"] = { audio: null, video: null };
+
+/** The cumulative counters a `DelayReport` is averaged from, as one `getStats` read them. */
+interface DelayCounters {
+  readonly jitterBuffer: number;
+  readonly target: number;
+  readonly emitted: number;
+  readonly playout: number;
+  readonly played: number;
+}
+
+/** Milliseconds per item of what `total` (in seconds) rose by while `count` rose, if it did. */
+function average(total: number, count: number): number | null {
+  return count > 0 ? Math.round((total / count) * 1000) : null;
+}
+
+function delaysBetween(before: DelayCounters | undefined, after: DelayCounters | undefined) {
+  if (before === undefined || after === undefined) {
+    return null;
+  }
+  const emitted = after.emitted - before.emitted;
+  return {
+    jitterBuffer: average(after.jitterBuffer - before.jitterBuffer, emitted),
+    target: average(after.target - before.target, emitted),
+    playout: average(after.playout - before.playout, after.played - before.played),
+  };
+}
 
 /**
  * The media sections of the remote description, as the server described them: SDP's `m=` lines
@@ -278,7 +319,14 @@ window.aspenCall = {
    */
   async sync(stream, delayMs, toleranceMs, seconds) {
     if (!(connection instanceof RTCPeerConnection)) {
-      return { stream, audioMid: null, videoMid: null, offsets: [], sides: NO_SIDES };
+      return {
+        stream,
+        audioMid: null,
+        videoMid: null,
+        offsets: [],
+        sides: NO_SIDES,
+        delays: NO_DELAYS,
+      };
     }
     const pc = connection;
     const of = (kind: string) =>
@@ -289,20 +337,35 @@ window.aspenCall = {
     const videoMid = of("video");
     const video = pc.getTransceivers().find((t) => t.mid === videoMid)?.receiver;
     if (audioMid === null || video === undefined) {
-      return { stream, audioMid, videoMid, offsets: [], sides: NO_SIDES };
+      return { stream, audioMid, videoMid, offsets: [], sides: NO_SIDES, delays: NO_DELAYS };
     }
     video.jitterBufferTarget = delayMs;
     const offsets: (number | null)[] = [];
     let sides: SyncReport["sides"] = NO_SIDES;
+    let delays: SyncReport["delays"] = NO_DELAYS;
+    let counted = new Map<string, DelayCounters>();
     try {
       for (let i = 0; i < seconds * 2; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         const playout = new Map<string, number>();
         const ssrcs = new Map<string, number>();
         const reports = new Map<number, number>();
-        (await pc.getStats()).forEach((entry: Record<string, unknown>) => {
+        const stats = await pc.getStats();
+        const counters = new Map<string, DelayCounters>();
+        stats.forEach((entry: Record<string, unknown>) => {
           if (entry.type === "inbound-rtp") {
             ssrcs.set(String(entry.mid), number(entry.ssrc));
+            const device: Record<string, unknown> | undefined =
+              typeof entry.playoutId === "string"
+                ? (stats.get(entry.playoutId) as Record<string, unknown> | undefined)
+                : undefined;
+            counters.set(String(entry.mid), {
+              jitterBuffer: number(entry.jitterBufferDelay),
+              target: number(entry.jitterBufferTargetDelay),
+              emitted: number(entry.jitterBufferEmittedCount),
+              playout: number(device?.totalPlayoutDelay),
+              played: number(device?.totalSamplesCount),
+            });
             if (typeof entry.estimatedPlayoutTimestamp === "number") {
               playout.set(String(entry.mid), entry.estimatedPlayoutTimestamp);
             }
@@ -315,6 +378,11 @@ window.aspenCall = {
           return ssrc === undefined ? null : { ssrc, reports: reports.get(ssrc) ?? 0 };
         };
         sides = { audio: side(audioMid), video: side(videoMid ?? "") };
+        delays = {
+          audio: delaysBetween(counted.get(audioMid), counters.get(audioMid)),
+          video: delaysBetween(counted.get(videoMid ?? ""), counters.get(videoMid ?? "")),
+        };
+        counted = counters;
         const audio = playout.get(audioMid);
         const picture = playout.get(videoMid ?? "");
         const offset = audio === undefined || picture === undefined ? null : picture - audio;
@@ -326,7 +394,7 @@ window.aspenCall = {
     } finally {
       video.jitterBufferTarget = null;
     }
-    return { stream, audioMid, videoMid, offsets, sides };
+    return { stream, audioMid, videoMid, offsets, sides, delays };
   },
   async report() {
     const state = call?.state;
