@@ -22,7 +22,7 @@ media goes straight to the voice server's announced address over the network.
     scripts/check_mobile_call.py --platform ios --bin target/debug [--build] [--mac aspen-mac]
         [--worktree '~/aspen-native-calls'] [--derived '~/aspen-derived-native-calls']
     scripts/check_mobile_call.py --platform android --bin target/debug [--build]
-        [--avd aspen-test | --device <serial>] [--microphone silent|live]
+        [--avd aspen-test | --device <serial>] [--microphone silent|live] [--only <class>]...
 
 iOS: the simulator shares the Mac's network, so the Mac's loopback is tunnelled back here over SSH.
 `--build` first builds the engine for the simulator and its bindings on the Mac
@@ -56,9 +56,12 @@ or neither) or for the phone's ABI (`--device`) and its bindings
 (`client/packages/mobile/android/scripts/call_engine.py`); the Gradle build then runs the tests
 (`connectedDebugAndroidTest`), on a phone `CallDeviceTest` too, what only a phone can show, which
 needs the web shell copied in (`npx cap sync android` in `client/packages/mobile`) and
-`target/webrtc/libwebrtc.aar`.
+`target/webrtc/libwebrtc.aar`. `--only` runs one test class (or several, repeated) against the same
+deployment, for working on one test's failure without the others' minutes before it.
 
-The servers' logs of the run are left as `target/mobile-call/api.log` and `voice.log`.
+The servers' logs of the run are left as `target/mobile-call/api.log` and `voice.log`, and on
+Android the device's log, its crash buffer included, as `target/mobile-call/logcat.txt`: a native
+crash's tombstone is in it, for `ndk-stack -sym <dir of the unstripped library>`.
 
 `--record-trailing` records instead of checking: it runs the one test that moves a hole across the
 screen with the camera drawn in it (`testPictureFollowsAMovingHole`, `pictureFollowsAMovingHole`)
@@ -550,6 +553,13 @@ class Android:
             raise Failed("--avd starts an emulator and --device names a phone; give one")
         self.emulator = Emulator(args.avd) if args.avd else None
         self.device: str | None = args.device
+        known = {name.rsplit(".", 1)[1]: name for name in (*ANDROID_TESTS, ANDROID_DEVICE_TEST)}
+        self.only: list[str] | None = None
+        if args.only:
+            unknown = [name for name in args.only if name not in known]
+            if unknown:
+                raise Failed(f"--only names no test class: {', '.join(unknown)}; the classes are {', '.join(known)}")
+            self.only = [known[name] for name in args.only]
         # What the tests expect the browser to hear of this side's microphone: a phone's hears
         # the room, an emulator's here carries silence.
         self.microphone = args.microphone or ("live" if args.device else "silent")
@@ -700,11 +710,16 @@ class Android:
         if self.device:
             self.ready_phone(serial)
         classes = [*ANDROID_TESTS, ANDROID_DEVICE_TEST] if self.device else ANDROID_TESTS
-        # The device's log is followed for the run's length into `logcat.txt`: a phone's log is
+        if self.only is not None:
+            if not self.device and ANDROID_DEVICE_TEST in self.only:
+                raise Failed(f"{ANDROID_DEVICE_TEST.rsplit('.', 1)[1]} runs on a phone alone; give --device")
+            classes = [name for name in classes if name in self.only]
+        # The device's log is followed for the run's length into `logcat.txt`, the crash buffer
+        # included, so a crash's tombstone is there to symbolize (`ndk-stack`): a phone's log is
         # busy enough that a dump at the end would have lost the tests' first lines.
-        adb("logcat", "-c", serial=serial)
+        adb("logcat", "-c", "-b", "all", serial=serial)
         logcat_file = open(WORK / "logcat.txt", "w")
-        logcat = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "logcat"],
+        logcat = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "logcat", "-b", "main", "-b", "system", "-b", "crash"],
                                   stdout=logcat_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         try:
             for port in (PORTS.api, PORTS.voice, HELPER_PORT):
@@ -716,6 +731,9 @@ class Android:
             arguments = [f"-Pandroid.testInstrumentationRunnerArguments.{name}={value}" for name, value in variables.items()]
             code = self.gradle(":app:connectedDebugAndroidTest", f"-Pandroid.testInstrumentationRunnerArguments.class={','.join(classes)}",
                                *arguments, log=log)
+            if code != 0:
+                # A crashed process's tombstone reaches the log a moment after Gradle gives up on it.
+                time.sleep(5)
             logcat.terminate()
             logcat.wait(timeout=30)
             logcat_file.close()
@@ -797,6 +815,9 @@ def main() -> None:
     android.add_argument("--microphone", choices=["silent", "live"],
                          help="what the browser is to hear of the device's microphone: silence, or the room, "
                               "whatever it sounds like (live with --device, silent otherwise)")
+    android.add_argument("--only", metavar="CLASS", action="append",
+                         help="run only this test class (CallEngineTest, AspenCallPluginTest, or on a phone CallDeviceTest), "
+                              "repeatable, against the same deployment; for one test's failure without the others' minutes")
     args = parser.parse_args()
     if shutil.which("docker") is None:
         sys.exit("mobile-call: docker is required")

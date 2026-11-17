@@ -26,7 +26,6 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
-import org.webrtc.PeerConnectionFactory as WebRtcPeerConnectionFactory
 
 /** Why the screen could not be shared, as the page's `ShareFailure` names it and the plugin rejects or its `share` event says. */
 enum class CallScreenFailure(val code: String) {
@@ -48,13 +47,19 @@ enum class CallScreenFailure(val code: String) {
  * capture of `CallPeerConnections.captureFactory`, made here for each share with an audio device
  * module whose `AudioRecord` is the playback capture (`JavaAudioDeviceModule.Builder
  * .setAudioRecordFactory`, which `scripts/webrtc_patches/android-audio-record-factory.patch`
- * gives WebRTC) and taken down with it. The engine sends the tracks on the capture connection.
+ * gives WebRTC). The engine sends the tracks on the capture connection.
  *
  * The projection needs the call's service to run with the `mediaProjection` kind first
  * (`CallService.setProjection`), which `start` waits for; the capture is the display's own size,
  * no larger than `MAX_SIDE` on a side, followed through a turn (`changeCaptureFormat` on a
  * configuration change). The projection's own stop (the system's notification, or another
  * projection taking over) ends the share. Call on the main thread; callbacks arrive there.
+ *
+ * Stopping takes the capture and the projection down at once and retires the factory
+ * (`CaptureFactory.retire`), which disposes itself, its module, and the share's tracks and
+ * sources once the engine has closed the capture connection it made from it, on the engine's
+ * thread: the engine is told to stop the sources beside the stop (`AspenCallPlugin`), and closes
+ * the connection after replacing its tracks, so the factory must outlive that.
  */
 class CallScreen(
     context: Context,
@@ -63,8 +68,9 @@ class CallScreen(
 ) {
     private val context = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
-    private var factory: WebRtcPeerConnectionFactory? = null
-    private var audioModule: JavaAudioDeviceModule? = null
+    private var factory: CaptureFactory? = null
+    /** The last share's factory, retired at its stop, for the proof to see go. */
+    private var retired: CaptureFactory? = null
     private var helper: SurfaceTextureHelper? = null
     private var capturer: ScreenCapturerAndroid? = null
     private var videoSource: VideoSource? = null
@@ -91,6 +97,13 @@ class CallScreen(
     /** How many frames the capture has taken, or -1 without one; for the proof's diagnosis. */
     val framesCaptured: Long
         get() = capturer?.numCapturedFrames ?: -1
+
+    /**
+     * Whether the last share's factory and module are gone, which they are once the engine has
+     * closed its capture connection; true before any share. For the proof.
+     */
+    val factoryDisposed: Boolean
+        get() = retired?.isDisposed ?: true
 
     /**
      * Starts capturing the screen the user consented to (`projection`, the consent's answer) for
@@ -153,16 +166,15 @@ class CallScreen(
             .createAudioDeviceModule()
         val factory = media.makeCaptureFactory(audioModule)
         val helper = SurfaceTextureHelper.create("aspen-screen", media.eglContext)
-        val videoSource = factory.createVideoSource(true)
-        val videoTrack = factory.createVideoTrack("share-${UUID.randomUUID()}", videoSource)
+        val videoSource = factory.factory.createVideoSource(true)
+        val videoTrack = factory.factory.createVideoTrack("share-${UUID.randomUUID()}", videoSource)
         var audioTrack: AudioTrack? = null
         if (withAudio) {
-            val source = factory.createAudioSource(shareAudioConstraints())
+            val source = factory.factory.createAudioSource(shareAudioConstraints())
             audioSource = source
-            audioTrack = factory.createAudioTrack("share-audio-${UUID.randomUUID()}", source)
+            audioTrack = factory.factory.createAudioTrack("share-audio-${UUID.randomUUID()}", source)
         }
         this.factory = factory
-        this.audioModule = audioModule
         this.helper = helper
         this.capturer = capturer
         this.videoSource = videoSource
@@ -255,7 +267,7 @@ class CallScreen(
         turns = callbacks
     }
 
-    /** Ends the share and lets its tracks, capture, and factory go. */
+    /** Ends the share: the capture and the projection now, the factory once its connection has closed. */
     fun stop() {
         if (origin != null) {
             Log.i(TAG, "the share is stopped")
@@ -285,21 +297,18 @@ class CallScreen(
         }
         videoTrack?.let { tracks.remove(it.id()) }
         audioTrack?.let { tracks.remove(it.id()) }
-        videoTrack?.dispose()
-        audioTrack?.dispose()
-        videoSource?.dispose()
-        audioSource?.dispose()
         helper?.dispose()
         media.captureFactory = null
-        factory?.dispose()
-        audioModule?.release()
+        factory?.let {
+            it.retire(listOfNotNull(videoTrack, audioTrack), listOfNotNull(videoSource, audioSource))
+            retired = it
+        }
         videoTrack = null
         audioTrack = null
         videoSource = null
         audioSource = null
         helper = null
         factory = null
-        audioModule = null
         size = null
         onEnded = null
         if (origin != null) {

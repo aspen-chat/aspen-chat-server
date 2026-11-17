@@ -410,19 +410,24 @@ live as external sources while the service runs with the `mediaProjection` kind,
 hears its shape and draws, the browser lists the share, decodes a picture of it (`screenSample`, the
 emulator's screen) and receives packets of its sound on the audio section of the `{user}-share`
 stream (silence, since nothing plays on the emulator for the capture to hear), `stopScreenShare`
-takes the sources out, the browser sees the share go, and the service drops the kind, and the dialog
-declined rejects the call with `denied`; then it leaves: the snapshots arrive in revision order with
-none twice, a fresh `state()` is the latest published, the renewed session token is kept, and the
-routes empty again. `androidTest`'s `CallRingsTest` feeds `PushHandler` a `call` pointer encrypted
-to a key it writes into the push state, as the messaging service would, and checks that within five
-seconds the incoming call's notification is posted with its full-screen intent and Telecom holds the
-call as ringing; then, standing in for the deployment's event stream (a WebSocket server of the
-standard library's sockets), it takes the ring watch's `identify`, answers `ready`, and sends the
-ring's `voiceRing` `delete`, after which the call is gone and the notification with it; between, it
-sends the notification's full-screen intent itself, as the system would for a locked phone, and
-checks the incoming call screen is resumed naming the caller and the deployment, that the ringtone
-plays meanwhile, and that the ring's end closes the screen and stops it; a push that does not
-decrypt rings nothing. It needs no deployment and runs with the rest of `connectedDebugAndroidTest`.
+takes the sources out, the share's factory goes once its capture connection has closed
+(`CallScreen.factoryDisposed`), the browser sees the share go, the service drops the kind, and three
+seconds on the call is still connected with the browser still receiving the microphone, which is
+then done a second time, the share started afresh and stopped again (the stop's order is what a
+phone crashed on, Sharing the screen below; the emulator runs the same order and shows that the
+factory goes and the call outlives the share), and the dialog declined rejects the call with
+`denied`; then it leaves: the snapshots arrive in revision order with none twice, a fresh `state()`
+is the latest published, the renewed session token is kept, and the routes empty again.
+`androidTest`'s `CallRingsTest` feeds `PushHandler` a `call` pointer encrypted to a key it writes
+into the push state, as the messaging service would, and checks that within five seconds the
+incoming call's notification is posted with its full-screen intent and Telecom holds the call as
+ringing; then, standing in for the deployment's event stream (a WebSocket server of the standard
+library's sockets), it takes the ring watch's `identify`, answers `ready`, and sends the ring's
+`voiceRing` `delete`, after which the call is gone and the notification with it; between, it sends
+the notification's full-screen intent itself, as the system would for a locked phone, and checks the
+incoming call screen is resumed naming the caller and the deployment, that the ringtone plays
+meanwhile, and that the ring's end closes the screen and stops it; a push that does not decrypt
+rings nothing. It needs no deployment and runs with the rest of `connectedDebugAndroidTest`.
 `scripts/check_mobile_call.py --platform android` at the repository's root runs `CallEngineTest` and
 `AspenCallPluginTest` end to end, with the same deployment and browser the iOS check uses: a
 deployment of its own serving the call page (`client/packages/protocol/calls/`), `adb reverse` so
@@ -434,54 +439,58 @@ and a frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest
 alone, judging their JUnit reports (every class ran, none failed or erred, and none skipped but the
 trailing test, which skips itself outside `--record-trailing`) and that each printed its own line,
 with every `adb` and Gradle command pinned to the device's serial (`ANDROID_SERIAL`), so whatever
-else is attached, a phone beside the emulator or an emulator beside the phone, is never touched.
-With `--avd` it starts the emulator headless, recording the machine's microphone
-(`-allow-host-audio`, without which the emulator records silence); the emulator's PulseAudio backend
-does not start against PipeWire's server (``Could not init `pa' audio driver``), so there its
-microphone is silent. What the browser is to hear of the device's microphone is the script's to say
-(`ASPEN_CALL_MICROPHONE`, from its `--microphone`): `silent` on an emulator, where the test checks
-the device's own source measured silence and the browser heard silence; `live` on a phone, whose
-microphone hears the room, where the test checks that the browser received and decoded the phone's
-packets and reports the level it heard, whatever a room sounds like. With `--device <serial>` the
-check runs on a phone attached by USB instead (`adb reverse` works on one as on the emulator, and
-media reaches the voice server's announced address over the network the phone shares with the
-machine): an emulator's serial is refused (`emulator-<port>`, or `ro.kernel.qemu` set), `--build`
-builds the engine for the phone's ABI (`call_engine.py --abi arm64-v8a`), and `CallDeviceTest` runs
-after the engine's and the bridge's tests: what only a phone can show, read from the system itself
-through the instrumentation's shell. Before any test the check reads the phone's state and refuses,
-naming what to change, what would fail a test from inside (`Android.ready_phone`): the bridge's test
-enters the picture in picture, which needs its activity resumed, so the screen must be on with no
-lock screen over it and must stay so through the engine's test before it, which Stay awake
-(Developer options) keeps on USB; a screen that is off, or a swipe lock screen, the check wakes and
-dismisses itself (`wm dismiss-keyguard`) and says so, and a PIN, pattern, or password lock screen
-showing is the owner's to unlock, or to set to Swipe, and is refused by its kind
-(`dumpsys lock_settings`). In a call with the browser, it selects the earpiece and then the
-loudspeaker and reads `dumpsys audio`'s active communication device and `dumpsys power`'s proximity
-wake lock after each, reads the service's foreground types and the `CallStyle` notification from
-`dumpsys activity services` and `dumpsys notification` (its record found by the key the system gave
-the notification the app sees posted, and a failure quoting what the dump named of the package),
-turns the screen off (`input keyevent KEYCODE_SLEEP`) for three minutes and forces Doze
-(`dumpsys deviceidle force-idle`) for thirty seconds, checking every half minute that the call is
-connected and packets reach both sides, and leaves. Then it feeds the push handler a `call` pointer,
-as `CallRingsTest` does, with the screen dark and locked, and records whether the full-screen intent
-woke the screen and captures it (`aspen-ring-dark.png` in `target/mobile-call/`, which the script
-pulls), rings again with the screen lit and captures that too, answers through the notification's
-Answer (found by its `PendingIntent`, never its wording, `CallService.answerIntent`), which must
-have the engine connected in the ring's channel and Telecom holding the call active, declines
-through the phone's end key (`KEYCODE_ENDCALL`, Telecom's own disconnect of a ringing call) and
-through the notification's Decline, and rings once more under Doze. It gives the phone back as it
-found it: Doze unforced, the screen awake, the push state as it was. The tests read their
-deployment, channel, user, refresh token, and the script's helper from the instrumentation's
-arguments (`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; `CallEngineTest`'s comment
-lists them) and are skipped without them, so the `android` job's `connectedDebugAndroidTest` runs
-them as skips; `CallTestSupport` holds what the tests share (the arguments, waiting on the engine
-and Telecom, the system's word through the instrumentation's shell, the incoming call screen and
-taps on it, the ringtone players, the browser's statistics, the helper's rings, and the push keys
-and encryption `CallRingsTest` and `CallDeviceTest` feed the push handler with). CI's `android-call`
-job runs the check itself: it builds the servers, the engine for the emulator, and the web shell,
-and runs `check_mobile_call.py --start-services` inside the emulator action's step, against the
-emulator it started (no `--avd`), whose audio is off, so there too the test checks the browser hears
-silence.
+else is attached, a phone beside the emulator or an emulator beside the phone, is never touched;
+`--only <class>` runs one of them (or several, repeated) against the same deployment, for one test's
+failure without the others' minutes before it. The device's log of the run, its crash buffer
+included, is left as `target/mobile-call/logcat.txt`, so a native crash's tombstone is there to
+symbolize (`ndk-stack -sym` with the unstripped `libjingle_peerconnection_so.so` of the WebRTC
+build, `lib.unstripped/` under its architecture's output directory). With `--avd` it starts the
+emulator headless, recording the machine's microphone (`-allow-host-audio`, without which the
+emulator records silence); the emulator's PulseAudio backend does not start against PipeWire's
+server (``Could not init `pa' audio driver``), so there its microphone is silent. What the browser
+is to hear of the device's microphone is the script's to say (`ASPEN_CALL_MICROPHONE`, from its
+`--microphone`): `silent` on an emulator, where the test checks the device's own source measured
+silence and the browser heard silence; `live` on a phone, whose microphone hears the room, where the
+test checks that the browser received and decoded the phone's packets and reports the level it
+heard, whatever a room sounds like. With `--device <serial>` the check runs on a phone attached by
+USB instead (`adb reverse` works on one as on the emulator, and media reaches the voice server's
+announced address over the network the phone shares with the machine): an emulator's serial is
+refused (`emulator-<port>`, or `ro.kernel.qemu` set), `--build` builds the engine for the phone's
+ABI (`call_engine.py --abi arm64-v8a`), and `CallDeviceTest` runs after the engine's and the
+bridge's tests: what only a phone can show, read from the system itself through the
+instrumentation's shell. Before any test the check reads the phone's state and refuses, naming what
+to change, what would fail a test from inside (`Android.ready_phone`): the bridge's test enters the
+picture in picture, which needs its activity resumed, so the screen must be on with no lock screen
+over it and must stay so through the engine's test before it, which Stay awake (Developer options)
+keeps on USB; a screen that is off, or a swipe lock screen, the check wakes and dismisses itself
+(`wm dismiss-keyguard`) and says so, and a PIN, pattern, or password lock screen showing is the
+owner's to unlock, or to set to Swipe, and is refused by its kind (`dumpsys lock_settings`). In a
+call with the browser, it selects the earpiece and then the loudspeaker and reads `dumpsys audio`'s
+active communication device and `dumpsys power`'s proximity wake lock after each, reads the
+service's foreground types and the `CallStyle` notification from `dumpsys activity services` and
+`dumpsys notification` (its record found by the key the system gave the notification the app sees
+posted, and a failure quoting what the dump named of the package), turns the screen off
+(`input keyevent KEYCODE_SLEEP`) for three minutes and forces Doze (`dumpsys deviceidle force-idle`)
+for thirty seconds, checking every half minute that the call is connected and packets reach both
+sides, and leaves. Then it feeds the push handler a `call` pointer, as `CallRingsTest` does, with
+the screen dark and locked, and records whether the full-screen intent woke the screen and captures
+it (`aspen-ring-dark.png` in `target/mobile-call/`, which the script pulls), rings again with the
+screen lit and captures that too, answers through the notification's Answer (found by its
+`PendingIntent`, never its wording, `CallService.answerIntent`), which must have the engine
+connected in the ring's channel and Telecom holding the call active, declines through the phone's
+end key (`KEYCODE_ENDCALL`, Telecom's own disconnect of a ringing call) and through the
+notification's Decline, and rings once more under Doze. It gives the phone back as it found it: Doze
+unforced, the screen awake, the push state as it was. The tests read their deployment, channel,
+user, refresh token, and the script's helper from the instrumentation's arguments
+(`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; `CallEngineTest`'s comment lists them)
+and are skipped without them, so the `android` job's `connectedDebugAndroidTest` runs them as skips;
+`CallTestSupport` holds what the tests share (the arguments, waiting on the engine and Telecom, the
+system's word through the instrumentation's shell, the incoming call screen and taps on it, the
+ringtone players, the browser's statistics, the helper's rings, and the push keys and encryption
+`CallRingsTest` and `CallDeviceTest` feed the push handler with). CI's `android-call` job runs the
+check itself: it builds the servers, the engine for the emulator, and the web shell, and runs
+`check_mobile_call.py --start-services` inside the emulator action's step, against the emulator it
+started (no `--avd`), whose audio is off, so there too the test checks the browser hears silence.
 
 ### Video
 
@@ -590,7 +599,26 @@ nothing in its builder takes a playback capture, so
 the module without the hardware effects (`shareAudioConstraints`), the sound being an application's,
 in stereo. The engine makes the capture connection from that factory (`create(CAPTURE, …)`), so one
 transport carries the share's picture and sound and the voice server puts them in one stream for
-everyone else (`{user}-share`); the factory and its module are released with the share.
+everyone else (`{user}-share`).
+
+The factory outlives that connection (`CaptureFactory`, in `CallPeerConnection.kt`). Disposing a
+WebRTC factory deletes its network, worker, and signalling threads, and a peer connection made from
+it runs on them until it is closed: its audio encoder posts each encoded frame to the worker thread
+(`ChannelSend::SendData`), and the engine's own calls on it (`replaceTrack`, `close`) read it. The
+engine closes the capture connection on its own thread, after a stop: the plugin's `stopScreenShare`
+tells it to stop both sources (`stop_source`, which replaces each sender's track and then closes the
+connection) and stops the share, so the connection is still open as `CallScreen.stop` runs. The stop
+takes the capture and the projection down at once and retires the factory (`retire`, with the
+share's tracks and sources); the factory, its module, and those are disposed, in that order, by
+whichever of the connection's close (`CallPeerConnection.closePeerConnection`, which tells the
+factory through `onClosed`) and the retirement comes second, on its thread, and no connection is
+made from a retired factory (`open` refuses). On a Pixel 8a the earlier order, the factory disposed
+at the stop, crashed the process within half a second of every stop: once in the share's
+`AudioEncoderQueue` thread, jumping through the deleted worker thread's freed vtable (`SEGV_ACCERR`,
+"trying to execute non-executable memory"), and once in the engine's `replaceTrack`, whose read of
+the freed connection's signalling state (`0xAAAAAAAA`, scudo's fill) threw inside WebRTC's JNI,
+which aborts on an exception; the emulator, whose freed pages happened to stay mapped, never showed
+it.
 
 ### What only a phone can show
 
@@ -670,6 +698,16 @@ Android, and are marked with why:
       game, YouTube) and not the call's own sound, apps that forbid capture of their sound
       (`allowedCapturePolicy`) stay silent, the self preview shows it, the dialog declined shows no
       error, and the projection's own stop (the system's notification) ends the share in the call.
+      Verified in part on the Pixel on 2026-11-16 (build CP4A.261105.040.A1), by
+      `AspenCallPluginTest` through the plugin: the dialog opened and was accepted (the whole
+      screen), the share went out at 864×1920 through the phone's hardware H.264 encoder
+      (`c2.exynos.h264.encoder`), the browser decoded it and received packets of its sound (silence:
+      nothing was playing), the self preview drew, the stop ended it with the call going on and the
+      share's factory going only once its capture connection had closed (the order that crashed the
+      process here before `CaptureFactory`), a second share started and stopped the same way, and
+      the dialog declined rejected with `denied` and asked for no source. Not verified: another
+      app's sound in the share, an app that forbids capture, and the projection's own stop from the
+      system's notification, which take a hand.
 - [ ] Sharing in the background and through a turn: with the app behind another, the share goes on
       under the service's `mediaProjection` kind, and turning the phone sends the display's new size
       (the others see it upright and the picture whole).

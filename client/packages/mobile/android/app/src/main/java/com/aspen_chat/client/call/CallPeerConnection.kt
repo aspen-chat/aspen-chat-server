@@ -49,6 +49,7 @@ import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
 import org.webrtc.DataChannel as WebRtcDataChannel
 import org.webrtc.IceCandidate as WebRtcIceCandidate
+import org.webrtc.MediaSource as WebRtcMediaSource
 import org.webrtc.PeerConnection as WebRtcPeerConnection
 import org.webrtc.PeerConnectionFactory as WebRtcPeerConnectionFactory
 import org.webrtc.SessionDescription as WebRtcSessionDescription
@@ -64,8 +65,9 @@ import org.webrtc.SessionDescription as WebRtcSessionDescription
  *
  * A WebRTC factory has one audio capture for every connection it makes, so the call's capture
  * connection, which carries a share and its sound, is made from a factory of its own
- * (`captureFactory`), which `CallScreen` makes for each share with an audio device module that
- * records what other apps play, on the same EGL context, and takes down with it.
+ * (`captureFactory`, a `CaptureFactory`), which `CallScreen` makes for each share with an audio
+ * device module that records what other apps play, on the same EGL context, and retires with it;
+ * the factory itself goes once the capture connection made from it has closed.
  */
 class CallPeerConnections(
     context: Context,
@@ -76,7 +78,7 @@ class CallPeerConnections(
     private val egl: EglBase
     /** The share's factory while a share is on; `create` for `CAPTURE` needs one. */
     @Volatile
-    var captureFactory: WebRtcPeerConnectionFactory? = null
+    var captureFactory: CaptureFactory? = null
 
     /** The context the codecs share; the camera's texture and the renderers draw on it too. */
     val eglContext: EglBase.Context
@@ -97,24 +99,42 @@ class CallPeerConnections(
     }
 
     override suspend fun create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver): CreatedPeerConnection {
-        val from = when (kind) {
-            PeerConnectionKind.CALL, PeerConnectionKind.TRANSFER -> factory
-            PeerConnectionKind.CAPTURE -> captureFactory ?: throw PeerConnectionException.Failed("no share is being captured")
+        val made: WebRtcPeerConnection?
+        var onClosed: (() -> Unit)? = null
+        when (kind) {
+            PeerConnectionKind.CALL, PeerConnectionKind.TRANSFER -> {
+                made = factory.createPeerConnection(CallPeerConnection.configuration(configuration), CallPeerConnectionObserver(observer))
+            }
+            PeerConnectionKind.CAPTURE -> {
+                val capture = captureFactory ?: throw PeerConnectionException.Failed("no share is being captured")
+                if (!capture.open()) {
+                    throw PeerConnectionException.Failed("the share has ended")
+                }
+                made = capture.factory.createPeerConnection(CallPeerConnection.configuration(configuration), CallPeerConnectionObserver(observer))
+                if (made == null) {
+                    capture.closed()
+                }
+                onClosed = capture::closed
+            }
         }
-        val made = from.createPeerConnection(
-            CallPeerConnection.configuration(configuration),
-            CallPeerConnectionObserver(observer),
-        ) ?: throw PeerConnectionException.Failed("WebRTC made no peer connection")
-        return CreatedPeerConnection(CallPeerConnection(made, tracks))
+        if (made == null) {
+            throw PeerConnectionException.Failed("WebRTC made no peer connection")
+        }
+        return CreatedPeerConnection(CallPeerConnection(made, tracks, onClosed))
     }
 
-    /** A factory on the same codecs and EGL context as the call's, recording from `audioDevice`. */
-    fun makeCaptureFactory(audioDevice: AudioDeviceModule): WebRtcPeerConnectionFactory =
+    /**
+     * A factory on the same codecs and EGL context as the call's, recording from `audioDevice`,
+     * which it releases with itself.
+     */
+    fun makeCaptureFactory(audioDevice: AudioDeviceModule): CaptureFactory = CaptureFactory(
         WebRtcPeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDevice)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
-            .createPeerConnectionFactory()
+            .createPeerConnectionFactory(),
+        audioDevice,
+    )
 
     private companion object {
         private var initialized = false
@@ -130,6 +150,83 @@ class CallPeerConnections(
             )
             initialized = true
         }
+    }
+}
+
+/**
+ * A share's WebRTC factory and the audio device module it records from, kept until the capture
+ * connection made from it has closed. Disposing a factory deletes its network, worker, and
+ * signalling threads, and a peer connection made from it runs on them until it is closed (its
+ * audio encoder posts each encoded frame to the worker thread), so a factory disposed under an
+ * open connection crashes the process a moment later; and the engine closes the capture
+ * connection on its own thread, after the share is stopped (`stop_source` replaces the senders'
+ * tracks and then closes it), never before. So the share retires the factory (`retire`, with the
+ * share's tracks and sources), and the factory, the module, and those are disposed, in that
+ * order after them, by whichever of the connection's close and the retirement comes second, on
+ * its thread; with no connection open, the retirement disposes them at once. `open` is refused
+ * once retired, so no connection is made from a factory about to go.
+ */
+class CaptureFactory(val factory: WebRtcPeerConnectionFactory, private val audioDevice: AudioDeviceModule) {
+    private val lock = Any()
+    private var connections = 0
+    private var retired = false
+    private var disposed = false
+    private var tracks: List<MediaStreamTrack> = emptyList()
+    private var sources: List<WebRtcMediaSource> = emptyList()
+
+    /** Whether the factory and its module are gone. */
+    val isDisposed: Boolean
+        get() = synchronized(lock) { disposed }
+
+    /** Counts a connection about to be made from the factory; false once it is retired. */
+    fun open(): Boolean = synchronized(lock) {
+        if (retired) {
+            false
+        } else {
+            connections += 1
+            true
+        }
+    }
+
+    /** A connection counted by `open` has closed. */
+    fun closed() {
+        val dispose = synchronized(lock) {
+            connections -= 1
+            retired && connections == 0 && !disposed
+        }
+        if (dispose) {
+            dispose()
+        }
+    }
+
+    /** The share is over: `tracks` and `sources`, the share's, go with the factory. */
+    fun retire(tracks: List<MediaStreamTrack>, sources: List<WebRtcMediaSource>) {
+        val dispose = synchronized(lock) {
+            if (retired) {
+                return
+            }
+            retired = true
+            this.tracks = tracks
+            this.sources = sources
+            connections == 0
+        }
+        if (dispose) {
+            dispose()
+        }
+    }
+
+    private fun dispose() {
+        val (tracks, sources) = synchronized(lock) {
+            if (disposed) {
+                return
+            }
+            disposed = true
+            tracks to sources
+        }
+        tracks.forEach { it.dispose() }
+        sources.forEach { it.dispose() }
+        factory.dispose()
+        audioDevice.release()
     }
 }
 
@@ -280,12 +377,14 @@ class CallDataChannel(private val channel: WebRtcDataChannel) : com.aspen_chat.c
  *   as the W3C array, each member with `id`, `type`, and `timestamp` in milliseconds beside its
  *   values, which already carry their W3C names.
  * - A receiver's volume is its `AudioTrack.setVolume`, 0 to 10.
- * - `close` disposes the connection too, freeing its native side; `connectionState` answers
- *   `Closed` from then on and every other method refuses.
+ * - `close` disposes the connection too, freeing its native side, and then tells `onClosed`
+ *   (the share's `CaptureFactory`, for a capture connection); `connectionState` answers `Closed`
+ *   from then on and every other method refuses.
  */
 class CallPeerConnection(
     private val connection: WebRtcPeerConnection,
     private val tracks: CallTracks,
+    private val onClosed: (() -> Unit)? = null,
 ) : PeerConnection {
     private val lock = Any()
     /** Sender ids, by `TransceiverId`. */
@@ -681,6 +780,7 @@ class CallPeerConnection(
         for (id in released) {
             tracks.remove(id)
         }
+        onClosed?.invoke()
     }
 
     // --- WebRTC's observers as suspending calls -----------------------------------------------

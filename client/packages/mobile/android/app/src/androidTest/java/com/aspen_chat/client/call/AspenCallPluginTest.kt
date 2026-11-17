@@ -13,6 +13,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import com.aspen_chat.client.MainActivity
 import com.aspen_chat.client.call.CallTestSupport.argument
+import com.aspen_chat.client.call.CallTestSupport.browserInbound
 import com.aspen_chat.client.call.CallTestSupport.browserVideoFrames
 import com.aspen_chat.client.call.CallTestSupport.http
 import com.aspen_chat.client.call.CallTestSupport.sha256
@@ -53,8 +54,9 @@ import org.junit.runner.RunWith
  * offered, shares the screen (accepting the system's media projection dialog, another app's
  * window, through UI Automator) and sees its sources go on the
  * capture connection with the service of the projection's kind, hears the preview's shape, has
- * the browser decode the share and receive its sound, stops it, has a declined dialog rejected as
- * `denied`, and leaves. `scripts/check_mobile_call.py --platform android` runs it with
+ * the browser decode the share and receive its sound, stops it (its factory going only once the
+ * engine has closed the capture connection, the call going on), shares and stops it again, has a
+ * declined dialog rejected as `denied`, and leaves. `scripts/check_mobile_call.py --platform android` runs it with
  * `CallEngineTest` and gives it the same arguments; without them it is skipped.
  */
 @RunWith(AndroidJUnit4::class)
@@ -281,59 +283,84 @@ class AspenCallPluginTest {
         // `{user}-share` stream. The emulator plays nothing for the capture to hear, so the sound
         // is silence, carried all the same.
         assertTrue("the channel lets the user share", connected.getJSONObject("grants").getBoolean("shareScreen"))
-        val shareStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
-        acceptProjectionDialog()
-        val shareAnswer = shareStarted()
-        assertTrue("the consent resolved: $shareAnswer", !shareAnswer.has("error"))
-        // A mirrored display composes a frame only as the screen changes, so the page keeps
-        // something moving while it is shared, as a shared screen in use does.
-        evaluate(MOVING_BOX)
         val sharesLive = { snapshot: JSONObject ->
             val live = { name: String -> sourcesOf(snapshot).any { it.getString("source") == name && it.getBoolean("live") && it.getBoolean("external") } }
             live("screen") && live("screenAudio")
         }
-        awaitTrue("the share's sources are live", 30, diagnosis = {
-            val all = states()
-            val screen = CallEngine.screen(context)
-            val seen = (0 until all.length()).map { all.getJSONObject(it) }.filter { it.getLong("revision") >= connected.getLong("revision") }.joinToString(" | ") { state ->
-                "${state.getLong("revision")} ${state.getString("status")}: " +
-                    sourcesOf(state).joinToString(",") { "${it.getString("source")}${if (it.getBoolean("live")) "+" else "-"}${if (it.getBoolean("external")) "x" else ""}" } +
-                    (state.optJSONObject("sourceRefused")?.let { " refused ${it.getString("source")}: ${it.getJSONObject("refusal").getString("detail")}" } ?: "")
+        // The share is started and stopped twice: a share's factory disposed while the engine's
+        // capture connection still ran from it crashed the process on a Pixel a moment after the
+        // first stop (its audio encoder posting to the factory's deleted worker thread, or the
+        // engine's `replaceTrack` reading the freed connection), so after each stop the factory
+        // must go only once that connection has closed (`CaptureFactory`), with the call going on
+        // and the browser still hearing the microphone, and the second share must start from a
+        // fresh factory as the first did.
+        fun share(nth: String): Triple<JSONObject, JSONObject?, Int> {
+            val before = states().length()
+            // This share's snapshots alone: the first share's, live and then gone, are still recorded.
+            val revisionBefore = states().getJSONObject(before - 1).getLong("revision")
+            val thisShareLive = { snapshot: JSONObject -> snapshot.getLong("revision") > revisionBefore && sharesLive(snapshot) }
+            val shareStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
+            acceptProjectionDialog()
+            val shareAnswer = shareStarted()
+            assertTrue("the $nth consent resolved: $shareAnswer", !shareAnswer.has("error"))
+            // A mirrored display composes a frame only as the screen changes, so the page keeps
+            // something moving while it is shared, as a shared screen in use does.
+            evaluate(MOVING_BOX)
+            awaitTrue("the $nth share's sources are live", 30, diagnosis = {
+                val all = states()
+                val screen = CallEngine.screen(context)
+                val seen = (before until all.length()).map { all.getJSONObject(it) }.joinToString(" | ") { state ->
+                    "${state.getLong("revision")} ${state.getString("status")}: " +
+                        sourcesOf(state).joinToString(",") { "${it.getString("source")}${if (it.getBoolean("live")) "+" else "-"}${if (it.getBoolean("external")) "x" else ""}" } +
+                        (state.optJSONObject("sourceRefused")?.let { " refused ${it.getString("source")}: ${it.getJSONObject("refusal").getString("detail")}" } ?: "")
+                }
+                "capture active ${screen.isActive}, on ${screen.isOn}, frames captured ${screen.framesCaptured}; states $seen; " +
+                    "share events ${evaluate("JSON.stringify(window.__aspenCallTest.shares)")}"
+            }) { (before until states().length()).any { thisShareLive(states().getJSONObject(it)) } }
+            val sharing = untilState("the $nth share's sources are live", 5, thisShareLive)
+            assertTrue(CallEngine.screen(context).isOn)
+            awaitTrue("the service runs with the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION != 0 }
+            val shareSurface = sourcesOf(sharing).first { it.getString("source") == "screen" }.getString("track")
+            val shareTile = tile("share", shareSurface, 0, 420, 320, 180, mirrored = false, cover = false, pictureInPicture = false)
+            run("setTiles", JSONObject().put("tiles", JSONArray().put(shareTile)))
+            val shareShape = untilRecorded("the $nth share preview's shape reaches the page", "shapes", 15) { it.getString("surface") == shareSurface }
+            assertTrue("a picture: $shareShape", shareShape.getInt("width") > 0 && shareShape.getInt("height") > 0)
+            awaitTrue("the $nth share preview is drawn", 15) { onActivity { CallEngine.video.renderer("share")?.firstFrameRendered } == true }
+            awaitTrue("the browser sees the $nth share", 30) { browserScreens(helper).contains(user) }
+            var shareSample: JSONObject? = null
+            awaitTrue("the browser decodes a picture of the $nth share", 30) {
+                val sampled = http("GET", "$helper/second-participant/screen-sample?user=$user")
+                val parsed = if (sampled == "null") null else JSONObject(sampled)
+                shareSample = parsed
+                parsed != null && parsed.getDouble("brightness") > 5
             }
-            "capture active ${screen.isActive}, on ${screen.isOn}, frames captured ${screen.framesCaptured}; states $seen; " +
-                "share events ${evaluate("JSON.stringify(window.__aspenCallTest.shares)")}"
-        }) { (0 until states().length()).any { sharesLive(states().getJSONObject(it)) } }
-        val sharing = untilState("the share's sources are live", 5, sharesLive)
-        assertTrue(CallEngine.screen(context).isOn)
-        awaitTrue("the service runs with the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION != 0 }
-        val shareSurface = sourcesOf(sharing).first { it.getString("source") == "screen" }.getString("track")
-        val shareTile = tile("share", shareSurface, 0, 420, 320, 180, mirrored = false, cover = false, pictureInPicture = false)
-        run("setTiles", JSONObject().put("tiles", JSONArray().put(shareTile)))
-        val shareShape = untilRecorded("the share preview's shape reaches the page", "shapes", 15) { it.getString("surface") == shareSurface }
-        assertTrue("a picture: $shareShape", shareShape.getInt("width") > 0 && shareShape.getInt("height") > 0)
-        awaitTrue("the share preview is drawn", 15) { onActivity { CallEngine.video.renderer("share")?.firstFrameRendered } == true }
-        awaitTrue("the browser sees the share", 30) { browserScreens(helper).contains(user) }
-        var shareSample: JSONObject? = null
-        awaitTrue("the browser decodes a picture of the share", 30) {
-            val sampled = http("GET", "$helper/second-participant/screen-sample?user=$user")
-            val parsed = if (sampled == "null") null else JSONObject(sampled)
-            shareSample = parsed
-            parsed != null && parsed.getDouble("brightness") > 5
+            val audioPacketsBefore = browserShareAudioPackets(helper, user)
+            var shareAudioPackets = 0
+            awaitTrue("the browser receives the $nth share's sound", 30) {
+                shareAudioPackets = browserShareAudioPackets(helper, user) - audioPacketsBefore
+                shareAudioPackets > 20
+            }
+            run("stopScreenShare", JSONObject().put("origin", api))
+            evaluate("document.getElementById('aspen-moving')?.remove(); 'removed'")
+            untilState("the $nth share leaves the sources", 15) { snapshot ->
+                snapshot.getLong("revision") > sharing.getLong("revision") && sourcesOf(snapshot).none { it.getString("source").startsWith("screen") }
+            }
+            assertTrue(!CallEngine.screen(context).isOn)
+            awaitTrue("the $nth share's factory goes once its capture connection has closed", 15) { CallEngine.screen(context).factoryDisposed }
+            awaitTrue("the browser sees the $nth share go", 20) { browserScreens(helper).isEmpty() }
+            awaitTrue("the service drops the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION == 0 }
+            run("setTiles", JSONObject().put("tiles", JSONArray()))
+            // The call outlives the share: the crash came within half a second of the stop.
+            val (packetsAtStop, _) = browserInbound(helper)
+            Thread.sleep(3_000)
+            val latest = JSONObject(run("state", JSONObject().put("origin", api)).getString("state"))
+            assertEquals("the call goes on after the $nth share: $latest", "connected", latest.getString("status"))
+            val (packetsAfter, _) = browserInbound(helper)
+            assertTrue("the browser still receives the microphone after the $nth share ($packetsAtStop → $packetsAfter packets)", packetsAfter > packetsAtStop)
+            return Triple(shareShape, shareSample, shareAudioPackets)
         }
-        var shareAudioPackets = 0
-        awaitTrue("the browser receives the share's sound", 30) {
-            shareAudioPackets = browserShareAudioPackets(helper, user)
-            shareAudioPackets > 20
-        }
-        run("stopScreenShare", JSONObject().put("origin", api))
-        evaluate("document.getElementById('aspen-moving')?.remove(); 'removed'")
-        untilState("the share leaves the sources", 15) { snapshot ->
-            snapshot.getLong("revision") > sharing.getLong("revision") && sourcesOf(snapshot).none { it.getString("source").startsWith("screen") }
-        }
-        assertTrue(!CallEngine.screen(context).isOn)
-        awaitTrue("the browser sees the share go", 20) { browserScreens(helper).isEmpty() }
-        awaitTrue("the service drops the projection's kind", 10) { serviceTypes() and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION == 0 }
-        run("setTiles", JSONObject().put("tiles", JSONArray()))
+        val (shareShape, shareSample, shareAudioPackets) = share("first")
+        share("second")
         // The dialog declined: the plugin rejects with `denied`, and no source is asked for.
         val declinedStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
         declineProjectionDialog()
@@ -362,8 +389,8 @@ class AspenCallPluginTest {
                 "entered the picture in picture on it and left it, had bad video commands refused, turned the camera off; received " +
                 "${receivedTransfer.getInt("bytes")} bytes of the browser's file ${receivedTransfer.getString("route")} through the page (hash matched); shared the screen " +
                 "(${shareShape.getInt("width")}×${shareShape.getInt("height")}, the browser decoding it at brightness ${shareSample?.optDouble("brightness")} " +
-                "and receiving $shareAudioPackets packets of its sound, silence here) with the service of the projection's kind, stopped it, " +
-                "had a declined dialog rejected; a fresh read matched the latest",
+                "and receiving $shareAudioPackets packets of its sound, silence here) with the service of the projection's kind, stopped it, its factory going " +
+                "once its capture connection had closed and the call going on, shared and stopped it again, had a declined dialog rejected; a fresh read matched the latest",
         )
     }
 
