@@ -55,11 +55,12 @@ final class AspenCallPluginTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         continueAfterFailure = false
-        // The simulator's own audio unit aborts the process when initialized, so the engines the
-        // plugin makes run on an audio device in software, the camera on a capturer in software,
-        // the simulator having none, and the call's sounds on players in software, since the
-        // simulator's audio server starts no output for a test process.
-        CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
+        // The engines the plugin makes run on the audio device the platform allows
+        // (`CallCheck.audioDevice`: one in software on the simulator, whose own audio unit aborts
+        // the process when initialized, the phone's own on a device), the camera on a capturer in
+        // software, the simulator having none, and the call's sounds on players in software,
+        // since the simulator's audio server starts no output for a test process.
+        CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: try CallCheck.audioDevice())
         CallEngine.camera.makeCapturer = { SyntheticVideoCapturer() }
         CallSounds.makePlayer = { try SoftwareSoundPlayer(url: $0) }
         CallEngine.screen.makeCapturer = { SyntheticScreenCapturer() }
@@ -195,15 +196,21 @@ final class AspenCallPluginTests: XCTestCase {
         try? session.setActive(false)
         let audioReport = "\((audio as? String) ?? String(describing: audio)) with the session \(activation)"
 
-        // The join, against the deployment the check runs, as far as the simulator's CallKit
-        // takes it: the start action joins the engine, whose `joining` snapshot reaches the
-        // page, and the daemon's end leaves it, whose `idle` reaches the page too.
+        // The join, against the deployment the check runs, through the plugin and so the system:
+        // the start action joins the engine, whose `joining` snapshot reaches the page. What
+        // CallKit does then is the platform's (`CallCheck.systemCall`): a phone keeps the call,
+        // whose `connected` reaches the page and which the rest of the test drives; the
+        // simulator's daemon ends it, whose `idle` reaches the page too.
         guard let channel = ProcessInfo.processInfo.environment["ASPEN_CALL_CHANNEL"], !channel.isEmpty,
               let user = ProcessInfo.processInfo.environment["ASPEN_CALL_USER_ID"], !user.isEmpty,
               let refreshToken = ProcessInfo.processInfo.environment["ASPEN_CALL_REFRESH_TOKEN"], !refreshToken.isEmpty else {
             print("call-plugin-test: snapshots and routes crossed the bridge (loudspeaker route \(onLoudspeaker), receiver asked \(onReceiver)); web audio \(audioReport); no deployment given, so the join was not tried")
             throw XCTSkip("ASPEN_CALL_CHANNEL is not set")
         }
+        let systemCall = try CallCheck.systemCall()
+        // The run's first request of the deployment, failed by name when the device cannot make
+        // it (`CallCheck.reach`).
+        try await CallCheck.reach(try XCTUnwrap(URL(string: "\(api)/api/v1/health")), seconds: 120)
         keptPushState = PushStateStore.loadJSON()
         let account: [String: Any] = [
             "subscription": "call-plugin-test",
@@ -217,21 +224,19 @@ final class AspenCallPluginTests: XCTestCase {
         XCTAssertTrue(PushStateStore.save(json: String(decoding: state, as: UTF8.self)))
         let before = try await states().count
         _ = try await run("join", ["origin": origin, "channel": channel, "name": "Bridge test"])
-        let joining = try await untilState("the join's snapshot reaches the page", seconds: 15) {
+        // The plugin's join asks the system for the microphone first, which a phone answers with
+        // its prompt the first time: the wait is for a finger.
+        let joining = try await untilState("the join's snapshot reaches the page", seconds: systemCall == .stands ? 120 : 15) {
             $0["status"] as? String == "joining" && $0["channel"] as? String == channel
         }
         XCTAssertEqual(joining["origin"] as? String, origin)
-        let after = try await untilState("the call's end reaches the page", seconds: 20) { snapshot in
+        let settled = systemCall == .ends ? "idle" : "connected"
+        let after = try await untilState("the call's \(settled) reaches the page", seconds: 40) { snapshot in
             let status = snapshot["status"] as? String
             return (snapshot["revision"] as? Int ?? 0) > (joining["revision"] as? Int ?? 0)
-                && (status == "idle" || status == "connected" || status == "failed")
+                && (status == settled || status == "failed")
         }
-        if after["status"] as? String == "connected" {
-            // A CallKit that kept the call (a device's): left from the page.
-            _ = try await run("leave", ["origin": origin])
-            _ = try await untilState("the leave reaches the page", seconds: 10) { $0["status"] as? String == "idle" }
-        }
-        XCTAssertNotEqual(after["status"] as? String, "failed", "the join failed: \(after["error"] as? String ?? "")")
+        XCTAssertEqual(after["status"] as? String, settled, "the join failed: \(after["error"] as? String ?? "")")
         let revisions = try await states().dropFirst(before).compactMap { $0["revision"] as? Int }
         XCTAssertEqual(revisions, revisions.sorted(), "snapshots arrive in revision order: \(revisions)")
         XCTAssertEqual(Set(revisions).count, revisions.count, "no snapshot twice: \(revisions)")
@@ -239,10 +244,11 @@ final class AspenCallPluginTests: XCTestCase {
         let freshState = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(fresh["state"] as? String).utf8)) as? [String: Any])
         XCTAssertEqual(freshState["revision"] as? Int, revisions.last, "a fresh read is the latest published")
 
-        // Video through the bridge. The simulator's CallKit holds no call, so the engine the
-        // plugin made for the page is joined directly, as the engine's own proof does, the test
-        // standing in for `didActivate`; the page then drives the camera, the holes, and the
-        // watching, and hears the shapes and the picture in picture back.
+        // Video through the bridge, in the call the page drives: on a phone the one the system
+        // holds, with the session it activated; on the simulator, whose CallKit holds none, the
+        // engine the plugin made for the page is joined directly, as the engine's own proof does,
+        // the test standing in for `didActivate`. The page then drives the camera, the holes, and
+        // the watching, and hears the shapes and the picture in picture back.
         guard let helperAddress = ProcessInfo.processInfo.environment["ASPEN_CALL_HELPER"], !helperAddress.isEmpty else {
             throw XCTSkip("ASPEN_CALL_HELPER is not set")
         }
@@ -251,15 +257,27 @@ final class AspenCallPluginTests: XCTestCase {
         let pluginFound = await MainActor.run { bridgeViewController.bridge?.plugin(withName: "AspenCall") as? AspenCallPlugin }
         let plugin = try XCTUnwrap(pluginFound)
         let engine = await MainActor.run { plugin.engine(at: origin) }
-        try engine.audio.configureForCall()
-        engine.audio.activated(session)
-        defer { engine.audio.deactivated(session) }
-        engine.engine.setMicrophone(track: engine.audio.openMicrophone())
         let directFrom = try await states().count
-        engine.engine.join(channel: channel)
-        defer { engine.engine.leave() }
-        let connected = try await untilState("the direct join connects", seconds: 40) { snapshot in
-            snapshot["status"] as? String == "connected" && (snapshot["revision"] as? Int ?? 0) > (revisions.last ?? 0)
+        let connected: [String: Any]
+        switch systemCall {
+        case .ends:
+            try engine.audio.configureForCall()
+            engine.audio.activated(session)
+            engine.engine.setMicrophone(track: engine.audio.openMicrophone())
+            engine.engine.join(channel: channel)
+            connected = try await untilState("the direct join connects", seconds: 40) { snapshot in
+                snapshot["status"] as? String == "connected" && (snapshot["revision"] as? Int ?? 0) > (revisions.last ?? 0)
+            }
+        case .stands:
+            XCTAssertTrue(CallSystem.shared.latest.audioActive, "the system activated the session for the call (didActivate)")
+            XCTAssertNotNil(CallSystem.shared.latest.call, "the system holds the call")
+            connected = after
+        }
+        defer {
+            engine.engine.leave()
+            if systemCall == .ends {
+                engine.audio.deactivated(session)
+            }
         }
         XCTAssertEqual((connected["grants"] as? [String: Any])?["camera"] as? Bool, true, "the channel lets the user use a camera")
 
@@ -458,9 +476,18 @@ final class AspenCallPluginTests: XCTestCase {
         _ = try await untilState("the leave reaches the page", seconds: 15) { snapshot in
             (snapshot["revision"] as? Int ?? 0) > (watching["revision"] as? Int ?? 0) && snapshot["status"] as? String == "idle"
         }
+        if systemCall == .stands {
+            // Left through the system's end action, after which CallKit deactivates the session.
+            try await untilTrue("the system lets the call go and deactivates the session", seconds: 15) {
+                CallSystem.shared.latest.call == nil && !CallSystem.shared.latest.audioActive
+            }
+        }
         let direct = try await states().dropFirst(directFrom).compactMap { $0["revision"] as? Int }
         XCTAssertEqual(direct, direct.sorted(), "snapshots arrive in revision order: \(direct)")
-        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off; received \(receivedTransfer["bytes"] ?? 0) bytes of the browser's file \(receivedTransfer["route"] ?? "?") through the page (hash matched); shared the screen (\(shareShape["width"] ?? 0)×\(shareShape["height"] ?? 0), the browser decoding it at brightness \(shareSample?["brightness"] ?? 0) and receiving \(shareAudioPackets) packets of its sound), stopped it, had a declined picker reported, and left")
+        let inCall = systemCall == .ends
+            ? "then, the engine joined directly,"
+            : "in that call, which the system kept with the session it activated,"
+        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver)); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); \(inCall) listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off; received \(receivedTransfer["bytes"] ?? 0) bytes of the browser's file \(receivedTransfer["route"] ?? "?") through the page (hash matched); shared the screen (\(shareShape["width"] ?? 0)×\(shareShape["height"] ?? 0), the browser decoding it at brightness \(shareSample?["brightness"] ?? 0) and receiving \(shareAudioPackets) packets of its sound), stopped it, had a declined picker reported, and left")
     }
 
     /// How far the native picture trails the page while a hole moves, for judging by eye: the page

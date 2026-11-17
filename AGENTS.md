@@ -440,28 +440,34 @@ or what an operator must open, route, or back up updates it in the same commit.
    (`pnpm --filter @aspen/app exec playwright install chromium firefox`), and a sound server
    (PulseAudio, or PipeWire's), without which Firefox plays and records only silence.
 
-   Check the mobile call engine (`voice_client/`) with its iOS layer on a Mac's simulator, or its
-   Android layer on the emulator here or on a phone attached by USB:
+   Check the mobile call engine (`voice_client/`) with its iOS layer on a Mac's simulator or on an
+   iPhone paired with the Mac, or its Android layer on the emulator here or on a phone attached by
+   USB:
 
    ```
    scripts/check_mobile_call.py --platform ios --bin target/debug --build
+   scripts/check_mobile_call.py --platform ios --bin target/debug --build --device <udid>
    scripts/check_mobile_call.py --platform android --bin target/debug --build --avd aspen-test
    scripts/check_mobile_call.py --platform android --bin target/debug --build --device <serial>
    ```
 
-   It runs a deployment here, reaches it from the phone's loopback (SSH tunnels to the Mac,
-   `adb reverse` to the emulator or the phone), and runs the app's tests of the engine
-   (`CallEngineTests` on the simulator, `CallEngineTest` on the emulator or phone) and of the web
-   view's bridge to it (`AspenCallPluginTests`, `AspenCallPluginTest`, driving the `AspenCall`
-   plugin from the app's own page) against it, with a browser here as the second participant; with
-   `--avd` it starts the emulator headless, and with `--device` (a phone's serial from
-   `adb devices`, never an emulator's) it builds the engine for the phone's ABI, expects the browser
-   to hear the phone's live microphone rather than an emulator's silence, and runs `CallDeviceTest`
-   too, what only a phone can show: the earpiece and loudspeaker routes with the proximity wake
-   lock, the call through the screen off and Doze, and a ring on the locked screen answered and
-   declined. Whichever it drives, every `adb` and Gradle command is pinned to it (`ANDROID_SERIAL`),
-   so whatever else is attached is never touched (`client/docs/architecture/ios-app.md` and
-   `android-builds.md`, The call engine).
+   It runs a deployment here, reaches it from the simulator's or emulator's loopback (SSH tunnels to
+   the Mac, `adb reverse` to the emulator or the Android phone), and runs the app's tests of the
+   engine (`CallEngineTests` on iOS, `CallEngineTest` on Android) and of the web view's bridge to it
+   (`AspenCallPluginTests`, `AspenCallPluginTest`, driving the `AspenCall` plugin from the app's own
+   page) against it, with a browser here as the second participant; with `--avd` it starts the
+   emulator headless, and with `--device` (an Android phone's serial from `adb devices`, never an
+   emulator's) it builds the engine for the phone's ABI, expects the browser to hear the phone's
+   live microphone rather than an emulator's silence, and runs `CallDeviceTest` too, what only a
+   phone can show: the earpiece and loudspeaker routes with the proximity wake lock, the call
+   through the screen off and Doze, and a ring on the locked screen answered and declined. Whichever
+   it drives, every `adb` and Gradle command is pinned to it (`ANDROID_SERIAL`), so whatever else is
+   attached is never touched. On iOS, `--device` (an iPhone's UDID from
+   `xcrun devicectl list devices` on the Mac) serves the deployment and the helper to the phone over
+   TLS at this machine's address on the network it shares with the Mac, with a certificate from the
+   development authority the phone must trust (`scripts/dev_ca.py profile`), builds and signs the
+   app and its tests for a device, and expects what a phone's CallKit and microphone give
+   (`client/docs/architecture/ios-app.md`, The proof, and `android-builds.md`, The call engine).
 
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,

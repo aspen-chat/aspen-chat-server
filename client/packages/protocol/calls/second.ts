@@ -27,6 +27,12 @@ interface Arguments {
   readonly session: Session;
   /** A WAV file Chromium captures as the microphone, in a loop. */
   readonly tone: string;
+  /**
+   * Public keys (the SHA-256 of each SubjectPublicKeyInfo, base64) whose certificates Chromium
+   * accepts without a trusted authority: a voice server served over TLS from the development
+   * authority for a phone elsewhere on the network, which Chromium here does not trust.
+   */
+  readonly trustedKeys?: readonly string[];
 }
 
 const args = JSON.parse(process.env.ASPEN_CALL_SECOND ?? "{}") as Arguments;
@@ -37,6 +43,9 @@ const browser = await chromium.launch({
     "--use-fake-ui-for-media-stream",
     `--use-file-for-fake-audio-capture=${args.tone}`,
     "--autoplay-policy=no-user-gesture-required",
+    ...(args.trustedKeys?.length
+      ? [`--ignore-certificate-errors-spki-list=${args.trustedKeys.join(",")}`]
+      : []),
   ],
 });
 const context = await browser.newContext({ permissions: ["microphone"] });

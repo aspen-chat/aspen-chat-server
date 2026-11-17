@@ -55,6 +55,7 @@
 		A5E000000000000000000234 /* CallEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000212 /* CallEngineTests.swift */; };
 		A5E000000000000000000235 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000211 /* WebRTC.xcframework */; };
 		A5E000000000000000000236 /* ToneAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000214 /* ToneAudioDevice.swift */; };
+		A5E0000000000000000002C1 /* CallCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002C0 /* CallCheck.swift */; };
 		A5E000000000000000000239 /* CallRoutesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000217 /* CallRoutesTests.swift */; };
 		A5E000000000000000000243 /* AspenCallPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000218 /* AspenCallPlugin.swift */; };
 		A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000219 /* AspenCallPluginTests.swift */; };
@@ -161,6 +162,7 @@
 		A5E000000000000000000211 /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = ../../../../../target/webrtc/WebRTC.xcframework; sourceTree = SOURCE_ROOT; };
 		A5E000000000000000000212 /* CallEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallEngineTests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000214 /* ToneAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneAudioDevice.swift; sourceTree = "<group>"; };
+		A5E0000000000000000002C0 /* CallCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCheck.swift; sourceTree = "<group>"; };
 		A5E000000000000000000217 /* CallRoutesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRoutesTests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000218 /* AspenCallPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenCallPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000219 /* AspenCallPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenCallPluginTests.swift; sourceTree = "<group>"; };
@@ -290,6 +292,7 @@
 			children = (
 				A5E000000000000000000212 /* CallEngineTests.swift */,
 				A5E000000000000000000214 /* ToneAudioDevice.swift */,
+				A5E0000000000000000002C0 /* CallCheck.swift */,
 				A5E000000000000000000217 /* CallRoutesTests.swift */,
 				A5E000000000000000000219 /* AspenCallPluginTests.swift */,
 				A5E000000000000000000283 /* SyntheticVideoCapturer.swift */,
@@ -680,6 +683,7 @@
 			files = (
 				A5E000000000000000000234 /* CallEngineTests.swift in Sources */,
 				A5E000000000000000000236 /* ToneAudioDevice.swift in Sources */,
+				A5E0000000000000000002C1 /* CallCheck.swift in Sources */,
 				A5E000000000000000000239 /* CallRoutesTests.swift in Sources */,
 				A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */,
 				A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */,

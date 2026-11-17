@@ -506,17 +506,29 @@ performs (`callservicesd`'s log: `Failed to open URL facetime://?showInCallUI=1`
 `disconnect reason: 55`). So the simulator shows the start action performed and the end action
 handled, and nothing after; it plays through the Mac, with no receiver, headset, or cellular radio;
 and its audio server starts no output for a test process, so the call's sounds are proved into
-players in software. These stand to be checked on an iPhone:
+players in software. `scripts/check_mobile_call.py --platform ios --device <udid>` runs the engine's
+and the bridge's proofs on an iPhone (The proof below, On a phone), with the app in the foreground
+throughout and the test in the app's process: that covers the first three items as marked, and the
+picture in picture's start and stop from the foreground. Everything else is by hand, with a person
+holding the phone:
 
 - [ ] An outgoing call stands: started from the app in the foreground, it shows no system in-call UI
-      over the app, is reported connected, and ends when the user leaves.
+      over the app, is reported connected, and ends when the user leaves. The device check runs
+      this: the call stands through the whole proof, reported connected, and the end action ends it;
+      the in-call UI is for the eye.
 - [ ] CallKit activates the session for the call and `didActivate` starts WebRTC's built-in audio
       device module (the simulator runs on `ToneAudioDevice`): both sides hear each other, with the
-      app in the foreground, in the background, and locked.
+      app in the foreground, in the background, and locked. The device check runs the foreground:
+      `didActivate` before the engine connects, the browser receiving and decoding the phone's
+      packets and reporting the level it hears of the room, the phone receiving the browser's tone;
+      the background and the lock screen are by hand.
 - [ ] The system's mute and hold actions (`CXSetMutedCallAction`, `CXSetHeldCallAction`) reach the
       engine: the others see the user on hold and hear nothing of them, the user hears nothing, and
       the hold's end brings both back with the user's own mute standing; the app's own mute shows in
-      the system's controls.
+      the system's controls. The device check requests both actions of the system as its controls
+      would (the mute through `CallEngine.setMuted`, the hold through a `CXCallController` of the
+      test's) and watches the engine and the browser; what the system's controls show is for the
+      eye.
 - [ ] The receiver is listed, chosen, and heard at the ear; the proximity sensor turns the screen
       off there and back on when the call moves to the loudspeaker. The app's Speaker button does
       the same through the plugin (the simulator has no receiver port, so its route stays the
@@ -551,7 +563,8 @@ players in software. These stand to be checked on an iPhone:
 - [ ] The picture in picture: leaving the app while someone's camera or screen shows starts it on
       the focused screen (else the first camera of someone else), it follows the call as the picture
       shown changes, and coming back ends it; `isPictureInPicturePossible` and the `pip` events say
-      so on a device, the simulator supporting none.
+      so on a device, the simulator supporting none. The device check starts and stops one from the
+      foreground on the browser's camera and hears the `pip` events; leaving the app is by hand.
 - [ ] Rotation: a full-screen picture turns with the phone without a flash of the old layout, and
       the paged tiles lay out again beneath their holes after a turn.
 - [ ] Trailing by eye: while paging between tiles and while a transition moves one, the native
@@ -584,7 +597,8 @@ players in software. These stand to be checked on an iPhone:
 ### The proof
 
 `AppTests/CallEngineTests` runs the engine with this layer against a real deployment, in the app's
-process on the simulator, WebRTC on a microphone and speaker in software (`ToneAudioDevice`, an
+process on the simulator (and on an iPhone, where what it expects differs as On a phone below says),
+WebRTC on a microphone and speaker in software on the simulator (`ToneAudioDevice`, an
 `RTCAudioDevice` recording a warble of 440 and 660 Hz and dropping what it plays out), since the
 simulator's own audio unit aborts the process when a test initializes it: it joins a voice channel's
 call through the system and watches the start action join the engine, the call listed as outgoing
@@ -684,11 +698,68 @@ announced address over the network), Chromium as the second participant with a t
 microphone and its fake camera (`calls/second.ts`, which the script's helper drives: showing video,
 the camera on and off, and a frame of someone's camera sampled), the simulator granted the camera
 beside the microphone, and `xcodebuild test-without-building` on the Mac of the engine's, the
-bridge's, and the rings' tests (judged by the suites passing and no test skipped but the trailing
-recording's own), with `--build` first building the engine, the bindings, and the app for the
-simulator there; `--worktree` and `--derived` name the Mac checkout and derived data of the branch
-under test, so two branches never build in one tree. The test reads its deployment, channel, user,
-refresh token, and the script's helper from the environment (`TEST_RUNNER_ASPEN_CALL_*`; the test's
-comment lists them) and skips without them. CI runs the Android half of this check
-(`android-builds.md`) and not this one: the deployment runs in Docker, which GitHub's macOS runners
-lack, so the simulator's call is checked from a development machine with a Mac beside it.
+bridge's, and the rings' tests (judged by the suites passing, each having printed its own line, and
+no test skipped but the trailing recording's own), with `--build` first building the engine, the
+bindings, and the app for the simulator there; `--worktree` and `--derived` name the Mac checkout
+and derived data of the branch under test, so two branches never build in one tree. The test reads
+its deployment, channel, user, refresh token, and the script's helper from the environment
+(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI runs the
+Android half of this check (`android-builds.md`) and not this one: the deployment runs in Docker,
+which GitHub's macOS runners lack, so the simulator's call is checked from a development machine
+with a Mac beside it.
+
+**On a phone.** `--device <udid>` (the UDID `xcrun devicectl list devices` prints on the Mac) runs
+the engine's and the bridge's proofs on an iPhone paired with the Mac, which reaches the machine the
+check runs on over the network the two share (the Mac's Wi-Fi) and, being a phone, takes nothing in
+plain text there: the check serves the API server, the voice server, and its helper over TLS on its
+own address on that network (`--address`, else the address it reaches the Mac from; `TlsFront` in
+`scripts/stack.py`, one TLS listener per plain port, piping bytes, so the WebSockets pass too), with
+a certificate for that address from the development authority (`scripts/dev_ca.py`), registers the
+voice server at its TLS address (which the browser here, trusting no such authority, reaches by
+pinning the certificate's key: `trustedKeys` in `calls/second.ts`,
+`--ignore-certificate-errors-spki-list`), and gives the tests those addresses. The phone must trust
+the authority first, once: `scripts/dev_ca.py profile` writes it as a configuration profile
+(`docs/development/local-https.md`, iOS: served to Safari on the phone with `--serve`, installed
+under Settings, General, VPN & Device Management, and turned on under Settings, General, About,
+Certificate Trust Settings). Each proof's first request (`CallCheck.reach`) fails by name otherwise:
+`trustFailure` for a phone that does not trust the certificate, `unreachable` for one not on the
+network or that has not allowed Aspen on the local network (asked on the first run, with the
+microphone; someone at the phone answers both); the check repeats what to do. The rings' tests do
+not run on a phone: they report synthetic incoming calls to CallKit, which the simulator's ends
+quietly and a phone's rings aloud, and a real ring is the checklist's (Rings above). `--build`
+builds the engine for devices (`call_engine.py --device-only`) and the app and tests for the generic
+device destination, so the build never touches the phone, signed for the team by the Apple
+Development identity in a keychain made for builds over SSH (`--keychain`, unlocked with the
+password in `--keychain-password-file`, since an SSH session cannot use the login keychain), with
+`-allowProvisioningUpdates`; the identity and profile it signed with are reported. Xcode's accounts
+are the login keychain's too, so over SSH it can register nothing new: an App ID capability or a
+profile this branch adds (the broadcast extension's, the App Group's) is made once by opening the
+project in Xcode on the Mac, signed in, under Signing & Capabilities, after which the profiles on
+disk serve every build. Before the tests the check reads the phone from the Mac (`Ios.ready_phone`:
+paired with its tunnel up, Developer Mode on, unlocked since boot; whether it is unlocked now
+`devicectl` cannot say, and `xcodebuild` refuses a locked phone, so the check says to keep it
+unlocked and awake), checks its own TLS front from the Mac over the network with the authority's
+certificate, and then `xcodebuild test-without-building` installs the app and its tests on the phone
+and runs them.
+
+What each proof expects is the platform's, read by `CallCheck` from `ASPEN_CALL_MICROPHONE` (`tone`
+on the simulator, `live` on a phone) and `ASPEN_CALL_SYSTEM_CALL` (`ends`, `stands`), which the
+check sets and which, unset, follow `targetEnvironment(simulator)`, a value that is neither refused
+by name. With `live` the factories run on WebRTC's own audio device module, the phone's microphone
+and speaker, and the engine's proof asserts of the browser what the Android check does of a phone:
+packets received and decoded, and a level reported, whatever a room sounds like, never how loud;
+with `tone` the loudest sample must be the tone's. With `stands` the engine's proof joins through
+the system as before and then expects what a phone's CallKit does: the session activated through
+`didActivate` (`CallSystem.Status.audioActive`) before the engine connects, the call reported
+connected and never ended, and the whole proof then runs in that call, the microphone the system
+granted through `CallEngine.askForMicrophone` (the phone's prompt the first time), the mute through
+`CXSetMutedCallAction` as `CallEngine.setMuted` requests it of a held call, the hold and its release
+through `CXSetHeldCallAction` requested of a `CXCallController` by the test, the picture in picture
+started and stopped, and the leave through the end action, after which the system's call is seen
+ended and `didDeactivate` seen; the leaving sound's cue may come after that deactivation and be
+dropped, so on a phone whether it played is reported, not required (hearing it whole is the
+checklist's). With `ends` the proof expects the simulator's end within fifteen seconds, the session
+never activated, and then drives the engine directly with the test activating the session, as
+described above. The bridge's proof likewise expects the plugin's join to reach `connected` on a
+phone and drives everything after from that call, and `idle` on the simulator, joining the engine
+directly then.

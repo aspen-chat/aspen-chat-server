@@ -3,7 +3,7 @@
 the simulator and for devices, and its Swift bindings, where the Xcode project reads them
 (`client/docs/architecture/ios-app.md`, The call engine).
 
-    client/packages/mobile/ios/scripts/call_engine.py [--release] [--simulator-only]
+    client/packages/mobile/ios/scripts/call_engine.py [--simulator-only | --device-only]
 
 The engine's static library is built with cargo for `aarch64-apple-ios-sim` and `aarch64-apple-ios`
 (which `rust-toolchain.toml` lists, so rustup installs them), against each target's SDK, into
@@ -27,13 +27,15 @@ WEBRTC = REPO / "target" / "webrtc" / "WebRTC.xcframework"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--simulator-only", action="store_true", help="build the engine for the simulator alone")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--simulator-only", action="store_true", help="build the engine for the simulator alone")
+    which.add_argument("--device-only", action="store_true", help="build the engine for devices alone")
     args = parser.parse_args()
     if sys.platform != "darwin":
         sys.exit("call_engine.py: the engine is built for iOS on a Mac")
     if not WEBRTC.exists():
         sys.exit(f"call_engine.py: {WEBRTC} is missing; build it with scripts/webrtc_build.py build")
-    targets = TARGETS[:1] if args.simulator_only else TARGETS
+    targets = TARGETS[:1] if args.simulator_only else TARGETS[1:] if args.device_only else TARGETS
     for target in targets:
         print(f"call_engine.py: building voice_client for {target}", flush=True)
         # The C the crates compile (aws-lc among them) and the objects are built against the

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Check the mobile call engine with a phone's platform under it, on the iOS simulator of a Mac, the
-Android emulator here, or an Android phone attached here by USB, against built servers here.
+"""Check the mobile call engine with a phone's platform under it, on the iOS simulator of a Mac, an
+iPhone paired with that Mac, the Android emulator here, or an Android phone attached here by USB,
+against built servers here.
 
 Runs a deployment of its own (`stack.py`), whose web client is the call page of the client's own
 call code (`client/packages/protocol/calls/`), and runs the platform's tests of the engine against
@@ -14,13 +15,15 @@ view's bridge to it
 plugin through the Capacitor bridge, joins the same channel, reads the engine's snapshots and
 routes as they reach it, and shares the screen, which the browser decodes and hears the sound of;
 and, on iOS, the rings' (`CallRingsTests`, against a stand-in deployment of their own), in which a
-call push is reported to CallKit and its answer joins the engine with the microphone. Each platform
-reaches the API server and the voice server at its own
-loopback, `http://127.0.0.1`, which the engine takes in plain text as a debuggable build does, and
-media goes straight to the voice server's announced address over the network.
+call push is reported to CallKit and its answer joins the engine with the microphone. A simulator
+or an emulator reaches the API server and the voice server at its own loopback, `http://127.0.0.1`,
+which the engine takes in plain text as a debuggable build does; a phone reaches them over the
+network, and media goes straight to the voice server's announced address over the network either
+way.
 
     scripts/check_mobile_call.py --platform ios --bin target/debug [--build] [--mac aspen-mac]
         [--worktree '~/aspen-native-calls'] [--derived '~/aspen-derived-native-calls']
+        [--device <udid> [--address <this machine's address>]]
     scripts/check_mobile_call.py --platform android --bin target/debug [--build]
         [--avd aspen-test | --device <serial>] [--microphone silent|live] [--only <class>]...
 
@@ -33,6 +36,33 @@ to run while another `xcodebuild` is on the Mac. `--runner simctl` runs the buil
 XCTest's bundle injection, for a Mac whose `xcodebuild` cannot see simulators (an Xcode whose
 CoreSimulator was never installed, which takes an administrator); its `--build` builds for the
 generic simulator destination for the same reason.
+
+With `--device <udid>` (`xcrun devicectl list devices` on the Mac) the check runs on an iPhone
+paired with the Mac instead, which reaches this machine over the network they share and takes
+nothing in plain text there: the API server, the voice server, and the helper are each served over
+TLS on this machine's address on that network (`--address`, else the address this machine reaches
+the Mac from), with a certificate from the development authority (`stack.TlsFront`,
+`scripts/dev_ca.py`), which the phone must trust (`scripts/dev_ca.py profile` writes it as a
+configuration profile; `docs/development/local-https.md`, and `client/docs/architecture/ios-app.md`,
+The proof, say the steps on the phone), and the voice server is registered at its TLS address, which
+the browser here reaches by pinning the certificate's key. `--build` builds the engine for devices
+(`call_engine.py --device-only`) and the app and tests for a device (`-sdk iphoneos`, the generic
+device destination, so the build never touches the phone), signed for the team with automatic
+provisioning (`-allowProvisioningUpdates`) by the identity in `--keychain`, a keychain of the Mac's
+made for builds over SSH, whose password `--keychain-password-file` holds, since an SSH session
+cannot use the login keychain; the identity and profile it signed with are reported. Before the
+tests the phone must be paired and reachable from the Mac with Developer Mode on
+(`Ios.ready_phone`), and unlocked, which `devicectl` cannot see, so it is said; then
+`xcodebuild test-without-building` installs the app and its tests on the phone and runs the
+engine's and the bridge's tests there (not the rings': the simulator's CallKit takes their
+synthetic incoming calls quietly, where a phone would ring; a real ring is the checklist's). Each
+test's first request says by name when the phone does not trust the authority (`trustFailure`) or
+cannot reach this machine (`unreachable`), which the check repeats with what to do; the phone asks
+to allow Aspen on the local network and to use the microphone on the first run, which someone at
+the phone answers. On the phone the tests expect what a phone gives (`ASPEN_CALL_MICROPHONE=live`,
+`ASPEN_CALL_SYSTEM_CALL=stands`: WebRTC's own audio device, CallKit keeping the call and activating
+the session), on the simulator what it gives (`tone`, `ends`); the tests' `CallCheck` says what
+each means.
 
 Android: the emulator or phone reaches this machine's loopback through `adb reverse`, which a USB
 device takes as an emulator does; media goes to the voice server's announced address, which a
@@ -76,11 +106,13 @@ Both need the client's dependencies installed here and Playwright's Chromium.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -92,8 +124,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import dev_ca
 from check_calls import build_page, PAGE, PROTOCOL, person
-from stack import Failed, Ports, Stack, clean_env, start_services, wait_for, wait_for_services
+from stack import Failed, Ports, Stack, TlsFront, clean_env, start_services, wait_for, wait_for_services
 
 REPO = Path(__file__).resolve().parent.parent
 IOS = REPO / "client" / "packages" / "mobile" / "ios"
@@ -102,10 +135,22 @@ WORK = REPO / "target" / "mobile-call"
 PORTS = Ports(nats=14923, api=18910, voice=18911, api_metrics=19966, voice_metrics=19967, rtc_min=48300,
               rtc_max=48399, transfer=13981, relay_min=48400, relay_max=48499)
 HELPER_PORT = 18919
+# The TLS listeners in front of the API server, the voice server, and the helper for a phone on
+# the network (`TlsFront`), each to its plain port on loopback.
+TLS_PORTS = {18912: PORTS.api, 18913: PORTS.voice, 18914: HELPER_PORT}
+
+
+def tls_port(upstream: int) -> int:
+    """The TLS listener in front of the plain port `upstream`."""
+    return next(listening for listening, plain in TLS_PORTS.items() if plain == upstream)
 SIMULATOR = "iPhone 18 Pro"
 BUNDLE = "com.aspen-chat.client"
 PACKAGE = "com.aspen_chat.client"
 MAC_PATH = "export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+# The keychain a Mac's builds over SSH sign with (the login keychain is closed to an SSH session),
+# holding the team's Apple Development identity, and the file holding its password.
+KEYCHAIN = "$HOME/Library/Keychains/aspen-build.keychain-db"
+KEYCHAIN_PASSWORD_FILE = "$HOME/.aspen-build-keychain"
 ANDROID_TESTS = ["com.aspen_chat.client.call.CallEngineTest", "com.aspen_chat.client.call.AspenCallPluginTest"]
 # What only a phone can show, run on `--device` after the two above; it captures the incoming call
 # screen as a call rings the locked phone, and as the call goes on there once answered.
@@ -120,6 +165,16 @@ ANDROID_TEST_LINES = {
 DEVICE_CAPTURES = ["/data/local/tmp/aspen-ring-dark.png", "/data/local/tmp/aspen-ring-lock-screen.png",
                    "/data/local/tmp/aspen-ring-answered-locked.png"]
 IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests", "AppTests/CallRingsTests"]
+# On a phone, the engine's and the bridge's: the rings' tests report synthetic incoming calls to
+# CallKit, which the simulator's ends quietly and a phone's rings aloud, and a real ring is the
+# checklist's (`ios-app.md`, Rings).
+IOS_DEVICE_TESTS = IOS_TESTS[:2]
+# The line each iOS test prints once it has done its work, as `ANDROID_TEST_LINES`.
+IOS_TEST_LINES = {
+    IOS_TESTS[0]: "call-engine-test",
+    IOS_TESTS[1]: "call-plugin-test",
+    IOS_TESTS[2]: "call-rings-test",
+}
 ANDROID_TRAILING_TEST = "com.aspen_chat.client.call.AspenCallPluginTest#pictureFollowsAMovingHole"
 IOS_TRAILING_TEST = "AppTests/AspenCallPluginTests/testPictureFollowsAMovingHole"
 
@@ -145,11 +200,15 @@ class Second:
     """The second participant: `calls/second.ts` in Chromium, driven over its standard input, in
     the call of `channel` unless `join` names another."""
 
-    def __init__(self, base: str, channel: str, session: dict, tone_path: Path):
+    def __init__(self, base: str, channel: str, session: dict, tone_path: Path, trusted_keys: list[str] = ()):
+        """`trusted_keys` are the public keys (`TlsFront.spki_sha256`) Chromium is to accept
+        without a trusted authority: the voice server's, when it is registered at a TLS address
+        for a phone's sake."""
         self.base = base
         self.channel = channel
         self.session = session
         self.tone_path = tone_path
+        self.trusted_keys = list(trusted_keys)
         self.process: subprocess.Popen | None = None
         self.joined: str | None = None
         self.lock = threading.Lock()
@@ -162,7 +221,8 @@ class Second:
                     return
                 raise Failed(f"the second participant is in the call of {self.joined}, not {channel}")
             say(f"the second participant joins the call of {channel} from Chromium")
-            arguments = json.dumps({"base": self.base, "channel": channel, "session": self.session, "tone": str(self.tone_path)})
+            arguments = json.dumps({"base": self.base, "channel": channel, "session": self.session, "tone": str(self.tone_path),
+                                    "trustedKeys": self.trusted_keys})
             self.process = subprocess.Popen(
                 ["pnpm", "--silent", "calls:second"], cwd=PROTOCOL,
                 env={**clean_env(), "ASPEN_CALL_SECOND": arguments},
@@ -390,33 +450,125 @@ def launched(derived: str, variables: dict[str, str]) -> str:
             "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|call-rings-test|error|failed|skipped'")
 
 
+def address_toward(mac: str) -> str:
+    """This machine's address on the network it reaches the Mac over (`ssh -G`'s `hostname`),
+    which a phone paired with the Mac shares."""
+    config = subprocess.run(["ssh", "-G", mac], capture_output=True, text=True, check=True).stdout
+    host = next((line.split(None, 1)[1] for line in config.splitlines() if line.startswith("hostname ")), mac)
+    with socket.create_connection((host, 22), timeout=10) as connection:
+        return connection.getsockname()[0]
+
+
 class Ios:
-    """The tests on a Mac's simulator, reached over SSH."""
+    """The tests on a Mac's simulator, or on an iPhone paired with the Mac, reached over SSH."""
 
     def __init__(self, args: argparse.Namespace):
         self.mac = args.mac
         self.worktree = args.worktree
         self.derived = args.derived
         self.runner = args.runner
+        self.device: str | None = args.device
+        self.keychain = args.keychain
+        self.keychain_password_file = args.keychain_password_file
         self.project = f"{args.worktree}/client/packages/mobile/ios/App"
-        destination = (f"platform=iOS Simulator,name={args.simulator}" if args.runner == "xcodebuild"
-                       else "generic/platform=iOS Simulator")
-        # Run from `self.project`; the environment the test reads is set on this command alone,
-        # so a `cd` cannot be part of it.
-        self.xcodebuild = (f"xcodebuild -project App.xcodeproj -scheme App -sdk iphonesimulator "
-                           f"-destination '{destination}' -derivedDataPath {args.derived}")
+        if self.device:
+            if args.runner != "xcodebuild":
+                raise Failed("--device runs through xcodebuild")
+            self.tests = IOS_DEVICE_TESTS
+            self.address = args.address or address_toward(self.mac)
+            self.sdk = "iphoneos"
+            # The build names no device, so it never touches the phone; the test names it.
+            self.build_destination = "generic/platform=iOS"
+            self.test_destination = f"platform=iOS,id={self.device}"
+        else:
+            self.tests = IOS_TESTS
+            self.address = None
+            self.sdk = "iphonesimulator"
+            self.build_destination = (f"platform=iOS Simulator,name={args.simulator}" if args.runner == "xcodebuild"
+                                      else "generic/platform=iOS Simulator")
+            self.test_destination = f"platform=iOS Simulator,name={args.simulator}"
         if ssh_output(self.mac, "pgrep -x xcodebuild || true"):
             raise Failed("an xcodebuild is running on the Mac; wait for it")
 
+    def xcodebuild(self, destination: str) -> str:
+        """The xcodebuild invocation for `destination`, to run from `self.project`; the
+        environment the test reads is set on this command alone, so a `cd` cannot be part of it.
+        A device build signs with the identity in the build keychain and the team's profiles
+        (`-allowProvisioningUpdates`), which over SSH are those already on the Mac: Xcode's
+        accounts are the login keychain's, so a capability or profile this tree adds is
+        registered once in Xcode on the Mac, signed in, and the profiles then serve here."""
+        command = (f"xcodebuild -project App.xcodeproj -scheme App -sdk {self.sdk} "
+                   f"-destination '{destination}' -derivedDataPath {self.derived}")
+        if self.device:
+            command += f" -allowProvisioningUpdates OTHER_CODE_SIGN_FLAGS='--keychain {self.keychain}'"
+        return command
+
+    def unlocked_keychain(self) -> str:
+        """The command that unlocks the build keychain for the signing that follows it."""
+        return f"security unlock-keychain -p \"$(cat {self.keychain_password_file})\" {self.keychain}"
+
+    def where(self) -> str:
+        return f"the phone {self.device}" if self.device else "the simulator"
+
     def build(self) -> None:
-        say("building the engine for the simulator and its bindings on the Mac")
-        if ssh(self.mac, f"cd {self.worktree} && python3 client/packages/mobile/ios/scripts/call_engine.py --simulator-only",
+        target = "devices" if self.device else "the simulator"
+        say(f"building the engine for {target} and its bindings on the Mac")
+        only = "--device-only" if self.device else "--simulator-only"
+        if ssh(self.mac, f"cd {self.worktree} && python3 client/packages/mobile/ios/scripts/call_engine.py {only}",
                log=WORK / "engine.log") != 0:
             raise Failed("the engine did not build on the Mac")
-        say("building the app and its tests for the simulator")
-        if ssh(self.mac, f"cd {self.project} && {self.xcodebuild} build-for-testing 2>&1 | grep -E 'error|warning: ld|BUILD' ; exit ${{pipestatus[1]}}",
+        say(f"building the app and its tests for {'a device' if self.device else 'the simulator'}")
+        before = f"{self.unlocked_keychain()} && " if self.device else ""
+        if ssh(self.mac, f"cd {self.project} && {before}{self.xcodebuild(self.build_destination)} build-for-testing 2>&1 "
+                         "| grep -E 'error|warning: ld|BUILD|Signing Identity|Provisioning Profile' ; exit ${pipestatus[1]}",
                log=WORK / "build.log") != 0:
             raise Failed(f"the app did not build; see {WORK / 'build.log'}")
+        if self.device:
+            signed = sorted({line.strip() for line in (WORK / "build.log").read_text().splitlines()
+                             if line.strip().startswith(("Signing Identity:", "Provisioning Profile:"))})
+            if not signed:
+                raise Failed(f"the device build named no signing identity; see {WORK / 'build.log'}")
+            say("signed with " + "; ".join(signed))
+
+    def ready_phone(self) -> None:
+        """Refuses a phone the run cannot use, naming what to change: one the Mac does not list
+        as paired with its tunnel up, or without Developer Mode. Whether it is unlocked now
+        `devicectl` cannot say (only that it has a passcode and was unlocked since boot), and
+        `xcodebuild` refuses a locked phone, so that is said. The phone's address is not known
+        here either: the tests' first request says whether it reaches this machine."""
+        listed = json.loads(ssh_output(self.mac, "xcrun devicectl list devices --json-output - 2>/dev/null"))
+        phone = next((each for each in listed["result"]["devices"]
+                      if each.get("hardwareProperties", {}).get("udid") == self.device), None)
+        if phone is None:
+            udids = [each.get("hardwareProperties", {}).get("udid", "?") for each in listed["result"]["devices"]]
+            raise Failed(f"the Mac lists no device {self.device} (xcrun devicectl list devices: {', '.join(udids) or 'none'})")
+        connection = phone.get("connectionProperties", {})
+        properties = phone.get("deviceProperties", {})
+        name = f"{properties.get('name', '?')} ({phone.get('hardwareProperties', {}).get('marketingName', '?')}, iOS {properties.get('osVersionNumber', '?')})"
+        if connection.get("pairingState") != "paired" or connection.get("tunnelState") != "connected":
+            raise Failed(f"{name} is not reachable from the Mac (pairing {connection.get('pairingState')}, tunnel "
+                         f"{connection.get('tunnelState')}): unlock it on the Mac's network, or plug it in, and run again")
+        if properties.get("developerModeStatus") != "enabled":
+            raise Failed(f"{name} has Developer Mode {properties.get('developerModeStatus')}: turn it on under Settings, "
+                         "Privacy & Security, and run again")
+        lock = json.loads(ssh_output(self.mac, f"xcrun devicectl device info lockState --device {self.device} --json-output - 2>/dev/null"))["result"]
+        if not lock.get("unlockedSinceBoot", False):
+            raise Failed(f"{name} has not been unlocked since it booted: unlock it and run again")
+        say(f"{name} is paired over {connection.get('transportType')} with Developer Mode on"
+            + (", has a passcode" if lock.get("passcodeRequired") else "")
+            + "; keep it unlocked and awake through the run, since xcodebuild refuses a locked phone")
+
+    def reachable_from_mac(self, api: str) -> None:
+        """Checks the TLS front from the Mac, on the network the phone shares: the address is
+        reachable from another machine there and the certificate is the authority's for it."""
+        remote = "/tmp/aspen-dev-ca.pem"
+        subprocess.run(["scp", "-q", str(dev_ca.CA), f"{self.mac}:{remote}"], check=True)
+        answered = ssh_output(self.mac, f"curl -s --cacert {remote} -o /dev/null -w '%{{http_code}}' {api}/api/v1/health")
+        if answered != "204":
+            raise Failed(f"the Mac does not reach {api} with the development authority's certificate (curl answered "
+                         f"{answered or 'nothing'}): is {self.address} this machine's address on the Mac's network? "
+                         "give it with --address")
+        say(f"the Mac reaches {api} over the network with the authority's certificate")
 
     def record_trailing(self, variables: dict[str, str]) -> Path:
         """Runs the trailing test alone, with the simulator's screen recorded around it, and brings
@@ -433,8 +585,8 @@ class Ios:
         say("recording the simulator while the hole moves")
         environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items())
         code = ssh(self.mac,
-                   f"cd {self.project} && {environment} {self.xcodebuild} test-without-building -only-testing:{IOS_TRAILING_TEST} 2>&1 "
-                   "| grep -E 'Test Case|call-plugin-test|error:|TEST' ; exit ${pipestatus[1]}",
+                   f"cd {self.project} && {environment} {self.xcodebuild(self.test_destination)} test-without-building "
+                   f"-only-testing:{IOS_TRAILING_TEST} 2>&1 | grep -E 'Test Case|call-plugin-test|error:|TEST' ; exit ${{pipestatus[1]}}",
                    timeout=600, log=WORK / "trailing-test-ios.log")
         ssh_output(self.mac, "kill -INT $(cat /tmp/aspen-trailing-ios.pid); sleep 3")
         if code != 0 or "recorded the picture" not in (WORK / "trailing-test-ios.log").read_text():
@@ -444,34 +596,54 @@ class Ios:
         return recording
 
     def run(self, variables: dict[str, str]) -> None:
-        tunnel = tunnels(self.mac)
+        if self.device:
+            self.ready_phone()
+            self.reachable_from_mac(variables["ASPEN_CALL_API"])
+            variables = {**variables, "ASPEN_CALL_MICROPHONE": "live", "ASPEN_CALL_SYSTEM_CALL": "stands"}
+            say("xcodebuild now installs the app and its tests on the phone and runs them there; the phone may ask to "
+                "allow Aspen on the local network and to use the microphone, which someone at it answers")
+            tunnel = None
+        else:
+            variables = {**variables, "ASPEN_CALL_MICROPHONE": "tone", "ASPEN_CALL_SYSTEM_CALL": "ends"}
+            tunnel = tunnels(self.mac)
         try:
-            ssh_output(self.mac, f"xcrun simctl privacy booted grant microphone {BUNDLE}")
-            ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
-            say(f"running {', '.join(test.split('/')[1] for test in IOS_TESTS)} on the simulator through {self.runner}")
+            if not self.device:
+                ssh_output(self.mac, f"xcrun simctl privacy booted grant microphone {BUNDLE}")
+                ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
+            say(f"running {', '.join(test.split('/')[1] for test in self.tests)} on {self.where()} through {self.runner}")
             log = WORK / "test.log"
             if self.runner == "xcodebuild":
                 environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in variables.items())
-                only = " ".join(f"-only-testing:{test}" for test in IOS_TESTS)
+                only = " ".join(f"-only-testing:{test}" for test in self.tests)
                 code = ssh(self.mac,
-                           f"cd {self.project} && {environment} {self.xcodebuild} test-without-building {only} 2>&1 "
+                           f"cd {self.project} && {environment} {self.xcodebuild(self.test_destination)} test-without-building {only} 2>&1 "
                            "| grep -E 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|call-rings-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
-                           timeout=900, log=log)
+                           timeout=1200, log=log)
                 text = log.read_text()
                 passed = code == 0 and "** TEST EXECUTE SUCCEEDED **" in text
             else:
                 code = ssh(self.mac, launched(self.derived, variables), timeout=900, log=log)
                 text = log.read_text()
-                passed = (all(f"Test Suite '{test.split('/')[1]}' passed" in text for test in IOS_TESTS)
+                passed = (all(f"Test Suite '{test.split('/')[1]}' passed" in text for test in self.tests)
                           and "' failed" not in text and " error: " not in text)
             # Each test's own line says what it saw; a test that ran without one did not do its work.
-            ran = all(f"{line}:" in text for line in ("call-engine-test", "call-plugin-test", "call-rings-test"))
+            ran = all(f"{IOS_TEST_LINES[test]}:" in text for test in self.tests)
             # Only the trailing test skips itself here (outside `--record-trailing`).
             skipped = re.findall(r"Test Case '-\[AppTests\.\w+ (\w+)\]' skipped", text)
             if not passed or not ran or any(name != IOS_TRAILING_TEST.rsplit("/", 1)[1] for name in skipped):
+                # The tests' first request names what the phone lacks (`CallCheck.reach`).
+                if "trustFailure" in text:
+                    say(f"the phone does not trust the development authority: write it as a profile with "
+                        f"`scripts/dev_ca.py profile --serve {self.address}:8080`, open that address in Safari on the "
+                        "phone, install the profile under Settings, General, VPN & Device Management, turn it on "
+                        "under Settings, General, About, Certificate Trust Settings, and run again")
+                elif "unreachable" in text:
+                    say(f"the phone does not reach {self.address}: it must be on this machine's network (the Mac's), "
+                        "and allow Aspen on the local network when iOS asks")
                 raise Failed(f"the tests did not pass (exit {code}); see {log}")
         finally:
-            tunnel.terminate()
+            if tunnel is not None:
+                tunnel.terminate()
 
 
 # --- Android ----------------------------------------------------------------------------------------
@@ -802,6 +974,9 @@ def main() -> None:
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
     parser.add_argument("--record-trailing", action="store_true",
                         help="record the screen while a hole moves instead of running the checks (see the module's doc)")
+    parser.add_argument("--device", metavar="SERIAL|UDID",
+                        help="run on a phone: the serial `adb devices` lists (Android), or the UDID "
+                             "`xcrun devicectl list devices` lists on the Mac (iOS)")
     ios = parser.add_argument_group("ios")
     ios.add_argument("--mac", default="aspen-mac", help="the Mac, as ssh names it")
     ios.add_argument("--worktree", default="~/aspen-native-calls", help="this repository's worktree on the Mac")
@@ -809,9 +984,14 @@ def main() -> None:
     ios.add_argument("--simulator", default=SIMULATOR)
     ios.add_argument("--runner", choices=["xcodebuild", "simctl"], default="xcodebuild",
                      help="how the test is run on the simulator (see the module's doc)")
+    ios.add_argument("--address", help="with --device, this machine's address on the network the phone and the Mac "
+                                       "share (the address this machine reaches the Mac from, when not given)")
+    ios.add_argument("--keychain", default=KEYCHAIN,
+                     help="with --device, the Mac's keychain holding the signing identity (see the module's doc)")
+    ios.add_argument("--keychain-password-file", default=KEYCHAIN_PASSWORD_FILE,
+                     help="with --device, the file on the Mac holding that keychain's password")
     android = parser.add_argument_group("android")
     android.add_argument("--avd", help="start this emulator here, headless")
-    android.add_argument("--device", metavar="SERIAL", help="run on the phone attached under this serial (`adb devices`)")
     android.add_argument("--microphone", choices=["silent", "live"],
                          help="what the browser is to hear of the device's microphone: silence, or the room, "
                               "whatever it sounds like (live with --device, silent otherwise)")
@@ -836,45 +1016,59 @@ def main() -> None:
         wait_for_services()
         tone_path = WORK / "tone.wav"
         tone(tone_path)
-        say("starting a database and a NATS of its own, the chat server, and the voice server")
-        with Stack(args.bin.resolve(), "mobilecall", PORTS, web_client=PAGE) as stack:
-            run = os.getpid()
-            ann = person(stack, f"ann{run}")
-            bob = person(stack, f"bob{run}")
-            made = stack.api("POST", "/communities", {"name": "Calls"}, ann["sessionToken"])
-            community = made.get("id") or made["data"]["id"]
-            invite = stack.api("POST", f"/communities/{community}/invites", {}, ann["sessionToken"])
-            stack.api("PUT", f"/communities/{community}/members/@me",
-                      {"inviteCode": invite.get("code") or invite.get("id")}, bob["sessionToken"])
-            channel = stack.api("POST", "/channels",
-                                {"community": community, "name": "Lounge", "sortIndex": 0, "ty": "voice"},
-                                ann["sessionToken"])["id"]
-            wait_for("a voice server to be offered",
-                     lambda: stack.status("POST", f"/channels/{channel}/voice/join", {}, ann["sessionToken"]) == 200, 90)
-            # Bob's DM with Ann, whose call rings the device as a DM's call rings a phone.
-            made = stack.api("POST", "/users/@me/dms", {"recipients": [ann["userId"]]}, bob["sessionToken"])
-            dm_channel = made.get("id") or made["data"]["id"]
-            second = Second(stack.base, channel, bob, tone_path)
-            server = helper(second, bob["userId"], Dm(stack, second, dm_channel, ann, bob, f"bob{run}"))
-            variables = {
-                "ASPEN_CALL_API": stack.base,
-                "ASPEN_CALL_CHANNEL": channel,
-                "ASPEN_CALL_USER_ID": ann["userId"],
-                "ASPEN_CALL_REFRESH_TOKEN": ann["refreshToken"],
-                "ASPEN_CALL_HELPER": f"http://127.0.0.1:{HELPER_PORT}",
-            }
-            try:
-                platform.run(variables)
-            finally:
-                second.leave()
-                server.shutdown()
-                # Both servers' whole logs, for a failure the stack's own excerpt is too short for.
-                for log in stack.work.glob("*.log"):
-                    shutil.copy(log, WORK / log.name)
+        # A phone on the network reaches the deployment and the helper over TLS at this machine's
+        # address there; a simulator or emulator at its own loopback.
+        front = TlsFront(platform.address, TLS_PORTS) if isinstance(platform, Ios) and platform.device else None
+        voice_url = front.url(tls_port(PORTS.voice)) if front else None
+        with front or contextlib.nullcontext():
+            say("starting a database and a NATS of its own, the chat server, and the voice server"
+                + (f", served to the phone over TLS at {platform.address}" if front else ""))
+            with Stack(args.bin.resolve(), "mobilecall", PORTS, web_client=PAGE, voice_url=voice_url) as stack:
+                main_in_stack(args, platform, stack, tone_path, front)
         say("passed")
     except Failed as failure:
         say(f"FAILED: {failure}")
         sys.exit(1)
+
+
+def main_in_stack(args: argparse.Namespace, platform: "Ios | Android", stack: Stack, tone_path: Path,
+                  front: TlsFront | None) -> None:
+    """The check against `stack`, its people, channel, helper, and the platform's tests."""
+    run = os.getpid()
+    ann = person(stack, f"ann{run}")
+    bob = person(stack, f"bob{run}")
+    made = stack.api("POST", "/communities", {"name": "Calls"}, ann["sessionToken"])
+    community = made.get("id") or made["data"]["id"]
+    invite = stack.api("POST", f"/communities/{community}/invites", {}, ann["sessionToken"])
+    stack.api("PUT", f"/communities/{community}/members/@me",
+              {"inviteCode": invite.get("code") or invite.get("id")}, bob["sessionToken"])
+    channel = stack.api("POST", "/channels",
+                        {"community": community, "name": "Lounge", "sortIndex": 0, "ty": "voice"},
+                        ann["sessionToken"])["id"]
+    wait_for("a voice server to be offered",
+             lambda: stack.status("POST", f"/channels/{channel}/voice/join", {}, ann["sessionToken"]) == 200, 90)
+    # Bob's DM with Ann, whose call rings the device as a DM's call rings a phone.
+    made = stack.api("POST", "/users/@me/dms", {"recipients": [ann["userId"]]}, bob["sessionToken"])
+    dm_channel = made.get("id") or made["data"]["id"]
+    # The browser here reaches the voice server at the address clients are told, the TLS one for a
+    # phone's sake, whose key it pins.
+    second = Second(stack.base, channel, bob, tone_path, trusted_keys=[front.spki_sha256] if front else [])
+    server = helper(second, bob["userId"], Dm(stack, second, dm_channel, ann, bob, f"bob{run}"))
+    variables = {
+        "ASPEN_CALL_API": front.url(tls_port(PORTS.api)) if front else stack.base,
+        "ASPEN_CALL_CHANNEL": channel,
+        "ASPEN_CALL_USER_ID": ann["userId"],
+        "ASPEN_CALL_REFRESH_TOKEN": ann["refreshToken"],
+        "ASPEN_CALL_HELPER": front.url(tls_port(HELPER_PORT)) if front else f"http://127.0.0.1:{HELPER_PORT}",
+    }
+    try:
+        platform.run(variables)
+    finally:
+        second.leave()
+        server.shutdown()
+        # Both servers' whole logs, for a failure the stack's own excerpt is too short for.
+        for log in stack.work.glob("*.log"):
+            shutil.copy(log, WORK / log.name)
 
 
 if __name__ == "__main__":

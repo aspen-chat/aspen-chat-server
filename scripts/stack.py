@@ -22,6 +22,7 @@ servers' logs. Needs Python 3.10.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -40,6 +42,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+import dev_ca
 import device_credential
 from web_client import stand_in
 
@@ -233,6 +236,88 @@ class WebSocket:
             pass
 
 
+class TlsFront:
+    """TLS in front of a stack's plain listeners, for a device elsewhere on the network, which
+    reaches nothing in plain text: each listening port in `pairs` (listening port to the
+    upstream port on loopback) is served on `address`, this machine's address on that network,
+    with a certificate for `address` from the development authority (`dev_ca.issue`), and what
+    arrives is piped to its upstream byte for byte, so HTTP and WebSockets pass alike. The device
+    must trust the authority (`docs/development/local-https.md`); a browser here that does not can
+    pin the certificate's key instead (`spki_sha256`). Listening from `__enter__` to `__exit__`."""
+
+    def __init__(self, address: str, pairs: dict[int, int]):
+        self.address = address
+        self.pairs = pairs
+        self.cert, self.key = dev_ca.issue(address)
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.load_cert_chain(str(self.cert), str(self.key))
+        self.listeners: list[socket.socket] = []
+
+    @property
+    def spki_sha256(self) -> str:
+        """The certificate's public key as Chromium's `--ignore-certificate-errors-spki-list`
+        names one: the SHA-256 of its SubjectPublicKeyInfo, base64."""
+        public_key = subprocess.run(["openssl", "x509", "-in", str(self.cert), "-pubkey", "-noout"],
+                                    capture_output=True, check=True).stdout
+        der = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "der"], input=public_key,
+                             capture_output=True, check=True).stdout
+        return base64.b64encode(hashlib.sha256(der).digest()).decode()
+
+    def url(self, listening: int, scheme: str = "https") -> str:
+        return f"{scheme}://{self.address}:{listening}"
+
+    def __enter__(self) -> "TlsFront":
+        for listening, upstream in self.pairs.items():
+            listener = socket.socket()
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((self.address, listening))
+            listener.listen(64)
+            self.listeners.append(listener)
+            threading.Thread(target=self._accept, args=(listener, upstream), daemon=True).start()
+        return self
+
+    def __exit__(self, *_) -> None:
+        for listener in self.listeners:
+            listener.close()
+        self.listeners.clear()
+
+    def _accept(self, listener: socket.socket, upstream: int) -> None:
+        while True:
+            try:
+                raw, _ = listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(raw, upstream), daemon=True).start()
+
+    def _serve(self, raw: socket.socket, upstream: int) -> None:
+        try:
+            client = self.context.wrap_socket(raw, server_side=True)
+        except (ssl.SSLError, OSError):
+            raw.close()
+            return
+        try:
+            server = socket.create_connection(("127.0.0.1", upstream))
+        except OSError:
+            client.close()
+            return
+        threading.Thread(target=self._pipe, args=(server, client), daemon=True).start()
+        self._pipe(client, server)
+
+    @staticmethod
+    def _pipe(source: socket.socket, sink: socket.socket) -> None:
+        try:
+            while data := source.recv(65536):
+                sink.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for each in (source, sink):
+                try:
+                    each.close()
+                except OSError:
+                    pass
+
+
 class Deployment:
     """A deployment named `name` on `ports`, running from the binaries in `bins`, with `settings`
     added to its aspen.toml: what every check talks to, whichever way it runs (`Stack`, the
@@ -379,14 +464,17 @@ class Stack(Deployment):
 
     def __init__(self, bins: Path, name: str, ports: Ports, settings: str = "",
                  public_host: str = "127.0.0.1", web_client: Path | None = None,
-                 media: str = "s3"):
+                 media: str = "s3", voice_url: str | None = None):
         """`media` is where files are kept: `s3`, the SeaweedFS of docker-compose.yaml, or
         `directory`, a directory of the stack's own that the chat server serves at
-        `media.localhost` on its port (`[media.directory]`)."""
+        `media.localhost` on its port (`[media.directory]`). `voice_url` is the voice server's
+        address as clients are told it (a `TlsFront`'s, for a device elsewhere), its own loopback
+        port when none is given; the server itself listens on loopback either way."""
         if media not in ("s3", "directory"):
             raise Failed(f"no media store {media!r}: s3 or directory")
         super().__init__(bins, name, ports, settings, public_host, web_client)
         self.media = media
+        self.voice_url = voice_url or f"http://127.0.0.1:{ports.voice}"
         self.database = f"aspen_{name}_{os.getpid()}"
         self.database_url = f"postgres://postgres:aspen_test@127.0.0.1:5432/{self.database}"
         self.nats = f"aspen-{name}-{os.getpid()}-nats"
@@ -457,8 +545,7 @@ class Stack(Deployment):
         )
         if migrated.returncode != 0:
             raise Failed(f"migrations failed: {migrated.stderr[-1000:]}")
-        added = self.command("voice-servers", "add", self.name, "--url", f"http://127.0.0.1:{self.ports.voice}",
-                             "--capacity", "50")
+        added = self.command("voice-servers", "add", self.name, "--url", self.voice_url, "--capacity", "50")
         # The id is taken from what `add` prints, as an operator takes it.
         given = re.search(r'^\s*id = "([0-9a-f-]+)"$', added, re.MULTILINE)
         if not given:

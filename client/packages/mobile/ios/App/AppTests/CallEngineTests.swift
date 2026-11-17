@@ -6,23 +6,25 @@ import XCTest
 @testable import App
 
 /// The call engine with this device's whole platform under it, against a real deployment: it
-/// joins a voice channel's call through the system (CallKit) as far as the simulator's CallKit
-/// takes an outgoing call, then, driven directly, joins, is heard by and hears a second
-/// participant in a browser, mutes and unmutes, holds the call and releases it, watches the
-/// browser's camera and draws it (`CallVideo`, a renderer counting frames and reporting the
-/// picture's shape where the page would put its hole, and the picture in picture started on
-/// it), sends a camera of its own (in software, `SyntheticVideoCapturer`) that the browser
-/// decodes and sees a picture in, moves it to the other camera, receives a file the browser
-/// offers directly and sends it one through the relay, each compared by hash and each cueing
-/// the transfer sounds, takes its socket back after the socket is cut with video flowing on,
-/// and leaves.
+/// joins a voice channel's call through the system (CallKit), which on a phone keeps the call
+/// and activates the audio session for it, and on the simulator ends it half a second in
+/// (`CallCheck.systemCall`), after which the test drives the engine directly; in the call it is
+/// heard by and hears a second participant in a browser, mutes and unmutes, holds the call and
+/// releases it, watches the browser's camera and draws it (`CallVideo`, a renderer counting
+/// frames and reporting the picture's shape where the page would put its hole, and the picture
+/// in picture started on it), sends a camera of its own (in software, `SyntheticVideoCapturer`)
+/// that the browser decodes and sees a picture in, moves it to the other camera, receives a file
+/// the browser offers directly and sends it one through the relay, each compared by hash and
+/// each cueing the transfer sounds, takes its socket back after the socket is cut with video
+/// flowing on, and leaves.
 /// `scripts/check_mobile_call.py` at the repository's root runs the deployment, the browser, and
 /// this test, and gives it what it reads from the environment (passed on by `xcodebuild test`
-/// with a `TEST_RUNNER_` prefix); without them it skips.
+/// with a `TEST_RUNNER_` prefix); without them it skips. `CallCheck` reads what the platform
+/// under it can do.
 ///
 /// | Variable                   | What                                                        |
 /// | -------------------------- | ----------------------------------------------------------- |
-/// | `ASPEN_CALL_API`           | The deployment's `public_url`, as the simulator reaches it  |
+/// | `ASPEN_CALL_API`           | The deployment, as this device reaches it                   |
 /// | `ASPEN_CALL_CHANNEL`       | The voice channel to join                                   |
 /// | `ASPEN_CALL_USER_ID`       | The user whose call this is                                 |
 /// | `ASPEN_CALL_REFRESH_TOKEN` | Their refresh token; the session token kept is a stale one, |
@@ -196,6 +198,13 @@ final class CallEngineTests: XCTestCase {
         let refreshToken = try environment("ASPEN_CALL_REFRESH_TOKEN")
         helper = URL(string: try environment("ASPEN_CALL_HELPER"))
         continueAfterFailure = false
+        let microphoneKind = try CallCheck.microphone()
+        let systemCall = try CallCheck.systemCall()
+        // The first requests of the run, failed by name when the device cannot make them: a
+        // phone that does not trust the authority serving the deployment, or that is not on
+        // its network. The wait leaves time to allow Aspen on the local network when iOS asks.
+        try await CallCheck.reach(try XCTUnwrap(URL(string: "\(api)/api/v1/health")), seconds: 120)
+        try await CallCheck.reach(helper.appendingPathComponent("ring"), seconds: 30)
 
         // The account as the web view keeps it on sign-in, with a session token the deployment
         // refuses, so the first request goes through the renewal.
@@ -211,9 +220,10 @@ final class CallEngineTests: XCTestCase {
         let state = try JSONSerialization.data(withJSONObject: ["version": 1, "accounts": [account]])
         XCTAssertTrue(PushStateStore.save(json: String(decoding: state, as: UTF8.self)))
 
-        // WebRTC on a microphone and speaker in software (`ToneAudioDevice`): the simulator's
-        // own audio unit aborts the process when initialized from a test.
-        let media = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
+        // WebRTC on the audio device the platform allows (`CallCheck.audioDevice`): a microphone
+        // and speaker in software on the simulator, whose own audio unit aborts the process when
+        // initialized from a test, and the phone's own on a device.
+        let media = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: try CallCheck.audioDevice())
         let sockets = CuttableSockets()
         let peerConnections = RecordingPeerConnections(real: media)
         let call = CallEngine(
@@ -222,60 +232,92 @@ final class CallEngineTests: XCTestCase {
         let seen = Seen()
         let listening = call.snapshots.listen { seen.add($0) }
         defer { listening.cancel() }
-        let microphone = call.audio.openMicrophone()
-        call.engine.setMicrophone(track: microphone)
+        // The microphone as a join is given it: the system asked, which a phone answers with its
+        // prompt the first time (the wait is for a finger), the simulator at once.
+        try await withCheckedThrowingContinuation { (asked: CheckedContinuation<Void, Error>) in
+            DispatchQueue.main.async { call.askForMicrophone { asked.resume() } }
+        }
+        let microphone = try XCTUnwrap(call.engine.state().microphone, "the system granted the microphone")
+        XCTAssertEqual(microphone, call.audio.openMicrophone(), "the engine's microphone is the layer's track")
+        // The call's sounds, as the engine cues them and the layer plays them on the session CallKit
+        // activated (or the test, where CallKit holds no call), into players in software (`setUp`):
+        // each is recorded as it starts, with the player's state and the session's category and
+        // mode then. On the simulator the listener is attached only once the system's call has
+        // ended, since a cue of that call's, held for the activation that never comes, would be
+        // played by the activation the test makes next.
+        let sounds = SoundsSeen()
+        var soundsListening: CallSounds.Subscription?
+        defer { soundsListening?.cancel() }
+        if systemCall == .stands {
+            soundsListening = await MainActor.run { call.audio.sounds.listen { sounds.add($0) } }
+        }
 
-        // Joined through the system, as far as the simulator takes it: the start action is
-        // performed (the audio session configured, the engine told to join) and the call shows
-        // in the system's list as outgoing. Then the simulator's CallKit ends it: it opens its
-        // in-call UI (`facetime://?showInCallUI=1`) for every outgoing call, the simulator has
-        // no such app, and the daemon ends a call whose UI it could not open, with an end action
-        // the provider performs, which leaves the engine. A device, which has the in-call app,
-        // keeps the call; that is the device checklist's.
+        // Joined through the system: the start action is performed (the audio session
+        // configured, the engine told to join) and the call shows in the system's list as
+        // outgoing. What CallKit does then is the platform's (`CallCheck.systemCall`): a phone
+        // keeps the call, reports it connected as the engine connects, and activates the session,
+        // `didActivate` starting WebRTC's audio; the simulator's CallKit opens its in-call UI
+        // (`facetime://?showInCallUI=1`) for every outgoing call, has no such app, and ends a
+        // call whose UI it could not open about half a second in, with an end action the
+        // provider performs, which leaves the engine.
         let observer = CXCallObserver()
         let calls = CallsSeen()
         observer.setDelegate(calls, queue: nil)
         XCTAssertTrue(observer.calls.isEmpty, "no call stands before the join: \(observer.calls)")
+        let socketsAtStart = sockets.connections
+        let connectionsAtStart = peerConnections.created.count
         await MainActor.run { call.join(channel: channel, name: "Call engine test") }
-        // Both read off listeners' records, since the daemon's end follows within the polling
+        // Both read off listeners' records, since the simulator's end follows within the polling
         // interval, and a call that has ended leaves the observer's list.
         try await untilTrue("the start action joins the engine", seconds: 10) { seen.statuses.contains { $0 != .idle } }
         let started = try XCTUnwrap(seen.statuses.first { $0 != .idle })
         try await untilTrue("the system lists the call as outgoing", seconds: 10) { calls.changes.contains(where: \.outgoing) }
-        let systemCall = try XCTUnwrap(calls.changes.first(where: \.outgoing)).uuid
+        let systemCallId = try XCTUnwrap(calls.changes.first(where: \.outgoing)).uuid
         XCTAssertNil(CallSystem.shared.latest.refusal)
-        let systemEnded = await waiting(seconds: 15) { calls.changes.contains { $0.uuid == systemCall && $0.ended } }
-        if systemEnded {
-            // The simulator's daemon ended the call: the provider's end action left the engine.
+        let viaSystem: String
+        let socketsBefore: Int
+        let connectionsBefore: Int
+        switch systemCall {
+        case .ends:
+            try await untilTrue("the system ends the call, as the simulator's CallKit does", seconds: 15) {
+                calls.changes.contains { $0.uuid == systemCallId && $0.ended }
+            }
             _ = try await until("the system's end action leaves the engine", seconds: 10, call) { $0.status == .idle }
             XCTAssertNil(CallSystem.shared.latest.call, "the status lets the call go")
-        } else {
-            // A CallKit that keeps the call (a device's, or a simulator that has learnt to):
-            // left here, since what follows drives the engine directly.
-            XCTAssertEqual(CallSystem.shared.latest.call, systemCall)
-            await MainActor.run { call.leave() }
-            _ = try await until("the call is left", seconds: 10, call) { $0.status == .idle }
-            try await untilTrue("the system's call ends", seconds: 10) { calls.changes.contains { $0.uuid == systemCall && $0.ended } }
+            XCTAssertFalse(CallSystem.shared.latest.audioActive, "the simulator's CallKit activated no session")
+            viaSystem = "the system performed the start action (engine \(started)), listed the call \(systemCallId) as outgoing, and ended it itself, as the simulator's CallKit does, the end action leaving the engine"
+            // The audio proof drives the engine directly from here, the test standing in for
+            // CallKit's `didActivate`, since the simulator's CallKit holds no call to activate the
+            // session for.
+            try call.audio.configureForCall()
+            call.audio.activated(AVAudioSession.sharedInstance())
+            soundsListening = await MainActor.run { call.audio.sounds.listen { sounds.add($0) } }
+            // The system's join opened a socket and a peer connection of its own, as far as it got.
+            socketsBefore = sockets.connections
+            connectionsBefore = peerConnections.created.count
+            call.engine.setMicrophone(track: microphone)
+            call.engine.join(channel: channel)
+        case .stands:
+            try await untilTrue("the system activates the audio session (didActivate)", seconds: 20) {
+                CallSystem.shared.latest.audioActive
+            }
+            XCTAssertEqual(CallSystem.shared.latest.call, systemCallId, "the system holds the call")
+            try await untilTrue("the system reports the call connected", seconds: 40) {
+                calls.changes.contains { $0.uuid == systemCallId && $0.connected }
+            }
+            XCTAssertFalse(calls.changes.contains { $0.uuid == systemCallId && $0.ended }, "the call stands: \(calls.changes)")
+            viaSystem = "the system performed the start action (engine \(started)), listed the call \(systemCallId) as outgoing, activated the audio session for it (didActivate), and reported it connected; the call stood through what follows"
+            socketsBefore = socketsAtStart
+            connectionsBefore = connectionsAtStart
         }
-        let viaSystem = "the system performed the start action (engine \(started)), listed the call \(systemCall) as outgoing, and \(systemEnded ? "ended it itself, as the simulator's CallKit does, the end action leaving the engine" : "kept it until leave")"
-
-        // The audio proof drives the engine directly, the test standing in for CallKit's
-        // `didActivate`, since the simulator's CallKit holds no call to activate the session for.
-        try call.audio.configureForCall()
-        call.audio.activated(AVAudioSession.sharedInstance())
-        defer { call.audio.deactivated(AVAudioSession.sharedInstance()) }
-        // The system's join opened a socket and a peer connection of its own, as far as it got.
-        let socketsBefore = sockets.connections
-        let connectionsBefore = peerConnections.created.count
-        // The call's sounds, as the engine cues them and the layer plays them on the session the
-        // test activated as CallKit would, into players in software (`setUp`): each is recorded
-        // as it starts, with the player's state and the session's category and mode then.
-        let sounds = SoundsSeen()
-        let soundsListening = await MainActor.run { call.audio.sounds.listen { sounds.add($0) } }
-        defer { soundsListening.cancel() }
-        call.engine.setMicrophone(track: microphone)
-        call.engine.join(channel: channel)
-        defer { call.engine.leave() }
+        defer {
+            // Whatever the test leaves standing: the engine's call, and the session the test
+            // activated in the simulator's stead.
+            call.engine.leave()
+            if systemCall == .ends {
+                call.audio.deactivated(AVAudioSession.sharedInstance())
+            }
+        }
         let connected = try await until("the call connects", seconds: 40, call) { $0.status == .connected }
         try await untilTrue("the joining is played", seconds: 10) { sounds.played.contains { $0.cue == .callJoined } }
         let joined = try XCTUnwrap(sounds.played.first { $0.cue == .callJoined })
@@ -318,31 +360,49 @@ final class CallEngineTests: XCTestCase {
         XCTAssertGreaterThan(after.energy, before.energy, "the tone's energy rises: \(before) then \(after)")
         XCTAssertGreaterThan(after.level, 0, "the tone has a level: \(after)")
 
-        // And the browser hears the simulator's microphone, the tone the audio device records:
-        // packets arrive and decode, and the sound off its track is well above silence.
+        // And the browser hears this side's microphone: packets arrive and decode, and the sound
+        // off its track is what the microphone carried, which the platform decides
+        // (`CallCheck.microphone`): the tone the audio device in software records, well above
+        // silence; or a phone's microphone, which hears the room, so the browser reports the level
+        // it hears, whatever it is, and nothing is asserted of how loud a room is.
         let browserBefore = try await browserInbound()
         try await Task.sleep(nanoseconds: 4_000_000_000)
         let browserAfter = try await browserInbound()
         XCTAssertGreaterThan(browserAfter.packets, browserBefore.packets, "the browser receives audio: \(browserBefore) then \(browserAfter)")
         XCTAssertGreaterThan(browserAfter.samples, browserBefore.samples, "and decodes it: \(browserBefore) then \(browserAfter)")
         let browserPeak = try await browserLoudness()
-        XCTAssertGreaterThan(browserPeak, 0.01, "and hears sound in it")
+        XCTAssertTrue(browserPeak.isFinite && browserPeak >= 0, "the browser reports a level: \(browserPeak)")
         let source = try await sourceAudio(connection)
+        switch microphoneKind {
+        case .tone:
+            XCTAssertGreaterThan(browserPeak, 0.01, "and hears the tone in it")
+        case .live:
+            XCTAssertTrue(source.level.isFinite && source.level >= 0, "this side's source reports its level: \(source)")
+        }
 
-        // The app's mute, which reaches the engine directly while the system holds no call of
-        // this engine's (and through a `CXSetMutedCallAction` while it does, which the simulator
-        // cannot show).
+        // The app's mute: through a `CXSetMutedCallAction` while the system holds this engine's
+        // call, as a phone's does, and directly while it holds none, as on the simulator.
         await MainActor.run { call.setMuted(true) }
         _ = try await until("the mute mutes", seconds: 10, call) { $0.muted }
         await MainActor.run { call.setMuted(false) }
         _ = try await until("the unmute unmutes", seconds: 15, call) { !$0.muted }
 
         // On hold, as `CallSystem` puts the call for CallKit's hold action and for an
-        // interruption (the simulator's CallKit holds no call to do it through): shown at once,
+        // interruption: on a phone, asked of the system as its own controls would
+        // (`CXSetHeldCallAction`, performed on the provider), on the simulator, whose CallKit
+        // holds no call to do it through, told to the engine as `applyHold` does. Shown at once,
         // confirmed by the server, which tells the browser, and the server sends neither side
         // the other's sound meanwhile. The release shows only on the server's word, and the
         // sound comes back with it.
-        call.engine.setHeld(held: true)
+        let holding: (Bool) async throws -> Void
+        switch systemCall {
+        case .ends:
+            holding = { call.engine.setHeld(held: $0) }
+        case .stands:
+            let controller = CXCallController()
+            holding = { try await controller.request(CXTransaction(action: CXSetHeldCallAction(call: systemCallId, onHold: $0))) }
+        }
+        try await holding(true)
         let held = try await until("the hold shows", seconds: 10, call) { $0.held }
         XCTAssertFalse(held.muted, "the hold is beside the mute, not a mute")
         try await untilReported("the browser sees the phone on hold", seconds: 15) { try await self.browserOnHold() == [user] }
@@ -354,14 +414,14 @@ final class CallEngineTests: XCTestCase {
         let heldBrowserLater = try await browserInbound()
         XCTAssertLessThan(heldPhoneLater.packets - heldPhone.packets, 20, "held, the phone is sent nothing: \(heldPhone) then \(heldPhoneLater)")
         XCTAssertLessThan(heldBrowserLater.packets - heldBrowser.packets, 20, "held, the browser is sent nothing: \(heldBrowser) then \(heldBrowserLater)")
-        call.engine.setHeld(held: false)
+        try await holding(false)
         _ = try await until("the server lifts the hold", seconds: 15, call) { !$0.held }
         try await untilReported("the browser sees the phone off hold", seconds: 15) { try await self.browserOnHold().isEmpty }
         let released = try await inboundAudio(connection)
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let releasedLater = try await inboundAudio(connection)
         XCTAssertGreaterThan(releasedLater.packets, released.packets + 50, "released, the sound comes back: \(released) then \(releasedLater)")
-        let hold = "held (the browser listed \(user) on hold; \(heldPhoneLater.packets - heldPhone.packets) packets reached the phone and \(heldBrowserLater.packets - heldBrowser.packets) the browser in 2 s) and released (\(releasedLater.packets - released.packets) packets in 2 s)"
+        let hold = "held \(systemCall == .stands ? "through the system's hold action" : "on the engine") (the browser listed \(user) on hold; \(heldPhoneLater.packets - heldPhone.packets) packets reached the phone and \(heldBrowserLater.packets - heldBrowser.packets) the browser in 2 s) and released (\(releasedLater.packets - released.packets) packets in 2 s)"
 
         // Video both ways. The browser shows video and turns its camera on (Chromium's fake camera,
         // a moving pattern); the engine is asked to watch it, gets a section for it, and its track
@@ -407,6 +467,7 @@ final class CallEngineTests: XCTestCase {
             try await untilMain("the picture in picture ends", seconds: 15) { pipSeen.values.last == false && !pip.isActive }
             pictureInPicture = "the picture in picture started on the browser's camera and stopped (\(pipSeen.values))"
         } else {
+            XCTAssertEqual(systemCall, .ends, "a phone supports the picture in picture")
             pictureInPicture = "the system here supports no picture in picture (AVPictureInPictureController.isPictureInPictureSupported is false on the simulator), so starting one is the device's to show"
         }
 
@@ -557,28 +618,42 @@ final class CallEngineTests: XCTestCase {
         await MainActor.run { CallEngine.video.apply([]) }
 
         // Leaving ends everything: the state is idle and the connection closed. `leave` goes
-        // through the system when it holds the call; here it holds none, so the engine's own.
+        // through the system's end action while it holds the call, as on a phone, where CallKit
+        // then deactivates the session (`didDeactivate`), and is the engine's own while it holds
+        // none, as on the simulator.
         await MainActor.run { call.leave() }
         let left = try await until("the call is left", seconds: 10, call) { $0.status == .idle }
         XCTAssertNil(left.session)
         XCTAssertTrue(left.slots.isEmpty)
         XCTAssertEqual(connection.connectionState(), .closed)
         XCTAssertNil(CallSystem.shared.latest.call)
+        if systemCall == .stands {
+            try await untilTrue("the system's call ends", seconds: 10) { calls.changes.contains { $0.uuid == systemCallId && $0.ended } }
+            try await untilTrue("the system deactivates the session (didDeactivate)", seconds: 15) { !CallSystem.shared.latest.audioActive }
+        }
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        // Leaving is the leaving sound, on the session the test still holds active, each transfer
-        // was its acceptance and its completion, and the resume within the grace was no loss: the
-        // joining as the engine connected and as the browser joined, the two transfers, then the
-        // leaving.
-        try await untilTrue("the leaving is played", seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
+        // Each transfer was its acceptance and its completion, and the resume within the grace was
+        // no loss: the joining as the engine connected and as the browser joined, the two
+        // transfers, then the leaving, which is played in full on the session the test holds
+        // active; on a phone CallKit deactivates the session soon after the end action, which
+        // drops a cue arriving after it, so there whether the leaving played is reported, and
+        // whether it is heard whole is the checklist's.
+        let leftPlayed = await waiting(seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
+        if systemCall == .ends {
+            XCTAssertTrue(leftPlayed, "the leaving is played")
+        }
         let played = sounds.played
         XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
+        let beforeLeaving: [SoundCue] = [.callJoined, .callJoined, .transferAccepted, .transferComplete, .transferAccepted, .transferComplete]
         XCTAssertEqual(
-            played.map(\.cue),
-            [.callJoined, .callJoined, .transferAccepted, .transferComplete, .transferAccepted, .transferComplete, .callLeft],
+            played.map(\.cue), beforeLeaving + (leftPlayed ? [.callLeft] : []),
             "each transfer is an acceptance and a completion, and a resume within the grace is no loss")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); \(files); resumed on socket 2 with session \(session ?? "?"), connected throughout, with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
+        let playedOn = systemCall == .ends
+            ? "the session the test activated in CallKit's stead, the simulator's audio server starting no output for a test process"
+            : "the session CallKit activated for the call"
+        print("call-engine-test: \(viaSystem); \(systemCall == .ends ? "then, driven directly, " : "")joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone (\(microphoneKind)) source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted\(systemCall == .stands ? " through the system's mute action" : ""); \(hold); \(video); \(pictureInPicture); \(files); resumed on socket 2 with session \(session ?? "?"), connected throughout, with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left\(systemCall == .stands ? " through the system's end action, which deactivated the session" : ""); the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on \(playedOn) (\(joined.category.rawValue), \(joined.mode.rawValue))\(leftPlayed ? "" : "; the leaving's cue came after the deactivation and was dropped")")
     }
 
     // MARK: Helpers
