@@ -21,11 +21,14 @@ export interface PickTarget {
   readonly id: string;
 }
 
-/** A pick: the text from `start` to `end` (UTF-16 offsets) stands for its target. */
-export interface Picked extends PickTarget {
+/** A stretch of text, from `start` to `end` (UTF-16 offsets). */
+export interface Span {
   readonly start: number;
   readonly end: number;
 }
+
+/** A pick: the text of its span stands for its target. */
+export interface Picked extends PickTarget, Span {}
 
 /** Text and the picks in it, in order of place, none overlapping another. */
 export interface PickedText {
@@ -36,11 +39,16 @@ export interface PickedText {
 export const NOTHING_WRITTEN: PickedText = { text: "", picks: [] };
 
 /**
- * The picks left once the text from `start` to `end` has given way to text `delta` longer:
+ * The spans left once the text from `start` to `end` has given way to text `delta` longer:
  * those before it as they were, those after it moved along, and those it reached into gone,
- * their text now only text. Text put in at a pick's edge is beside it, not in it.
+ * their text now only text. Text put in at a span's edge is beside it, not in it.
  */
-function carry(picks: readonly Picked[], start: number, end: number, delta: number): Picked[] {
+function carry<S extends Span>(
+  picks: readonly S[],
+  start: number,
+  end: number,
+  delta: number,
+): S[] {
   return picks.flatMap((pick) => {
     if (pick.end <= start) {
       return [pick];
@@ -114,8 +122,13 @@ function changeBefore(old: string, next: string, caret: number): Change | null {
  * the texts alone do not (a letter typed beside the same letter). Without it, or where it does
  * not account for the change, the change is taken to be the one stretch that differs, placed
  * wherever keeps the most picks: either placing leaves every kept pick's own text untouched.
+ * Any spans of the text are carried the same way, picks or not.
  */
-export function retype(held: PickedText, next: string, caret?: number): PickedText {
+export function retype<S extends Span>(
+  held: { readonly text: string; readonly picks: readonly S[] },
+  next: string,
+  caret?: number,
+): { readonly text: string; readonly picks: readonly S[] } {
   const old = held.text;
   if (next === old) {
     return held;
@@ -123,7 +136,7 @@ export function retype(held: PickedText, next: string, caret?: number): PickedTe
   const delta = next.length - old.length;
   const shorter = Math.min(old.length, next.length);
   const byCaret = caret === undefined ? null : changeBefore(old, next, caret);
-  let picks: Picked[];
+  let picks: S[];
   if (byCaret !== null) {
     picks = carry(held.picks, byCaret.start, byCaret.end, delta);
   } else {

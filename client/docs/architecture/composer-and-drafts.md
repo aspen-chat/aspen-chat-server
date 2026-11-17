@@ -21,6 +21,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Attaching files | `transferredContent.ts`, `DropZone`, `dropZoneContext.ts`, `src/api/keyboardContent.ts`     |
 | Photos, camera  | `src/api/mediaBridge.ts`, the `AspenMedia` plugin in each mobile app                        |
 | Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)                     |
+| Emoticons       | `emoticons.ts`, `useEmoticons` (`src/features/emoji`); the setting is `EMOTICON_EMOJI`      |
 
 ## Layout
 
@@ -162,6 +163,33 @@ being edited.
   focus to the box at once.
 - **Beside the form, not in it** (`MessageBox` holds the form in a local and draws the keyboard
   after it). **Why:** Enter in the picker's search would submit the form and send the message.
+
+## Emoticons
+
+Emoticons typed in the message box, and in the message editor, become emoji (`useEmoticons`, over
+the pure `emoticons.ts`) while `EMOTICON_EMOJI` is on, which it is until the user turns it off under
+Settings, Messages. It follows the account, on every device and every deployment they use.
+
+- **Which:** `EMOTICONS`, a fixed list (`:)` → 🙂, `<3` → ❤️, `>:(` → 😠, and the rest), found
+  longest first. `8)` and `B)` are not among them, since they begin numbered and lettered lists, nor
+  `D:`, a drive.
+- **When:** as the character after an emoticon is typed, if it is a space, a line's end, or
+  punctuation, and the emoticon stands on its own (at the start or after a space, so `http:/` and
+  `a:p` stay). Only one character typed at the caret converts: a paste, a deletion, or text put in
+  by a completion does not. An emoticon left at the end, with nothing typed after it, becomes its
+  emoji as the message is sent (`outgoing`), and the length shown counts it so.
+- **Where not:** in code, as Markdown reads it (`inCode`, with `remark-parse`): a code span or
+  block, or one still being written, which closing a run of backticks opened before the emoticon
+  would make. Not over a pick, whose text stays as picked, and not on a command line.
+- **Taking it back:** Backspace next, before anything else is typed or the caret moves, puts the
+  emoticon back as it was typed, deleting nothing, caret where it was. It is heard as `beforeinput`
+  (`deleteContentBackward`), which every keyboard reports, a phone's included, where `keydown` often
+  names no key. The emoticon put back stays as typed while it stands in the box, even when the
+  character after it is typed again: its span is carried along with the text as picks are
+  (`retype`). That is the box's alone and is not kept with its draft.
+- **Editing:** the emoticons a sent message holds when its edit opens stay as written; only what is
+  typed into it converts.
+- **Composing:** nothing converts while an input method is composing.
 
 ## Replying to a message
 

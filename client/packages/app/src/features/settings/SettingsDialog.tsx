@@ -31,6 +31,7 @@ import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { FontsSection } from "@/features/settings/FontsSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
 import { NotificationsSection } from "@/features/settings/NotificationsSection";
+import { MessagesSection } from "@/features/settings/MessagesSection";
 import { PrivacySection } from "@/features/settings/PrivacySection";
 import { AccessNotice, DeviceSelect } from "@/features/settings/DeviceSelect";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
@@ -53,12 +54,12 @@ import { ZoomSlider } from "@/features/settings/ZoomSlider";
  * sounds, kept with this install; whether this install notifies with the system and a sound; the
  * language, kept with the account; the appearance: the theme, palette, contrast, zoom, and whether
  * names take their roles' colours, kept with this install, and the message text size, line
- * spacing, and animation speed, kept with the account; whether new messages are read out, and the
- * fonts text and code are drawn in, kept with this install; whether others see the user typing,
- * kept with the account; the people the user has blocked; developer mode, with the user's bots;
- * and, beneath them, the way out of the account and the button that opens About Aspen. The small
- * planes follow Audio and video so they fill the first column beneath it rather than leave it
- * short. Sections for account-wide preferences slot in beside them.
+ * spacing, and animation speed, kept with the account; whether emoticons typed become emoji, kept
+ * with the account; whether new messages are read out, and the fonts text and code are drawn in,
+ * kept with this install; whether others see the user typing, kept with the account; the people
+ * the user has blocked; developer mode, with the user's bots; and, beneath them, the way out of
+ * the account and the button that opens About Aspen. The small planes follow Audio and video so
+ * they fill the first column beneath it rather than leave it short. Sections for account-wide preferences slot in beside them.
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
   const m = useMessages();
@@ -99,6 +100,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                     <NameColorsCheckbox />
                     <TitleBarCheckbox />
                   </section>
+                  <MessagesSection />
                   <AccessibilitySection />
                   <FontsSection />
                   <PrivacySection />

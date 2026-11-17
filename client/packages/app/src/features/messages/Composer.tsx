@@ -42,6 +42,7 @@ import {
 } from "react-aria-components";
 import { EmojiKeyboard } from "@/features/emoji/EmojiKeyboard";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
+import { useEmoticons } from "@/features/emoji/useEmoticons";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
 import {
@@ -305,6 +306,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     off: commands.active,
   });
   const box = useRef<HTMLTextAreaElement>(null);
+  const emoticons = useEmoticons({ written, box, off: commands.active });
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
   // On a touch screen the emoji keyboard stands in the phone's keyboard's place, and goes as
@@ -442,7 +444,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const encode = (trimmed: PickedText) =>
     encodePicked(trimmed, (text) => encodeCustomEmoji(text, emoji.custom));
   // Counted as sent, tags and custom emoji written out as their references.
-  const length = messageLength(encode(trimPicked(written.held)));
+  const length = messageLength(encode(trimPicked(emoticons.outgoing(written.held))));
   const canSend =
     !sending &&
     length <= MESSAGE_MAX_CHARS &&
@@ -789,7 +791,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     let handed: Awaited[] = [];
     let sent = false;
     try {
-      const trimmed = trimPicked(written.held);
+      const trimmed = trimPicked(emoticons.outgoing(written.held));
       const { text } = trimmed;
       // A line beginning with `/` is read against the commands here, which it may be sent
       // before they have been read.
@@ -1352,7 +1354,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           aria-label={m.messageLabel}
           value={draft}
           onChange={(next) => {
-            written.type(next, box.current?.selectionStart);
+            emoticons.type(next, box.current?.selectionStart);
           }}
           className="message-text relative min-w-0 flex-1"
         >

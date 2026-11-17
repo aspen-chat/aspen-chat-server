@@ -227,6 +227,17 @@ export const TYPING_NOTICES: PreferenceDefinition<boolean> = {
 };
 
 /**
+ * Whether a message box turns emoticons typed in it into emoji (`:)` into 🙂). On unless the
+ * user turns it off. It follows the account, so it holds on every device they use.
+ */
+export const EMOTICON_EMOJI: PreferenceDefinition<boolean> = {
+  key: "composing.emoticonEmoji",
+  scope: "account",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
+/**
  * The ID wizard, a part of developer mode: while both are on, everything with an id offers to
  * copy it, last in whatever shows it. On with developer mode unless turned off.
  */

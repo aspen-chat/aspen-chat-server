@@ -8,6 +8,7 @@ import { useAttachments, useSync } from "@/api/hooks";
 import { encodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { EmojiKeyboard } from "@/features/emoji/EmojiKeyboard";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
+import { useEmoticons } from "@/features/emoji/useEmoticons";
 import { decodePicked, encodePicked, trimPicked, usePickedText } from "@/features/messages/picks";
 import { useTagging } from "@/features/mentions/useTagging";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
@@ -62,6 +63,8 @@ export function MessageEditor({
   const tagging = useTagging({ channelId, draft, splice: written.splice });
   const emoji = useEmojiCompletion({ channelId, draft, splice: written.splice });
   const box = useRef<HTMLTextAreaElement>(null);
+  // What the message said stays as it was written; only what is typed now converts.
+  const emoticons = useEmoticons({ written, box, kept: decoded.text });
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
   // As the message box's: on a touch screen the emoji keyboard goes with the keyboard.
@@ -73,7 +76,7 @@ export function MessageEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const content = encodePicked(trimPicked(written.held), (text) =>
+  const content = encodePicked(trimPicked(emoticons.outgoing(written.held)), (text) =>
     encodeCustomEmoji(text, emoji.custom),
   );
   const length = messageLength(content);
@@ -143,7 +146,7 @@ export function MessageEditor({
         aria-label={m.editMessageLabel}
         value={draft}
         onChange={(next) => {
-          written.type(next, box.current?.selectionStart);
+          emoticons.type(next, box.current?.selectionStart);
         }}
         autoFocus
         className="relative"
