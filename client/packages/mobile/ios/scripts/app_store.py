@@ -18,7 +18,8 @@ extension, and each must hold the identity's certificate.
 
 `--build-number` is the bundle version both bundles carry, which must grow with each upload of
 one marketing version. `--relay` is the push relay the build names (`AspenPushRelay`, see
-`spec/push.md`); without it the build has no push. The archive and the exported `.ipa` are
+`spec/push.md`); without it, or given empty, the build names the project's own,
+`https://notify.aspen-chat.com`. The archive and the exported `.ipa` are
 written under `--out`, `target/ios-app-store/` by default.
 """
 
@@ -215,7 +216,8 @@ def archive(args, work: Path, keychain: Keychain | None, identity: str, profiles
     run("xcodebuild", "-project", "App.xcodeproj", "-scheme", "App", "-configuration", "Release",
         "-destination", "generic/platform=iOS", "-archivePath", str(args.out / "App.xcarchive"),
         "-xcconfig", str(settings),
-        f"CURRENT_PROJECT_VERSION={args.build_number}", f"ASPEN_PUSH_RELAY={args.relay}",
+        f"CURRENT_PROJECT_VERSION={args.build_number}",
+        *([f"ASPEN_PUSH_RELAY={args.relay}"] if args.relay else []),
         *([f"OTHER_CODE_SIGN_FLAGS=--keychain {keychain.path}"] if keychain else []),
         "archive", cwd=IOS / "App")
 

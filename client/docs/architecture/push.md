@@ -65,7 +65,8 @@ A `notice` pointer:
 
 A build pushes only with both:
 
-- a relay in the `aspen_push_relay` string;
+- a relay in the `aspen_push_relay` string, `https://notify.aspen-chat.com` (Bitcrafters LLC's)
+  unless a publisher changes it;
 - a `google-services.json` from its publisher's Firebase project.
 
 A build naming no relay registers for nothing. `describe` refuses there, before the app asks.
@@ -80,8 +81,9 @@ A build naming no relay registers for nothing. `describe` refuses there, before 
 - the bundle id;
 - the sandbox, for a debug build;
 - the relay that `AspenPushRelay` in `Info.plist` names. It comes from the build setting
-  `ASPEN_PUSH_RELAY`, given on the `xcodebuild` command line or in a publisher's project. Empty,
-  like Android's string, the build has no push.
+  `ASPEN_PUSH_RELAY`, which the app target sets to `https://notify.aspen-chat.com` and the
+  `xcodebuild` command line or a publisher's project may replace. Empty, like Android's string, the
+  build has no push.
 
 ### State
 

@@ -114,8 +114,9 @@ network.
 on the attached phone, the push handler's device tests, which post real notifications.
 
 **Push** works only in a build with a relay in the `aspen_push_relay` string
-(`app/src/main/res/values/strings.xml`) and a `google-services.json` from the publisher's Firebase
-project; without them the app registers for nothing (see `docs/architecture/push.md`).
+(`app/src/main/res/values/strings.xml`, `https://notify.aspen-chat.com` unless changed) and a
+`google-services.json` from the publisher's Firebase project; without them the app registers for
+nothing (see `docs/architecture/push.md`).
 
 ## License
 

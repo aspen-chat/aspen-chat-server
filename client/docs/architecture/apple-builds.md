@@ -80,7 +80,7 @@ Two repository variables, which are not secret:
 | Variable            | Effect                                                                                                    |
 | ------------------- | --------------------------------------------------------------------------------------------------------- |
 | `TESTFLIGHT_UPLOAD` | `true` sends each `main` build to App Store Connect. Anything else exports the signed `.ipa` and keeps it |
-| `ASPEN_PUSH_RELAY`  | The relay the iOS build names (`spec/push.md`). Unset, the build has no push                              |
+| `ASPEN_PUSH_RELAY`  | The relay the iOS build names (`spec/push.md`). Unset, the project's own, `https://notify.aspen-chat.com` |
 
 When a certificate is renewed, its profiles must be made again with the new one, and all three
 secrets replaced. `app_store.py` names the profile that has expired or lacks the identity's
