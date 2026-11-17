@@ -67,7 +67,9 @@ A build pushes only with both:
 
 - a relay in the `aspen_push_relay` string, `https://notify.aspen-chat.com` (Bitcrafters LLC's)
   unless a publisher changes it;
-- a `google-services.json` from its publisher's Firebase project.
+- a `google-services.json` from its publisher's Firebase project, in `android/app/`. The repository
+  carries Bitcrafters LLC's (project `aspen-chat-713fa`), which identifies the project and holds no
+  secret: only the relay's service account can send to it.
 
 A build naming no relay registers for nothing. `describe` refuses there, before the app asks.
 

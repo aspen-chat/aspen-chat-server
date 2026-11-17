@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "305354923508",
+    "project_id": "aspen-chat-713fa",
+    "storage_bucket": "aspen-chat-713fa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:305354923508:android:eb78b4a2d701ebb28d6da1",
+        "android_client_info": {
+          "package_name": "com.aspen_chat.client"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDt7pW0tDH1K4xbj7UCPCqBvMlEYrxCGv0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
