@@ -27,7 +27,13 @@ import {
   type PasskeyPurpose,
   type PasskeyTransport,
 } from "./passkeys";
-import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
+import {
+  ApiProblemError,
+  UnreachableError,
+  isProblem,
+  transportProblem,
+  type Problem,
+} from "./problem";
 import { ServerClock, type ClockOffsetStore } from "./serverClock";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
 import { API_PREFIX, requireSecure } from "./urls";
@@ -40,8 +46,12 @@ import type { PasskeyHandoff } from "./passkeys";
 
 export type Paths = paths;
 
-/** How earning a device credential ended: refused, the puzzle being one this client won't solve. */
-type Earning = "earned" | "failed" | DevicePuzzleRefusedError;
+/**
+ * How earning a device credential ended: earned; refused, the puzzle being one this client won't
+ * solve; or failed, with the answer to the step that failed, unread, which callers are given in
+ * place of the refusal that sent them to earn one.
+ */
+type Earning = "earned" | DevicePuzzleRefusedError | { failed: Response };
 export type Schemas = components["schemas"];
 
 /** The openapi-fetch client for the Aspen REST API. Every call is typed by path and method. */
@@ -178,7 +188,15 @@ export class AspenClient {
   constructor(options: AspenClientOptions) {
     this.baseUrl = requireSecure(options.baseUrl);
     this.#store = options.sessionStore;
-    const fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    const given = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    // A request that gets no answer rejects as `UnreachableError`; one stopped by its signal
+    // stays the `AbortError` it was.
+    const fetch: typeof globalThis.fetch = (input, init) =>
+      given(input, init).catch((error: unknown) => {
+        throw error instanceof DOMException && error.name === "AbortError"
+          ? error
+          : new UnreachableError(this.baseUrl, { cause: error });
+      });
     this.#fetch = (input, init) => {
       const languages = acceptLanguage();
       if (languages === null) {
@@ -1080,7 +1098,10 @@ export class AspenClient {
   /**
    * A request without a session, which presents this server's device credential. Refused for
    * lacking one, it earns one and is sent once more. Throws `DevicePuzzleRefusedError` when the
-   * server's puzzle is one this client will not solve.
+   * server's puzzle is one this client will not solve, and `UnreachableError` when a step of
+   * earning one got no answer. When a step was answered with a failure (the server busy, or too
+   * many asked of it), the caller is given that answer, which says what went wrong, rather than
+   * the refusal that only says a credential was needed.
    */
   async #anonymousFetch(request: Request): Promise<Response> {
     const retry = request.clone();
@@ -1096,7 +1117,8 @@ export class AspenClient {
       throw earning;
     }
     if (earning !== "earned") {
-      return response;
+      // Every caller refused together shares one earning, so each reads a copy of its answer.
+      return earning.failed.clone();
     }
     return this.#fetchAsDevice(retry);
   }
@@ -1120,21 +1142,35 @@ export class AspenClient {
    * `PUZZLE_TIME_LIMIT_MS`, is refused.
    */
   async #earnDevice(): Promise<Earning> {
-    const raw = (request: Request) => this.#fetch(request);
+    // openapi-fetch reads each answer's body, so an unread copy of the last is kept to give on.
+    let last: Response | null = null;
+    const raw = async (request: Request) => {
+      const response = await this.#fetch(request);
+      last = response.clone();
+      return response;
+    };
+    const failed = (): Earning => {
+      if (last === null) {
+        throw new Error("earning a device credential failed before any answer");
+      }
+      return { failed: last };
+    };
     for (let attempt = 0; attempt < 2; attempt++) {
       const asked = await this.api.POST("/api/v1/auth/device-challenges", { fetch: raw });
       if (asked.data === undefined) {
-        return "failed";
+        return failed();
       }
       const { challenge, difficulty } = asked.data;
       if (!Number.isInteger(difficulty) || difficulty < 0 || difficulty > MAX_PUZZLE_BITS) {
         return new DevicePuzzleRefusedError(
+          this.baseUrl,
           `${this.baseUrl} asks for ${String(difficulty)} bits, more than ${String(MAX_PUZZLE_BITS)}`,
         );
       }
       const nonce = await this.#solveInTime(decodeChallenge(challenge), difficulty);
       if (nonce === null) {
         return new DevicePuzzleRefusedError(
+          this.baseUrl,
           `${this.baseUrl}'s puzzle was not solved within ${String(PUZZLE_TIME_LIMIT_MS / 1000)} seconds`,
         );
       }
@@ -1147,10 +1183,10 @@ export class AspenClient {
         return "earned";
       }
       if (problemOf(earned.error, earned.response).code !== "deviceChallengeInvalid") {
-        return "failed";
+        return failed();
       }
     }
-    return "failed";
+    return failed();
   }
 
   /**

@@ -14,6 +14,8 @@ import { Button, FieldError, Form, Input, Label, TextField } from "react-aria-co
 import { useAspenClient } from "@/api/context";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import type { Messages } from "@/i18n/messages";
+import { failureText } from "./failureText";
 import { OtherDeviceSignIn } from "./OtherDeviceSignIn";
 import { usePasskeyTransport } from "./passkeyTransport";
 import { useConditionalPasskey } from "./useConditionalPasskey";
@@ -40,11 +42,8 @@ type Step =
   | { kind: "providerAccount"; offer: AccountOffer; account: PendingAccount };
 
 /** Why an attempt failed, as the form shows it; `null` when the user backed out. */
-function failure(e: unknown): string | null {
-  if (e instanceof PasskeyCancelledError) {
-    return null;
-  }
-  return e instanceof ApiProblemError ? e.message : String(e);
+function failure(e: unknown, m: Messages): string | null {
+  return e instanceof PasskeyCancelledError ? null : failureText(e, m);
 }
 
 /**
@@ -53,8 +52,8 @@ function failure(e: unknown): string | null {
  * which may ask for a second factor in the same way, or a username for a new account
  * (`ProviderAccountStep`); or another device, by a QR code (`OtherDeviceSignIn`). Where the
  * deployment sends email, a forgotten password is reset by a code mailed to the account's address
- * (`PasswordReset`). Failures show the server's localized Problem text. Which server it is shows
- * above it (`DeploymentWelcome`).
+ * (`PasswordReset`). Failures show the server's localized Problem text, or say the server could
+ * not be reached (`failureText`). Which server it is shows above it (`DeploymentWelcome`).
  */
 export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
   const transport = usePasskeyTransport();
@@ -170,7 +169,7 @@ function PasswordStep({
         onSecondFactor(outcome.ticket, outcome.methods);
       }
     } catch (e) {
-      setError(failure(e));
+      setError(failure(e, m));
     } finally {
       setPending(null);
     }
@@ -183,7 +182,7 @@ function PasswordStep({
     try {
       await client.runPasskeyCeremony({ purpose: "signIn" }, transport);
     } catch (e) {
-      setError(failure(e));
+      setError(failure(e, m));
     } finally {
       setPending(null);
     }
@@ -269,7 +268,7 @@ function PasswordStep({
         }}
         onOutcome={onProviderOutcome}
         onError={(e) => {
-          setError(failure(e));
+          setError(failure(e, m));
         }}
       />
       <OtherDeviceSignIn className={outlineButtonClass} />
@@ -318,7 +317,7 @@ export function SecondFactorStep({
         onStartOver(e.message);
         return;
       }
-      setError(failure(e));
+      setError(failure(e, m));
     } finally {
       setPending(false);
     }

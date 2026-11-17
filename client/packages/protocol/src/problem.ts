@@ -44,6 +44,21 @@ export class ApiProblemError extends Error {
 }
 
 /**
+ * A request to `server` (a deployment's origin) that got no answer at all: the network, its name,
+ * its TLS, or the server itself failed before any HTTP response arrived. An answer, however
+ * unwelcome, is never this.
+ */
+export class UnreachableError extends Error {
+  readonly server: string;
+
+  constructor(server: string, options?: ErrorOptions) {
+    super(`${server} could not be reached`, options);
+    this.name = "UnreachableError";
+    this.server = server;
+  }
+}
+
+/**
  * Wraps a transport-level failure (the network was unreachable, the response was not JSON) in a
  * Problem so callers have one error shape to handle.
  */

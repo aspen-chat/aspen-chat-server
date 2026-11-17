@@ -1,6 +1,6 @@
 import { ApiProblemError } from "@aspen/protocol";
 import { Link, useLocation } from "@tanstack/react-router";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { Button } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -9,6 +9,7 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { Caution } from "./DeviceLinkCode";
+import { failureText } from "./failureText";
 import { thisDeviceName } from "./deviceName";
 import { useServerChoice } from "./serverChoice";
 import { scanOnce } from "./takenLinks";
@@ -39,10 +40,6 @@ type Phase =
   | { kind: "waiting"; account: string; verifier: string }
   | { kind: "failed"; message: string };
 
-function messageOf(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
-
 /**
  * What a scanned or typed sign-in code (`/device-link`) does on the device that took it. Signed in, it is a computer
  * asking for this account: the phone names it, warns that a stranger's code is a trap, and signs
@@ -71,6 +68,12 @@ export function DeviceLinkScreen({
 
 function DeviceLinkSteps({ server, id }: { server: string; id: string }) {
   const m = useMessages();
+  // The polling below says a failure in the language shown when it fails, without restarting
+  // when the language changes.
+  const words = useRef(m);
+  useEffect(() => {
+    words.current = m;
+  });
   const client = useAspenClient();
   const { switchServer } = useServerChoice();
   const signedIn = client.session !== null;
@@ -116,7 +119,7 @@ function DeviceLinkSteps({ server, id }: { server: string; id: string }) {
           message:
             e instanceof ApiProblemError && e.code === "unauthorized"
               ? m.deviceLink.needsSignedInPhone
-              : messageOf(e),
+              : failureText(e, m),
         });
       },
     );
@@ -143,7 +146,7 @@ function DeviceLinkSteps({ server, id }: { server: string; id: string }) {
         (e: unknown) => {
           window.clearInterval(timer);
           if (!stopped) {
-            setPhase({ kind: "failed", message: messageOf(e) });
+            setPhase({ kind: "failed", message: failureText(e, words.current) });
           }
         },
       );
@@ -230,7 +233,7 @@ function DeviceLinkSteps({ server, id }: { server: string; id: string }) {
                     });
                   },
                   (e: unknown) => {
-                    setPhase({ kind: "failed", message: messageOf(e) });
+                    setPhase({ kind: "failed", message: failureText(e, m) });
                   },
                 );
               }}

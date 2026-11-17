@@ -33,6 +33,13 @@ own.
   started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the workers.
   The requests waiting on it then fail with `DevicePuzzleRefusedError`, as if the deployment could
   not be reached, so the earning always settles.
+- When earning fails, the requests waiting on it get why, not the refusal that sent them to earn
+  one: a step answered with a failure (`rateLimited`, `serverBusy`, a redemption refused) is given
+  to each of them as its own answer, and a step that got no answer at all fails them with
+  `UnreachableError`, which `AspenClient` throws for any request that gets none.
+- The signed-out screens show a failure through `failureText` (`src/features/auth`): a refusal in
+  the server's words, and `UnreachableError` or `DevicePuzzleRefusedError` as the deployment's host
+  not being reached, with what to do (`serverUnreachable`).
 - The first request a new install makes that needs one waits for it, `GET /auth/methods` among them,
   while the person reads the welcome. `GET /deployment` needs none, so the welcome never waits for a
   puzzle.

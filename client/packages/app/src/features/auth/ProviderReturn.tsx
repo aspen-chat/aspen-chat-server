@@ -1,5 +1,4 @@
 import {
-  ApiProblemError,
   parseProviderFragment,
   type AccountOffer,
   type AspenClient,
@@ -15,6 +14,7 @@ import { useAspenClient, useSession } from "@/api/context";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { toast } from "@/features/layout/toast";
 import { useMessages } from "@/i18n/context";
+import { failureText } from "./failureText";
 import { format } from "@/i18n/messages";
 import { takeFlow, type StartedFlow } from "./identityProviders";
 import { SecondFactorStep } from "./LoginForm";
@@ -147,11 +147,7 @@ export function ProviderReturn() {
         setPhase({
           kind: "failed",
           message:
-            e instanceof NotStartedHere
-              ? m.identityProviders.notStartedHere
-              : e instanceof ApiProblemError
-                ? e.message
-                : String(e),
+            e instanceof NotStartedHere ? m.identityProviders.notStartedHere : failureText(e, m),
         });
       },
     );

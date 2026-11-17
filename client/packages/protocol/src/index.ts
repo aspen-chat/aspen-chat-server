@@ -83,6 +83,7 @@ export {
 export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,
+  UnreachableError,
   isProblem,
   transportProblem,
   type Problem,

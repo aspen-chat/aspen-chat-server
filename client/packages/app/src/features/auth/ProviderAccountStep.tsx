@@ -6,6 +6,7 @@ import { useEmailPolicy } from "@/features/email/policy";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { failureText } from "./failureText";
 import { format } from "@/i18n/messages";
 import {
   alertClass,
@@ -67,7 +68,7 @@ export function ProviderAccountStep({
       });
     } catch (e) {
       if (!(e instanceof ApiProblemError)) {
-        setError(String(e));
+        setError(failureText(e, m));
       } else if (e.code === "usernameTaken") {
         setUsernameError(e.message);
       } else if (
