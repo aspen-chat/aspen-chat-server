@@ -98,11 +98,17 @@ export {
 } from "./serverClock";
 export {
   MemorySessionStore,
+  SESSION_KEY,
+  SessionVault,
   WebStorageSessionStore,
+  dropLegacySessions,
   isSession,
   sessionTokenExpiresSoon,
   type Session,
   type SessionStore,
+  type VaultBackend,
+  type VaultOpening,
+  type VaultRead,
 } from "./session";
 export {
   EventStream,

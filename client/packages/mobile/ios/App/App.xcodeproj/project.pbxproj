@@ -28,6 +28,7 @@
 		A5E000000000000000000121 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
 		A5E000000000000000000122 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
 		A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000103 /* AspenPushPlugin.swift */; };
+		A5E0000000000000000001F1 /* AspenSecretsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000001F0 /* AspenSecretsPlugin.swift */; };
 		A5E000000000000000000124 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
 		A5E000000000000000000125 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
 		A5E000000000000000000126 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000104 /* NotificationService.swift */; };
@@ -79,6 +80,7 @@
 		A5E000000000000000000101 /* WebPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPush.swift; sourceTree = "<group>"; };
 		A5E000000000000000000102 /* PushState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushState.swift; sourceTree = "<group>"; };
 		A5E000000000000000000103 /* AspenPushPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenPushPlugin.swift; sourceTree = "<group>"; };
+		A5E0000000000000000001F0 /* AspenSecretsPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenSecretsPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000104 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		A5E000000000000000000105 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A5E000000000000000000106 /* AspenNotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AspenNotificationService.entitlements; sourceTree = "<group>"; };
@@ -154,6 +156,7 @@
 				A5E000000000000000000085 /* UploadCenter.swift */,
 				A5E000000000000000000087 /* UploadStore.swift */,
 				A5E000000000000000000103 /* AspenPushPlugin.swift */,
+				A5E0000000000000000001F0 /* AspenSecretsPlugin.swift */,
 				A5E000000000000000000107 /* App.entitlements */,
 				A5E000000000000000000108 /* Localizable.strings */,
 				A5E000000000000000000175 /* InfoPlist.strings */,
@@ -362,6 +365,7 @@
 				A5E000000000000000000084 /* UploadCenter.swift in Sources */,
 				A5E000000000000000000086 /* UploadStore.swift in Sources */,
 				A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */,
+				A5E0000000000000000001F1 /* AspenSecretsPlugin.swift in Sources */,
 				A5E000000000000000000121 /* WebPush.swift in Sources */,
 				A5E000000000000000000122 /* PushState.swift in Sources */,
 			);

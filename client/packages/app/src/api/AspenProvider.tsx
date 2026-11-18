@@ -1,7 +1,8 @@
-import { AspenClient, WebStorageSessionStore } from "@aspen/protocol";
+import { AspenClient } from "@aspen/protocol";
 import { useMemo, type ReactNode } from "react";
 import { AspenClientContext, HomeClientContext } from "./context";
 import { clockStore, deviceStore, solveInWorkers } from "./devices";
+import { sessionStore } from "./sessions";
 
 /**
  * Owns the `AspenClient` for the chosen server, the user's home. A new server address means a
@@ -12,7 +13,7 @@ export function AspenProvider({ serverUrl, children }: { serverUrl: string; chil
     () =>
       new AspenClient({
         baseUrl: serverUrl,
-        sessionStore: new WebStorageSessionStore(window.localStorage),
+        sessionStore: sessionStore(),
         deviceStore: deviceStore(serverUrl),
         clockStore: clockStore(serverUrl),
         solvePuzzle: solveInWorkers,

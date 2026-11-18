@@ -25,6 +25,8 @@ finish-args:
   # The capture helper finds the applications playing sound, and takes one's, through PipeWire.
   - --filesystem=xdg-run/pipewire-0
   - --talk-name=org.freedesktop.Notifications
+  # Saved sign-ins are encrypted with a key kept in the desktop's keyring.
+  - --talk-name=org.freedesktop.secrets
 modules:
   - name: aspen
     buildsystem: simple

@@ -32,6 +32,16 @@
   "orDivider": "or",
   "passkeyWaiting": "Waiting for your passkey…",
   "passkeyWaitingBrowser": "Continue in your browser…",
+  "savedSignIns": {
+    "opening": "Opening your saved sign-ins",
+    "unavailableHeading": "Your sign-ins can't be saved safely here",
+    "unavailableBody": "Aspen saves sign-ins only in your system's secure storage, and none is available. On Linux, that means a keyring such as GNOME Keyring or KWallet. Start one and try again, or continue and sign in each time you open Aspen.",
+    "unreadableHeading": "Your saved sign-ins couldn't be opened",
+    "unreadableBody": "Your system's secure storage is locked or refused Aspen. Unlock it and try again. If it was reset, start over: Aspen forgets the sign-ins saved on this device, and you sign in again.",
+    "tryAgain": "Try again",
+    "continueWithoutSaving": "Continue without saving",
+    "startOver": "Start over"
+  },
   "deployments": {
     "notSignedIn": "You aren't signed in at {domain}. Sign in there with your account from home?",
     "signIn": "Sign in",

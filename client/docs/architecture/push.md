@@ -90,7 +90,8 @@ The project is `packages/mobile/android`.
 
 ### Parts
 
-- `AspenPushPlugin` holds the state in the app's private storage.
+- `AspenPushPlugin` holds the state sealed under an Android Keystore key (`PushStore`,
+  `SecretStore`).
 - `AspenMessagingService` takes the place of the push plugin's FCM service; the manifest removes
   that one. It hands that service anything that is not a relay push.
 

@@ -19,6 +19,7 @@ class MainViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(AspenFilesPlugin())
         bridge?.registerPluginInstance(AspenPushPlugin())
+        bridge?.registerPluginInstance(AspenSecretsPlugin())
         bridge?.registerPluginInstance(AspenNavigationPlugin())
         bridge?.registerPluginInstance(AspenAgePlugin())
         bridge?.registerPluginInstance(AspenAudioRoutePlugin())

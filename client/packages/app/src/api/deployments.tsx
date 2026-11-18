@@ -1,10 +1,4 @@
-import {
-  AspenClient,
-  AspenSync,
-  Deployments,
-  WebStorageSessionStore,
-  deploymentUrl,
-} from "@aspen/protocol";
+import { AspenClient, AspenSync, Deployments, SESSION_KEY, deploymentUrl } from "@aspen/protocol";
 import { ArrowClockwiseIcon, GlobeIcon } from "@phosphor-icons/react";
 import {
   useContext,
@@ -26,6 +20,7 @@ import {
   useForeignDeployments,
 } from "./deploymentsContext";
 import { guardSending } from "./sendingGuard";
+import { sessionStore } from "./sessions";
 import { tellUploadFailures } from "./uploadFailures";
 import { nativeSendsUploads, nativeUploadTransport } from "./uploadsBridge";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
@@ -38,7 +33,7 @@ import { format } from "@/i18n/messages";
  * an account signed in later on the same browser never picks up another's sessions.
  */
 function sessionKey(homeUser: string, domain: string): string {
-  return `aspen.session.${homeUser}@${domain}`;
+  return `${SESSION_KEY}.${homeUser}@${domain}`;
 }
 
 /**
@@ -64,10 +59,7 @@ export function DeploymentsProvider({
         client: (domain) =>
           new AspenClient({
             baseUrl: deploymentUrl(domain),
-            sessionStore: new WebStorageSessionStore(
-              window.localStorage,
-              sessionKey(home.session?.userId ?? "", domain),
-            ),
+            sessionStore: sessionStore(sessionKey(home.session?.userId ?? "", domain)),
             deviceStore: deviceStore(deploymentUrl(domain)),
             clockStore: clockStore(deploymentUrl(domain)),
             solvePuzzle: solveInWorkers,

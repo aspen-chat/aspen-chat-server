@@ -13,8 +13,36 @@
 | Android's own passkeys         | `nativePasskeys.ts` (`src/features/auth`), `AspenPasskeysPlugin` (`packages/mobile/android`)                                                                           |
 | Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName`                                                                                            |
 | Email                          | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel`                                                             |
+| Saved sign-ins                 | `SessionVault` (`packages/protocol/src/session.ts`), `src/api/sessions.ts`, `SavedSignInsGate`, `packages/desktop/src/main/secrets.ts`, `AspenSecrets` on each phone   |
 | Device credentials             | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts`                                                        |
 | Identity providers             | `identityProviders.ts` (`packages/protocol/src`), `src/features/auth`: `identityProviders.ts`, `IdentityProviderButtons`, `ProviderReturn`, `ProviderAccountStep`      |
+
+## Saved sign-ins
+
+A session's refresh token lasts about a year, so the apps keep sessions only encrypted by the
+system. A browser tab has no key of the system's and keeps them in `localStorage`.
+
+| Shell   | Kept in                                                                                                   |
+| ------- | --------------------------------------------------------------------------------------------------------- |
+| Desktop | `sessions.enc` in the profile, encrypted through `safeStorage` (Keychain, DPAPI, Secret Service, KWallet) |
+| Android | Private preferences sealed under an Android Keystore key (`SecretStore`)                                  |
+| iOS     | A keychain item of the app's own access group, on this device only                                        |
+
+- `AspenClient` reads its session as it is made, so `SavedSignInsGate` opens the `SessionVault`
+  before the app starts. The vault holds every session in memory and writes changes behind it, in
+  order.
+- Sessions an earlier version left in `localStorage` move into the vault, and leave `localStorage`
+  once the vault has kept them.
+- On Linux a locked keyring may ask for its password once, as the app opens.
+- Without a running keyring, Chromium on Linux encrypts with a fixed key while reporting a store.
+  The desktop app takes only ciphertext made with a keyring's key (`isKeyringCiphertext`), and
+  otherwise says none is available.
+- With no secure storage, the gate offers Try again and Continue without saving, whose sessions last
+  until the app closes. With contents the system will not open, it offers Try again and Start over,
+  which forgets them. Neither ever writes a session unencrypted.
+
+The phones' other holders of sessions are encrypted the same way: push state and native uploads
+(`SecretStore` on Android, their keychain items on iOS).
 
 ## Device credentials
 

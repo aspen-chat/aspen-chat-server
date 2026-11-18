@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       };
     },
   },
+  // The app's saved sign-ins, encrypted by the main process with the system's key.
+  secrets: {
+    read: () => ipcRenderer.invoke("secrets:read"),
+    write: (contents: unknown) => ipcRenderer.invoke("secrets:write", contents),
+  },
   // The window's zoom: the factor the main process keeps, and the steps the zoom keys ask for.
   zoom: {
     get: () => ipcRenderer.invoke("zoom:get"),

@@ -1,14 +1,14 @@
 package com.aspen_chat.client.push;
 
 import android.content.Context;
-import android.content.SharedPreferences;
+import com.aspen_chat.client.secrets.SecretStore;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * The {@code PushState} the app keeps for its notification code (spec/push.md, The app), in the
- * app's private storage, where only this app can read it.
+ * The {@code PushState} the app keeps for its notification code (spec/push.md, The app), which
+ * holds sessions and the subscriptions' private keys, sealed by {@link SecretStore}.
  */
 public final class PushStore {
 
@@ -17,19 +17,19 @@ public final class PushStore {
     /** The {@code version} of the state this code reads. */
     private static final int VERSION = 1;
 
-    private final SharedPreferences preferences;
+    private final SecretStore store;
 
     public PushStore(Context context) {
-        preferences = context.getApplicationContext().getSharedPreferences(FILE, Context.MODE_PRIVATE);
+        store = new SecretStore(context, FILE);
     }
 
-    /** The state as the app wrote it; {@code null} before it has. */
+    /** The state as the app wrote it; {@code null} before it has, or when it cannot be opened. */
     public synchronized String load() {
-        return preferences.getString(KEY, null);
+        return store.load(KEY);
     }
 
     public synchronized void save(String state) {
-        preferences.edit().putString(KEY, state).apply();
+        store.write(KEY, state);
     }
 
     /**
