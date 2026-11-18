@@ -22,8 +22,7 @@ the `VoiceMedia` interface (`voiceMedia.ts`). It is loaded lazily (`lazyBrowserM
   `sections` frame, which a resume brings where no offer is outstanding, only says again what each
   section carries.
 - The server offers Opus, VP8, and H.264 (constrained baseline) on the call connection. Its offers
-  set each section's own format parameters: a sent video's encoder starts at 10 Mbps
-  (`x-google-start-bitrate`), and a share's sound is stereo at 128 kbps without DTX.
+  set each section's own format parameters: a share's sound is stereo at 128 kbps without DTX.
 - An offer the browser cannot apply fails a join in progress as this device's (`CallSetupError`, see
   [joining](joining.md#joining)); in a call, the call is rejoined, since nothing more can be
   negotiated on that connection.
@@ -99,10 +98,10 @@ the `VoiceMedia` interface (`voiceMedia.ts`). It is loaded lazily (`lazyBrowserM
 `startScreenShare()` asks `VoiceMedia.getScreen()`: `getDisplayMedia` with audio, at the screen's
 own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 
-| Source                    | Settings                                                                                                                                           |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `screen` (the picture)    | One layer, up to 25 Mbps at 60 fps (`SCREEN_ENCODING`), starting at 10 Mbps as the offer says. The connection's bandwidth estimate brings it down. |
-| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX, as the offer's section says.                                                                                  |
+| Source                    | Settings                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screen` (the picture)    | One layer, up to 25 Mbps at 60 fps (`SCREEN_ENCODING`), starting at the browser's own rate and rising as the connection's bandwidth estimate allows. |
+| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX, as the offer's section says.                                                                                    |
 
 - Its `contentHint` option marks a picture that moves, such as a game, so the encoder gives up
   resolution rather than frames when bandwidth runs short.

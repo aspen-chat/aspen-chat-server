@@ -7,6 +7,7 @@
 
 import {
   AspenClient,
+  DEFAULT_DEVICE,
   MemorySessionStore,
   VoiceCall,
   allowLoopbackPlainText,
@@ -58,8 +59,9 @@ export interface CallReport {
 
 /**
  * How far apart a stream's sound and picture play, in milliseconds of the sender's clock, while
- * its picture is held back by `delayMs`: the picture's playout estimate less the sound's, `null`
- * while the browser has no estimate for both, which it makes only for tracks it synchronises.
+ * its picture is held back by `delayMs`: the picture's playout estimate less the sound's, read
+ * every half second, `null` while the browser has no estimate for both, which it makes only for
+ * tracks it synchronises.
  */
 export interface SyncReport {
   readonly stream: string;
@@ -97,12 +99,8 @@ declare global {
       soundOutput(): Promise<AudioContextState | "timedOut">;
       report(): Promise<CallReport>;
       loudness(): Promise<number>;
-      sync(
-        stream: string,
-        delayMs: number,
-        toleranceMs: number,
-        seconds: number,
-      ): Promise<SyncReport>;
+      sync(streams: readonly string[], delayMs: number, seconds: number): Promise<SyncReport[]>;
+      reference(delayMs: number, seconds: number): Promise<SyncReport>;
       leave(): void;
     };
   }
@@ -230,6 +228,97 @@ async function streams(): Promise<StreamReport[]> {
   return reports;
 }
 
+/** A stream to measure: its sound's and its picture's sections, and the picture's receiver. */
+interface Pair {
+  readonly stream: string;
+  readonly audioMid: string;
+  readonly videoMid: string;
+  readonly video: RTCRtpReceiver;
+}
+
+/**
+ * Holds the picture of each pair back by `delayMs` and reads, every half second for `seconds`,
+ * how far its sound and picture play apart. A browser that synchronises them delays the sound
+ * to match, closing the gap over tens of seconds; one that does not leaves it `delayMs` ahead,
+ * and reports no estimate.
+ */
+async function measure(
+  pc: RTCPeerConnection,
+  pairs: readonly Pair[],
+  delayMs: number,
+  seconds: number,
+): Promise<SyncReport[]> {
+  const measured = pairs.map((pair) => ({
+    pair,
+    offsets: [] as (number | null)[],
+    sides: NO_SIDES,
+    delays: NO_DELAYS,
+  }));
+  for (const { video } of pairs) {
+    video.jitterBufferTarget = delayMs;
+  }
+  let counted = new Map<string, DelayCounters>();
+  try {
+    for (let i = 0; i < seconds * 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const playout = new Map<string, number>();
+      const ssrcs = new Map<string, number>();
+      const reports = new Map<number, number>();
+      const stats = await pc.getStats();
+      const counters = new Map<string, DelayCounters>();
+      stats.forEach((entry: Record<string, unknown>) => {
+        if (entry.type === "inbound-rtp") {
+          ssrcs.set(String(entry.mid), number(entry.ssrc));
+          const device: Record<string, unknown> | undefined =
+            typeof entry.playoutId === "string"
+              ? (stats.get(entry.playoutId) as Record<string, unknown> | undefined)
+              : undefined;
+          counters.set(String(entry.mid), {
+            jitterBuffer: number(entry.jitterBufferDelay),
+            target: number(entry.jitterBufferTargetDelay),
+            emitted: number(entry.jitterBufferEmittedCount),
+            playout: number(device?.totalPlayoutDelay),
+            played: number(device?.totalSamplesCount),
+          });
+          if (typeof entry.estimatedPlayoutTimestamp === "number") {
+            playout.set(String(entry.mid), entry.estimatedPlayoutTimestamp);
+          }
+        } else if (entry.type === "remote-outbound-rtp") {
+          reports.set(number(entry.ssrc), number(entry.reportsSent));
+        }
+      });
+      const side = (mid: string) => {
+        const ssrc = ssrcs.get(mid);
+        return ssrc === undefined ? null : { ssrc, reports: reports.get(ssrc) ?? 0 };
+      };
+      for (const m of measured) {
+        const { audioMid, videoMid } = m.pair;
+        m.sides = { audio: side(audioMid), video: side(videoMid) };
+        m.delays = {
+          audio: delaysBetween(counted.get(audioMid), counters.get(audioMid)),
+          video: delaysBetween(counted.get(videoMid), counters.get(videoMid)),
+        };
+        const audio = playout.get(audioMid);
+        const picture = playout.get(videoMid);
+        m.offsets.push(audio === undefined || picture === undefined ? null : picture - audio);
+      }
+      counted = counters;
+    }
+  } finally {
+    for (const { video } of pairs) {
+      video.jitterBufferTarget = null;
+    }
+  }
+  return measured.map(({ pair, offsets, sides, delays }) => ({
+    stream: pair.stream,
+    audioMid: pair.audioMid,
+    videoMid: pair.videoMid,
+    offsets,
+    sides,
+    delays,
+  }));
+}
+
 window.aspenCall = {
   async join(session, channel) {
     const sessionStore = new MemorySessionStore();
@@ -312,89 +401,104 @@ window.aspenCall = {
     return peak;
   },
   /**
-   * Holds the picture of `stream` back by `delayMs` and reads, every half second for up to
-   * `seconds`, how far its sound and picture play apart, until they are within `toleranceMs`.
-   * A browser that synchronises them delays the sound to match; one that does not leaves it
-   * `delayMs` ahead, and reports no estimate.
+   * Measures each of `streams` as `measure` does, at once, on the call's connection. A stream
+   * with no sound, or no picture, is reported with no sections and no offsets.
    */
-  async sync(stream, delayMs, toleranceMs, seconds) {
+  async sync(names, delayMs, seconds) {
+    const empty = (stream: string, audioMid: string | null, videoMid: string | null) => ({
+      stream,
+      audioMid,
+      videoMid,
+      offsets: [],
+      sides: NO_SIDES,
+      delays: NO_DELAYS,
+    });
     if (!(connection instanceof RTCPeerConnection)) {
-      return {
-        stream,
-        audioMid: null,
-        videoMid: null,
-        offsets: [],
-        sides: NO_SIDES,
-        delays: NO_DELAYS,
-      };
+      return names.map((stream) => empty(stream, null, null));
     }
     const pc = connection;
-    const of = (kind: string) =>
+    const of = (stream: string, kind: string) =>
       remoteSections().find(
         (s) => s.kind === kind && s.stream === stream && s.direction !== "inactive",
       )?.mid ?? null;
-    const audioMid = of("audio");
-    const videoMid = of("video");
-    const video = pc.getTransceivers().find((t) => t.mid === videoMid)?.receiver;
-    if (audioMid === null || video === undefined) {
-      return { stream, audioMid, videoMid, offsets: [], sides: NO_SIDES, delays: NO_DELAYS };
-    }
-    video.jitterBufferTarget = delayMs;
-    const offsets: (number | null)[] = [];
-    let sides: SyncReport["sides"] = NO_SIDES;
-    let delays: SyncReport["delays"] = NO_DELAYS;
-    let counted = new Map<string, DelayCounters>();
+    const found = names.map((stream) => {
+      const audioMid = of(stream, "audio");
+      const videoMid = of(stream, "video");
+      const video = pc.getTransceivers().find((t) => t.mid === videoMid)?.receiver;
+      return { stream, audioMid, videoMid, video };
+    });
+    const pairs = found.flatMap(({ stream, audioMid, videoMid, video }) =>
+      audioMid === null || videoMid === null || video === undefined
+        ? []
+        : [{ stream, audioMid, videoMid, video }],
+    );
+    const measured = await measure(pc, pairs, delayMs, seconds);
+    return found.map(
+      ({ stream, audioMid, videoMid }) =>
+        measured.find((m) => m.stream === stream) ?? empty(stream, audioMid, videoMid),
+    );
+  },
+  /**
+   * Measures, as `sync` does, a camera and microphone of this browser's sent straight to it over
+   * a second pair of peer connections, played as the call plays sound: how far this browser
+   * itself leaves the two apart under the hold, which the call's streams are judged against.
+   */
+  async reference(delayMs, seconds) {
+    const own = browserVoiceMedia();
+    const sender = (await own.createConnection()) as RTCPeerConnection;
+    const receiver = (await own.createConnection()) as RTCPeerConnection;
+    const tracks = [
+      await own.getMicrophone(DEFAULT_DEVICE, 1),
+      await own.getCamera(DEFAULT_DEVICE),
+    ];
     try {
-      for (let i = 0; i < seconds * 2; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        const playout = new Map<string, number>();
-        const ssrcs = new Map<string, number>();
-        const reports = new Map<number, number>();
-        const stats = await pc.getStats();
-        const counters = new Map<string, DelayCounters>();
-        stats.forEach((entry: Record<string, unknown>) => {
-          if (entry.type === "inbound-rtp") {
-            ssrcs.set(String(entry.mid), number(entry.ssrc));
-            const device: Record<string, unknown> | undefined =
-              typeof entry.playoutId === "string"
-                ? (stats.get(entry.playoutId) as Record<string, unknown> | undefined)
-                : undefined;
-            counters.set(String(entry.mid), {
-              jitterBuffer: number(entry.jitterBufferDelay),
-              target: number(entry.jitterBufferTargetDelay),
-              emitted: number(entry.jitterBufferEmittedCount),
-              playout: number(device?.totalPlayoutDelay),
-              played: number(device?.totalSamplesCount),
-            });
-            if (typeof entry.estimatedPlayoutTimestamp === "number") {
-              playout.set(String(entry.mid), entry.estimatedPlayoutTimestamp);
-            }
-          } else if (entry.type === "remote-outbound-rtp") {
-            reports.set(number(entry.ssrc), number(entry.reportsSent));
-          }
-        });
-        const side = (mid: string) => {
-          const ssrc = ssrcs.get(mid);
-          return ssrc === undefined ? null : { ssrc, reports: reports.get(ssrc) ?? 0 };
-        };
-        sides = { audio: side(audioMid), video: side(videoMid ?? "") };
-        delays = {
-          audio: delaysBetween(counted.get(audioMid), counters.get(audioMid)),
-          video: delaysBetween(counted.get(videoMid ?? ""), counters.get(videoMid ?? "")),
-        };
-        counted = counters;
-        const audio = playout.get(audioMid);
-        const picture = playout.get(videoMid ?? "");
-        const offset = audio === undefined || picture === undefined ? null : picture - audio;
-        offsets.push(offset);
-        if (offset !== null && Math.abs(offset) <= toleranceMs) {
-          break;
+      const candidates = (to: RTCPeerConnection) => (event: RTCPeerConnectionIceEvent) => {
+        if (event.candidate !== null) {
+          void to.addIceCandidate(event.candidate);
         }
+      };
+      sender.onicecandidate = candidates(receiver);
+      receiver.onicecandidate = candidates(sender);
+      receiver.ontrack = (event) => {
+        if (event.track.kind === "audio") {
+          own.play("reference", event.track);
+        }
+      };
+      const stream = new MediaStream(tracks);
+      for (const track of tracks) {
+        sender.addTrack(track, stream);
       }
+      const offer = await sender.createOffer();
+      await sender.setLocalDescription(offer);
+      await receiver.setRemoteDescription(offer);
+      const answer = await receiver.createAnswer();
+      await receiver.setLocalDescription(answer);
+      await sender.setRemoteDescription(answer);
+      const mid = (kind: string) =>
+        receiver.getTransceivers().find((t) => t.receiver.track.kind === kind);
+      const audio = mid("audio");
+      const video = mid("video");
+      if (audio?.mid == null || video?.mid == null) {
+        throw new Error("the reference connection has no sound or no picture");
+      }
+      const [measured] = await measure(
+        receiver,
+        [{ stream: "reference", audioMid: audio.mid, videoMid: video.mid, video: video.receiver }],
+        delayMs,
+        seconds,
+      );
+      if (measured === undefined) {
+        throw new Error("the reference was not measured");
+      }
+      return measured;
     } finally {
-      video.jitterBufferTarget = null;
+      own.stop("reference");
+      for (const track of tracks) {
+        track.stop();
+      }
+      sender.close();
+      receiver.close();
     }
-    return { stream, audioMid, videoMid, offsets, sides, delays };
   },
   async report() {
     const state = call?.state;

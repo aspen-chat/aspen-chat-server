@@ -328,13 +328,20 @@ its sound, play in step wherever the media carries what synchronizing them needs
 - **The desktop helper stamps every track it sends on one capture clock.** Its game picture and
   sound are encoded on threads of their own; stamping each frame with the instant it is sent would
   put each encoder's delay between them.
-- **The call check measures sync rather than assuming it.** It holds a stream's picture 400 ms back
-  at the receiver (`jitterBufferTarget`) and requires the browser to bring the sound within 45 ms,
-  read from both tracks' `estimatedPlayoutTimestamp`, which a browser reports only for tracks it
-  synchronizes: unsynchronized tracks leave no estimate, or one 400 ms apart. 45 ms of sound ahead
-  is where ITU-R BT.1359 puts the edge of what people notice. A browser makes its first estimate
-  once sender reports have come, a few seconds in, and closes the gap by about 30 ms a second
-  (Chromium and Firefox alike), so the check allows 45 seconds.
+- **The call check measures sync rather than assuming it, against the browser's own.** It holds a
+  stream's picture 400 ms back at the receiver (`jitterBufferTarget`) and reads both tracks'
+  `estimatedPlayoutTimestamp`, which a browser reports only for tracks it synchronizes:
+  unsynchronized tracks leave no estimate, or one 400 ms apart. A browser makes its first estimate
+  once sender reports have come, a few seconds in, and closes the gap tens of milliseconds a second,
+  slowing as it closes, so each stream is read for 45 seconds and judged by the median of its last
+  ten seconds. Under the hold, Chromium and Firefox settle with the sound 25 to 50 ms ahead of the
+  picture whether a stream comes through the voice server or straight from another peer connection
+  of the same page, and without the hold the voice server's streams settle within 15 ms, as a direct
+  connection's do. So the check measures such a direct stream in the receiving browser at the same
+  time and requires the call's to settle within 30 ms of it: where each settles wanders by about 10
+  ms either way, and the two differed by up to 23 ms on an idle machine. On a machine short of CPU
+  neither settles at all, the direct stream's offset swinging by hundreds of milliseconds, so sync
+  is measured in a call of its own after every other call check has finished.
 - **Someone a listener plays at nothing takes none of their slots.** Slots go to the loudest, and
   without the listener's volumes the server would fill one with a person the listener never hears,
   leaving a voice they would hear out. The list goes to the server rather than each volume, since
@@ -351,9 +358,14 @@ its sound, play in step wherever the media carries what synchronizing them needs
   stretches of music and games. str0m sets format parameters per connection, so the server writes
   them into its offers per section; it only parses what clients answer, so editing its offers' text
   costs it nothing.
-- **Video sections start at 10 Mbit/s (`x-google-start-bitrate`).** A share reaches its viewers
-  sharp from its first seconds rather than climbing from Chromium's default; the sender's bandwidth
-  estimate brings it down where it must.
+- **Video starts at the browser's own bitrate; the offers set no `x-google-start-bitrate`.** A share
+  is soft for its first seconds while the sender's bandwidth estimate climbs. Offered 10 Mbit/s, a
+  browser starting its camera and screen together encoded more than it could send, and its video
+  reached the server up to 4 s after capture in the first seconds. Receivers then took over a minute
+  to settle back into lip sync, with the sound up to 150 ms behind the picture, and the call check's
+  sync phase failed; at the browser's own rate, video arrives within 10 ms of capture from the start
+  and the check passes. A start above the default needs both measured again: how far behind capture
+  video reaches the server, and the sync phase.
 - **A video section waits for a keyframe, and keyframe requests reach a source at most every 300
   ms.** A decoder can start only on one; however many receivers start or resume at once, the sender
   is asked once.

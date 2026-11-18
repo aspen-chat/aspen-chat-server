@@ -210,11 +210,10 @@ Every connection offers:
 The server edits format parameters into its offers per section, where str0m sets them per connection
 (`voice_media/src/sdp.rs`):
 
-| Section                      | Parameters                                                           |
-| ---------------------------- | -------------------------------------------------------------------- |
-| Sending `screenAudio`        | `stereo=1`, `sprop-stereo=1`, `usedtx=0`, `maxaveragebitrate=128000` |
-| Sending `screen` or `camera` | `x-google-start-bitrate=10000` on VP8 and H.264                      |
-| Receiving a share's sound    | `stereo=1`, `sprop-stereo=1`                                         |
+| Section                   | Parameters                                                           |
+| ------------------------- | -------------------------------------------------------------------- |
+| Sending `screenAudio`     | `stereo=1`, `sprop-stereo=1`, `usedtx=0`, `maxaveragebitrate=128000` |
+| Receiving a share's sound | `stereo=1`, `sprop-stereo=1`                                         |
 
 VP8 comes first, so a browser sending video sends VP8. See [design notes](design-notes.md#media).
 

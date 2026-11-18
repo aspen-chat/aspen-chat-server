@@ -47,14 +47,20 @@ const BROWSERS: Record<"chromium" | "firefox", { type: BrowserType; launch: obje
 
 /**
  * Sync is checked by holding a stream's picture back by `SYNC_DELAY_MS` at the receiver, which
- * a browser synchronising its sound with it matches by holding the sound back too, until they
- * play within `SYNC_TOLERANCE_MS` of each other: the edge of what people notice as lip sync
- * (ITU-R BT.1359 puts it at 45 ms of sound ahead). A browser first estimates sync on the sender
- * reports, which come every few seconds, and then closes the gap tens of milliseconds a second.
+ * a browser synchronising its sound with it matches by holding the sound back too: one that
+ * does not leaves them that far apart. A browser first estimates sync on the sender reports,
+ * which come every few seconds, and then closes the gap tens of milliseconds a second, so each
+ * stream is read for `SYNC_SECONDS` and judged by the median of its last `SETTLED_READINGS`.
+ * Under the hold a browser settles with the sound tens of milliseconds ahead of the picture
+ * whatever sends it, so the call's streams are judged against a stream the same browser
+ * receives at the same time straight from itself, settled within `SYNC_MARGIN_MS` of it. Where
+ * each settles wanders by about ten milliseconds either way from one measurement to the next,
+ * and the call and the reference differed by up to 23 ms on a machine doing nothing else.
  */
 const SYNC_DELAY_MS = 400;
-const SYNC_TOLERANCE_MS = 45;
 const SYNC_SECONDS = 45;
+const SETTLED_READINGS = 20;
+const SYNC_MARGIN_MS = 30;
 
 /** How long each person's hearing of the other is measured for. */
 const HEARING_MS = 4000;
@@ -127,28 +133,66 @@ function sent(report: CallReport, kind: string): StreamReport[] {
   return report.streams.filter((s) => s.direction === "outbound" && s.kind === kind);
 }
 
-function sync(page: Page, stream: string): Promise<SyncReport> {
+function sync(page: Page, streams: readonly string[]): Promise<SyncReport[]> {
   return page.evaluate(
-    async ([s, delay, tolerance, seconds]) => {
-      const reported = await window.aspenCall?.sync(s, delay, tolerance, seconds);
+    async ([s, delay, seconds]) => {
+      const reported = await window.aspenCall?.sync(s, delay, seconds);
       if (reported === undefined) {
         throw new Error("no call");
       }
       return reported;
     },
-    [stream, SYNC_DELAY_MS, SYNC_TOLERANCE_MS, SYNC_SECONDS] as const,
+    [streams, SYNC_DELAY_MS, SYNC_SECONDS] as const,
   );
 }
 
-function inStep(report: SyncReport): boolean {
-  const last = report.offsets.at(-1);
-  return last !== null && last !== undefined && Math.abs(last) <= SYNC_TOLERANCE_MS;
+/** `sync`, and the page's own reference measured over the same time. */
+async function syncWithReference(
+  page: Page,
+  streams: readonly string[],
+): Promise<{ reports: SyncReport[]; reference: SyncReport }> {
+  const reference = page.evaluate(
+    async ([delay, seconds]) => {
+      const reported = await window.aspenCall?.reference(delay, seconds);
+      if (reported === undefined) {
+        throw new Error("no page");
+      }
+      return reported;
+    },
+    [SYNC_DELAY_MS, SYNC_SECONDS] as const,
+  );
+  const [reports, referenced] = await Promise.all([sync(page, streams), reference]);
+  return { reports, reference: referenced };
 }
 
-/** What a sync report says, short enough to print: the sections and the last offsets seen. */
-function syncDetail(report: SyncReport) {
+/** The median of a report's last `SETTLED_READINGS` offsets, `null` unless every one is read. */
+function settled(report: SyncReport): number | null {
+  const last = report.offsets.slice(-SETTLED_READINGS);
+  if (last.length < SETTLED_READINGS || last.some((offset) => offset === null)) {
+    return null;
+  }
+  const sorted = (last as number[]).toSorted((a, b) => a - b);
+  const half = Math.floor(sorted.length / 2);
+  const upper = sorted[half] ?? 0;
+  return sorted.length % 2 === 1 ? upper : ((sorted[half - 1] ?? 0) + upper) / 2;
+}
+
+function inStep(report: SyncReport, reference: SyncReport): boolean {
+  const own = settled(report);
+  const browsers = settled(reference);
+  return own !== null && browsers !== null && Math.abs(own - browsers) <= SYNC_MARGIN_MS;
+}
+
+/** What a sync report says against its reference, short enough to print. */
+function syncDetail(report: SyncReport, reference: SyncReport) {
   const measured = report.offsets.filter((offset) => offset !== null);
-  return { ...report, offsets: measured.slice(-8), measured: measured.length };
+  return {
+    settled: settled(report),
+    reference: { settled: settled(reference), last: reference.offsets.slice(-8) },
+    ...report,
+    offsets: measured.slice(-8),
+    measured: measured.length,
+  };
 }
 
 /**
@@ -175,14 +219,67 @@ function heard(before: CallReport, after: CallReport) {
   };
 }
 
-async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
-  console.log(`Ann in Chromium, Bob in ${bobBrowser}`);
+type BrowserName = "chromium" | "firefox";
+
+/** Ann in Chromium and Bob in `bobBrowser`, each in a browser of their own, both in the call. */
+async function inCall(
+  bobBrowser: BrowserName,
+  body: (ann: Page, bob: Page) => Promise<void>,
+): Promise<void> {
   const annBrowser = await chromium.launch(BROWSERS.chromium.launch);
   const bobs = BROWSERS[bobBrowser];
   const bobBrowserLaunched = await bobs.type.launch(bobs.launch);
   try {
-    const ann = await open(annBrowser, args.ann, "Ann");
-    const bob = await open(bobBrowserLaunched, args.bob, "Bob");
+    await body(
+      await open(annBrowser, args.ann, "Ann"),
+      await open(bobBrowserLaunched, args.bob, "Bob"),
+    );
+  } finally {
+    await annBrowser.close();
+    await bobBrowserLaunched.close();
+  }
+}
+
+const connected = (r: CallReport) => r.status === "connected" && r.connection === "connected";
+
+/** Whether at least two received pictures decoded more than ten frames since `before`. */
+const decoding = (r: CallReport, before: CallReport) =>
+  received(r, "video").filter((s) => framesSince(s, before) > 10).length >= 2;
+
+/**
+ * Has Ann stop her camera and her screen and start both again, once Bob has seen each stop: what
+ * Bob received while both were stopped, and once he decodes both again.
+ */
+async function restartVideo(
+  ann: Page,
+  bob: Page,
+): Promise<{ idle: CallReport; again: CallReport }> {
+  await ann.evaluate(() => {
+    window.aspenCall?.stopCamera();
+  });
+  await until(bob, (r) => !r.cameras.includes(args.ann.userId));
+  await ann.evaluate(() => {
+    window.aspenCall?.stopScreenShare();
+  });
+  await until(bob, (r) => !r.screens.includes(args.ann.userId));
+  const idle = await report(bob);
+  await ann.evaluate(async () => {
+    await window.aspenCall?.startScreenShare();
+    await window.aspenCall?.startCamera();
+  });
+  const again = await until(
+    bob,
+    (r) =>
+      r.cameras.includes(args.ann.userId) &&
+      r.screens.includes(args.ann.userId) &&
+      decoding(r, idle),
+  );
+  return { idle, again };
+}
+
+async function scenario(bobBrowser: BrowserName): Promise<void> {
+  console.log(`Ann in Chromium, Bob in ${bobBrowser}`);
+  await inCall(bobBrowser, async (ann, bob) => {
     // Without a sound server a browser may hear and record nothing however well the call works.
     for (const [who, page] of [
       ["Ann", ann],
@@ -194,7 +291,6 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
         fix: "run a sound server (PulseAudio, or PipeWire's) where the browsers run",
       });
     }
-    const connected = (r: CallReport) => r.status === "connected" && r.connection === "connected";
     const [annJoined, bobJoined] = await Promise.all([
       until(ann, connected),
       until(bob, connected),
@@ -266,11 +362,7 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       received(camera, "video").some((s) => s.framesDecoded > 30),
       received(camera, "video"),
     );
-    const cameraStream = `${args.ann.userId}-camera`;
-    const lipSync = await sync(bob, cameraStream);
-    check("Bob hears Ann's voice in step with her camera", inStep(lipSync), syncDetail(lipSync));
-
-    // A shared screen, with the sender's encoder bounded and the server's start bitrate offered.
+    // A shared screen, with the sender's encoder bounded.
     await ann.evaluate(async () => {
       await window.aspenCall?.startScreenShare();
     });
@@ -300,37 +392,10 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       );
     }
 
-    const shareStream = `${args.ann.userId}-share`;
-    const shareSync = await sync(bob, shareStream);
-    if (shareSync.audioMid !== null) {
-      check("and her screen's sound in step with it", inStep(shareSync), syncDetail(shareSync));
-    }
-
     // Sections no longer wanted go idle and are taken over by what is wanted next: a camera and
     // a screen stopped and started again play on sections the call already has, numbered on
-    // from where they stopped (a browser drops numbers it has had as replays), and in step.
-    await ann.evaluate(() => {
-      window.aspenCall?.stopCamera();
-    });
-    await until(bob, (r) => !r.cameras.includes(args.ann.userId));
-    await ann.evaluate(() => {
-      window.aspenCall?.stopScreenShare();
-    });
-    await until(bob, (r) => !r.screens.includes(args.ann.userId));
-    const idle = await report(bob);
-    await ann.evaluate(async () => {
-      await window.aspenCall?.startScreenShare();
-      await window.aspenCall?.startCamera();
-    });
-    const decoding = (r: CallReport, before: CallReport) =>
-      received(r, "video").filter((s) => framesSince(s, before) > 10).length >= 2;
-    const again = await until(
-      bob,
-      (r) =>
-        r.cameras.includes(args.ann.userId) &&
-        r.screens.includes(args.ann.userId) &&
-        decoding(r, idle),
-    );
+    // from where they stopped (a browser drops numbers it has had as replays).
+    const { idle, again } = await restartVideo(ann, bob);
     await sleep(2000);
     const still = await report(bob);
     check(
@@ -349,21 +414,6 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
         ann: await report(ann).then((r) => ({ sections: r.sections, video: sent(r, "video") })),
       },
     );
-    const lipSyncAgain = await sync(bob, cameraStream);
-    check(
-      "and her voice is in step with her camera on its new section",
-      inStep(lipSyncAgain),
-      syncDetail(lipSyncAgain),
-    );
-    const shareSyncAgain = await sync(bob, shareStream);
-    if (shareSyncAgain.audioMid !== null) {
-      check(
-        "and her screen's sound with her screen",
-        inStep(shareSyncAgain),
-        syncDetail(shareSyncAgain),
-      );
-    }
-
     // Leaving takes everything of Ann's away from Bob.
     await ann.evaluate(() => {
       window.aspenCall?.leave();
@@ -377,13 +427,78 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
     await bob.evaluate(() => {
       window.aspenCall?.leave();
     });
-  } finally {
-    await annBrowser.close();
-    await bobBrowserLaunched.close();
-  }
+  });
 }
 
-for (const bob of ["chromium", "firefox"] as const) {
+/**
+ * Sync, measured in a call of its own once every other check has finished, so nothing else the
+ * machine runs moves what the browsers settle on: Ann's camera and screen, each with its sound,
+ * on fresh sections and again on sections taken over, both measured at once beside Bob's
+ * reference.
+ */
+async function syncScenario(bobBrowser: BrowserName): Promise<void> {
+  console.log(`Sync: Ann in Chromium, Bob in ${bobBrowser}`);
+  await inCall(bobBrowser, async (ann, bob) => {
+    await Promise.all([until(ann, connected), until(bob, connected)]);
+    await ann.evaluate(async () => {
+      await window.aspenCall?.startCamera();
+      await window.aspenCall?.startScreenShare();
+    });
+    await bob.evaluate(() => {
+      window.aspenCall?.showVideo();
+    });
+    const start = await report(bob);
+    const showing = (r: CallReport) =>
+      r.cameras.includes(args.ann.userId) && r.screens.includes(args.ann.userId);
+    const arrived = await until(bob, (r) => showing(r) && decoding(r, start));
+    check(
+      "Bob decodes Ann's camera and screen",
+      showing(arrived) && decoding(arrived, start),
+      received(arrived, "video"),
+    );
+    const streams = [`${args.ann.userId}-camera`, `${args.ann.userId}-share`];
+    const inSync = async (what: { camera: string; share: string }) => {
+      const {
+        reports: [camera, share],
+        reference,
+      } = await syncWithReference(bob, streams);
+      if (camera === undefined || share === undefined) {
+        throw new Error("a stream measured went unreported");
+      }
+      check(what.camera, inStep(camera, reference), syncDetail(camera, reference));
+      if (share.audioMid !== null) {
+        check(what.share, inStep(share, reference), syncDetail(share, reference));
+      }
+    };
+    await inSync({
+      camera: "Bob hears Ann's voice in step with her camera",
+      share: "and her screen's sound in step with her screen",
+    });
+    const { idle, again } = await restartVideo(ann, bob);
+    check(
+      "Bob decodes them again once Ann starts them again",
+      decoding(again, idle),
+      received(again, "video"),
+    );
+    await inSync({
+      camera: "and her voice is in step with her camera on its new section",
+      share: "and her screen's sound with her screen",
+    });
+    await Promise.all(
+      [ann, bob].map((page) =>
+        page.evaluate(() => {
+          window.aspenCall?.leave();
+        }),
+      ),
+    );
+  });
+}
+
+const BOBS: readonly BrowserName[] = ["chromium", "firefox"];
+for (const bob of BOBS) {
   await scenario(bob);
+}
+for (const bob of BOBS) {
+  await syncScenario(bob);
 }
 process.exit(failures === 0 ? 0 : 1);

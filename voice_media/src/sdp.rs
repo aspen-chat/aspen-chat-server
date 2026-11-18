@@ -1,8 +1,7 @@
 //! Format parameters set per section in the offers the server writes, which str0m sets only per
-//! connection: a share's sound in stereo at 128 kbit/s without DTX beside a microphone with DTX,
-//! and the bitrate Chromium starts a video encoder at. A client reads them from the server's
-//! offer, its remote description. str0m only parses what clients answer, so editing its offers'
-//! text costs it nothing.
+//! connection: a share's sound in stereo at 128 kbit/s without DTX beside a microphone with DTX.
+//! A client reads them from the server's offer, its remote description. str0m only parses what
+//! clients answer, so editing its offers' text costs it nothing.
 
 /// Parameters to set on every payload type of one codec in one section.
 #[derive(Debug, Clone, PartialEq, Eq)]
