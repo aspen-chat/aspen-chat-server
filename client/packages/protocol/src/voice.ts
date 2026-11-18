@@ -88,9 +88,8 @@ export type AudioSource = "microphone" | "screenAudio";
 /**
  * How a sent video is encoded, set on its sender once its section is answered: a ceiling the
  * encoder may spend up to, never a target, since it spends only what the picture needs and the
- * connection's bandwidth estimate brings it down. The voice server's offers say what the
- * encoder starts at (`x-google-start-bitrate`) and, for a share's sound, stereo without
- * discontinuous transmission at 128 kbps.
+ * connection's bandwidth estimate brings it down. The voice server's offers ask, for a share's
+ * sound, for stereo without discontinuous transmission at 128 kbps.
  */
 interface Encoding {
   readonly maxBitrate: number;

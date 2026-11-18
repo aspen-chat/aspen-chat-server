@@ -270,7 +270,7 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
     const lipSync = await sync(bob, cameraStream);
     check("Bob hears Ann's voice in step with her camera", inStep(lipSync), syncDetail(lipSync));
 
-    // A shared screen, with the sender's encoder bounded and the server's start bitrate offered.
+    // A shared screen, with the sender's encoder bounded.
     await ann.evaluate(async () => {
       await window.aspenCall?.startScreenShare();
     });

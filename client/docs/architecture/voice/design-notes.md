@@ -51,9 +51,9 @@ See [media](media.md).
   Video is received only as watched, so a client never decodes video it would discard.
 - **Video is watched only while something shows it.** The call stage holds `showVideo` while it is
   mounted, so a phone's battery and anyone's bandwidth are spent only on video on screen.
-- **Screen shares start at 10 Mbps** rather than climbing from a few hundred kbps. The voice
-  server's offer says so (`x-google-start-bitrate`), and the browser's bandwidth estimate, not a
-  guess of ours, brings it down.
+- **Screen shares start at the browser's own rate** and climb as its bandwidth estimate allows, so a
+  share's first seconds are soft. A higher start is not offered: see the voice server's
+  [design notes](../../../../docs/architecture/voice/design-notes.md#media).
 - **A share's sound is offered stereo without DTX.** A browser sends Opus mono unless the remote
   description asks for stereo, and DTX's silence detection would cut quiet music; the offer sets
   both on the share's section alone, so the microphone keeps DTX.

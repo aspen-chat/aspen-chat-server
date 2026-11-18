@@ -18,9 +18,6 @@ use str0m::rtp::{Extension, RtpWrite, Ssrc};
 use str0m::{Candidate, Event as RtcEvent, Input, Output, Rtc};
 use voice_protocol::signal::{ConnectionKind, MediaKind, MediaSource, Section, SectionContent};
 
-/// The start bitrate, in kbit/s, Chromium's video encoder is told to begin at: a share is sharp
-/// from its first seconds rather than climbing from the default.
-const VIDEO_START_KBPS: u32 = 10_000;
 /// The bitrate a share's sound is sent at, in bit/s.
 const SHARE_AUDIO_BPS: u32 = 128_000;
 
@@ -418,17 +415,6 @@ impl Connection {
                         ("maxaveragebitrate", SHARE_AUDIO_BPS.to_string()),
                     ],
                 }),
-                SectionContent::Sending {
-                    source: MediaSource::Screen | MediaSource::Camera,
-                } => {
-                    for codec in ["VP8", "H264"] {
-                        edits.push(FormatEdit {
-                            mid: mid.clone(),
-                            codec,
-                            params: vec![("x-google-start-bitrate", VIDEO_START_KBPS.to_string())],
-                        });
-                    }
-                }
                 SectionContent::ShareAudio { .. } => edits.push(FormatEdit {
                     mid,
                     codec: "opus",

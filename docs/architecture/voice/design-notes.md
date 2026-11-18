@@ -351,9 +351,14 @@ its sound, play in step wherever the media carries what synchronizing them needs
   stretches of music and games. str0m sets format parameters per connection, so the server writes
   them into its offers per section; it only parses what clients answer, so editing its offers' text
   costs it nothing.
-- **Video sections start at 10 Mbit/s (`x-google-start-bitrate`).** A share reaches its viewers
-  sharp from its first seconds rather than climbing from Chromium's default; the sender's bandwidth
-  estimate brings it down where it must.
+- **Video starts at the browser's own bitrate; the offers set no `x-google-start-bitrate`.** A share
+  is soft for its first seconds while the sender's bandwidth estimate climbs. Offered 10 Mbit/s, a
+  browser starting its camera and screen together encoded more than it could send, and its video
+  reached the server up to 4 s after capture in the first seconds. Receivers then took over a minute
+  to settle back into lip sync, with the sound up to 150 ms behind the picture, and the call check's
+  sync phase failed; at the browser's own rate, video arrives within 10 ms of capture from the start
+  and the check passes. A start above the default needs both measured again: how far behind capture
+  video reaches the server, and the sync phase.
 - **A video section waits for a keyframe, and keyframe requests reach a source at most every 300
   ms.** A decoder can start only on one; however many receivers start or resume at once, the sender
   is asked once.
