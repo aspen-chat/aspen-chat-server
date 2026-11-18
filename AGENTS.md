@@ -771,20 +771,21 @@ one past its account's rate limits, is closed with 4429, and one the server is t
 with 1013 (`serverBusy`); those two `error` frames carry `retryAfterSeconds`, which the client waits
 at least, spreading every retry over a growing window (see Event routing). After it the client sends
 only `{"type":"activity"}` and `{"type":"watchPresence","userIds":[…]}` frames (see Presence under
-Event routing), and `{"type":"typing"|"stoppedTyping","channelId":…}` and
-`{"type":"viewing","channelIds":[…]}` frames (see Typing). The server replies
-`{"type":"ready","userId":…,"resumed":bool,"serverTime":…}` (`serverTime` is the API server's clock
-as the frame is written, by which the client judges the times the server stamped) and then
-`{"type":"event","sequence":N,"event":{…}}` frames. `sequence` is the JetStream stream sequence; a
-client that reconnects with `resumeAfter` set to the last sequence it processed gets exactly the
-events it missed and `resumed: true` when that position is still within `MAX_EVENT_AGE`, otherwise
-the usual replay window and `resumed: false`, which tells it to rebuild its cached state from REST.
-The server pings every 30 seconds and drops peers that miss two pongs. Each `event` payload is an
-object tagged with `serverEvent` (the entity) and `type` (`create`, `update`, `delete`) with the
-record's fields at the top level, plus a few custom events such as `voiceSpeaking`. The frame
-carries `eventId` when the event may reach the client more than once. What happens and is never
-kept, who is typing and changes to the presence of those a connection watches, comes as
-`{"type":"ephemeral","event":{…}}` frames instead, with no sequence, never replayed on resuming.
+Event routing), `{"type":"attending"|"stoppedAttending"}` frames (see Push), and
+`{"type":"typing"|"stoppedTyping","channelId":…}` and `{"type":"viewing","channelIds":[…]}` frames
+(see Typing). The server replies `{"type":"ready","userId":…,"resumed":bool,"serverTime":…}`
+(`serverTime` is the API server's clock as the frame is written, by which the client judges the
+times the server stamped) and then `{"type":"event","sequence":N,"event":{…}}` frames. `sequence` is
+the JetStream stream sequence; a client that reconnects with `resumeAfter` set to the last sequence
+it processed gets exactly the events it missed and `resumed: true` when that position is still
+within `MAX_EVENT_AGE`, otherwise the usual replay window and `resumed: false`, which tells it to
+rebuild its cached state from REST. The server pings every 30 seconds and drops peers that miss two
+pongs. Each `event` payload is an object tagged with `serverEvent` (the entity) and `type`
+(`create`, `update`, `delete`) with the record's fields at the top level, plus a few custom events
+such as `voiceSpeaking`. The frame carries `eventId` when the event may reach the client more than
+once. What happens and is never kept, who is typing and changes to the presence of those a
+connection watches, comes as `{"type":"ephemeral","event":{…}}` frames instead, with no sequence,
+never replayed on resuming.
 
 ### Layers
 

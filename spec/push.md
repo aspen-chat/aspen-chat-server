@@ -318,8 +318,8 @@ role they hold, or everyone), unless:
   to apply: it drops the notification of anyone it holds blocked);
 - the channel is muted for them, by its own mute or its category's (a thread's messages count as its
   parent's);
-- they are using Aspen right now on any device (their `active` presence key is set), since that
-  device shows it.
+- they are in front of Aspen right now on any device: one of their event stream connections has said
+  `attending` within the last minute and not `stoppedAttending` since, since that device shows it.
 - they are in do not disturb on this deployment, which also gives the `read` pointers sent them
   meanwhile a `badge` of 0.
 

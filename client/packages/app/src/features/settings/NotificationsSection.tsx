@@ -1,6 +1,7 @@
 import { DESKTOP_NOTIFICATIONS, NOTIFICATION_SOUNDS } from "@aspen/protocol";
 import { useState } from "react";
 import { usePreference, useSync } from "@/api/hooks";
+import { choosePush, usePushStatus } from "@/api/pushChoice";
 import { detectShell } from "@/config";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
@@ -9,7 +10,7 @@ import { planeClass } from "@/features/invites/dialog";
 /**
  * How this install tells the user of messages their notification settings ask for: the system's
  * notifications, which the browser must allow, and a sound. The mobile app's phone is woken by
- * push instead, so it offers only the sound.
+ * push instead, which this device turns on and off (`choosePush`) and the system must allow.
  */
 export function NotificationsSection() {
   const m = useMessages();
@@ -19,6 +20,7 @@ export function NotificationsSection() {
   const supported = typeof Notification !== "undefined";
   const [denied, setDenied] = useState(supported && Notification.permission === "denied");
   const mobile = detectShell() === "mobile";
+  const push = usePushStatus();
   return (
     <section aria-labelledby="settings-notifications" className={planeClass}>
       <h3 id="settings-notifications" className="text-lg font-semibold text-ink-muted">
@@ -47,6 +49,16 @@ export function NotificationsSection() {
                 ? m.notifications.desktopDenied
                 : m.notifications.desktopHint
           }
+        />
+      )}
+      {mobile && push.available && (
+        <ChoiceCheckbox
+          isSelected={push.choice === "on" && !push.denied}
+          onChange={(selected) => {
+            choosePush(selected ? "on" : "off");
+          }}
+          label={m.notifications.push}
+          hint={push.denied ? m.notifications.pushDenied : m.notifications.pushHint}
         />
       )}
       <ChoiceCheckbox

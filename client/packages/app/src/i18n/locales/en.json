@@ -1859,6 +1859,13 @@
     "desktopHint": "For messages your notification settings ask for, while Aspen is open but you are looking elsewhere.",
     "desktopDenied": "Your browser blocks notifications from Aspen. Allow them in its site settings, then try again.",
     "desktopUnsupported": "This browser cannot show notifications.",
+    "push": "Wake this device for new messages",
+    "pushHint": "Push notifications for messages your notification settings ask for, while Aspen is closed or in the background.",
+    "pushDenied": "Your device blocks notifications from Aspen. Allow them in its Settings app, then try again.",
+    "pushPrompt": "Enable Aspen push notifications for new messages?",
+    "pushPromptHint": "You can change this at any time in Settings, under Notifications.",
+    "pushAccept": "Accept",
+    "pushDecline": "Decline",
     "sounds": "Play a sound",
     "soundsHint": "Through the speaker chosen for notification sounds under Audio."
   },
