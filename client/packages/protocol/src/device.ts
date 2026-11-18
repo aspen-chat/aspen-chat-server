@@ -87,9 +87,13 @@ export const PUZZLE_TIME_LIMIT_MS = 60_000;
  * fail with this, as if the deployment could not be reached.
  */
 export class DevicePuzzleRefusedError extends Error {
-  constructor(reason: string) {
+  /** The deployment's origin. */
+  readonly server: string;
+
+  constructor(server: string, reason: string) {
     super(`device credential not earned: ${reason}`);
     this.name = "DevicePuzzleRefusedError";
+    this.server = server;
   }
 }
 

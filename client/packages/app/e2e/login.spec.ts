@@ -126,6 +126,60 @@ test.describe("login", () => {
     await expect(page.getByRole("alert")).toHaveText("Incorrect username or password.");
   });
 
+  /** Refuses the sign-in for lacking a device credential, so the app sets out to earn one. */
+  async function needingDeviceCredential(page: Page) {
+    await page.route("**/api/v1/auth/login", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/problem+json",
+        body: JSON.stringify({
+          code: "deviceCredentialRequired",
+          title: "This app needs to register this device with the server first.",
+          detail: "It does this on its own; if you see this, update the app.",
+          status: 401,
+        }),
+      }),
+    );
+  }
+
+  test("says the server could not be reached when earning a device credential gets no answer", async ({
+    page,
+  }) => {
+    await needingDeviceCredential(page);
+    await page.route("**/api/v1/auth/device-challenges", (route) => route.abort("failed"));
+    await page.goto("/");
+    await page.getByLabel("Username").fill("kate");
+    await page.getByLabel("Password").fill("hunter22");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveText(
+      `${new URL(page.url()).host} couldn't be reached. Check your connection, then try again.`,
+    );
+  });
+
+  test("shows why earning a device credential was refused, not that one was needed", async ({
+    page,
+  }) => {
+    await needingDeviceCredential(page);
+    await page.route("**/api/v1/auth/device-challenges", (route) =>
+      route.fulfill({
+        status: 429,
+        contentType: "application/problem+json",
+        headers: { "Retry-After": "30" },
+        body: JSON.stringify({
+          code: "rateLimited",
+          title: "Too many requests.",
+          detail: "Wait 30 seconds, then try again.",
+          status: 429,
+        }),
+      }),
+    );
+    await page.goto("/");
+    await page.getByLabel("Username").fill("kate");
+    await page.getByLabel("Password").fill("hunter22");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveText("Wait 30 seconds, then try again.");
+  });
+
   test("signs in and loads the caller's profile", async ({ page }) => {
     await page.route("**/api/v1/auth/login", (route) =>
       route.fulfill({

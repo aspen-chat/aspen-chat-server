@@ -5,6 +5,7 @@ import { useAspenClient } from "@/api/context";
 import { useAuthMethods } from "@/features/auth/authMethods";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { failureText } from "./failureText";
 import { format } from "@/i18n/messages";
 import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
@@ -101,7 +102,7 @@ export function RegisterForm({
             setError(e.message);
         }
       } else {
-        setError(String(e));
+        setError(failureText(e, m));
       }
     } finally {
       setPending(false);

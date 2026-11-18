@@ -26,6 +26,7 @@
   "passwordLabel": "Contraseña",
   "signIn": "Iniciar sesión",
   "signingIn": "Iniciando sesión…",
+  "serverUnreachable": "No se pudo conectar con {server}. Revisa tu conexión e intenta de nuevo.",
   "signOut": "Cerrar sesión",
   "signInWithPasskey": "Iniciar sesión con una llave de acceso",
   "orDivider": "o",

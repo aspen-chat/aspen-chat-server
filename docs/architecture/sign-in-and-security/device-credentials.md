@@ -120,6 +120,11 @@ A suspension of the address limits (`limits suspend`) also skips `device`, `ip_f
   When a server answers `deviceCredentialRequired`, it earns one and sends the request once more.
 - **One puzzle at a time:** requests refused together share one earning. A challenge that expired
   while a slow device solved it is asked for once more.
+- **When earning fails:** the waiting requests get the failed step's answer (a `429`, a `503`, a
+  redemption refused) as their own, so they say what went wrong rather than
+  `deviceCredentialRequired`, whose text tells the reader to update the app. A step that got no
+  answer fails them with `UnreachableError`, and the client says the deployment could not be
+  reached.
 - **The solver:** the app solves across workers (`solveInWorkers`, each running
   `devicePuzzle.worker.ts`), so the page does not freeze and the work is spread over the device's
   cores. The SHA-256 is plain arithmetic, not WebCrypto, whose every call is asynchronous, and it

@@ -14,6 +14,7 @@ import { QrCode } from "@/features/qr/QrCode";
 import { useShareUrl } from "@/features/qr/shareLinks";
 import { useOptionalReauth } from "@/features/security/reauthContext";
 import { useMessages } from "@/i18n/context";
+import { failureText } from "./failureText";
 import { format } from "@/i18n/messages";
 import { thisDeviceName } from "./deviceName";
 
@@ -46,6 +47,12 @@ type Phase =
  */
 export function DeviceLinkCode() {
   const m = useMessages();
+  // The polling below says a failure in the language shown when it fails, without restarting
+  // when the language changes.
+  const words = useRef(m);
+  useEffect(() => {
+    words.current = m;
+  });
   const client = useAspenClient();
   const share = useShareUrl();
   const offering = client.session !== null;
@@ -67,7 +74,7 @@ export function DeviceLinkCode() {
       }
       return { kind: "showing", link: made.link, verifier: made.verifier };
     } catch (e) {
-      return { kind: "failed", message: e instanceof ApiProblemError ? e.message : String(e) };
+      return { kind: "failed", message: failureText(e, m) };
     }
   }, [client, m, withReauth]);
 
@@ -159,7 +166,7 @@ export function DeviceLinkCode() {
         } else {
           setPhase({
             kind: "failed",
-            message: e instanceof ApiProblemError ? e.message : String(e),
+            message: failureText(e, words.current),
           });
         }
       }
@@ -197,7 +204,7 @@ export function DeviceLinkCode() {
       setPhase({ kind: "approved", deviceName });
     } catch (e) {
       live.current = null;
-      setPhase({ kind: "failed", message: e instanceof ApiProblemError ? e.message : String(e) });
+      setPhase({ kind: "failed", message: failureText(e, m) });
     }
   }
 

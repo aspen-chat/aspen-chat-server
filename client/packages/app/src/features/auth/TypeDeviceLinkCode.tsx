@@ -1,4 +1,3 @@
-import { ApiProblemError } from "@aspen/protocol";
 import { KeyboardIcon } from "@phosphor-icons/react";
 import { useState, type SyntheticEvent } from "react";
 import {
@@ -17,6 +16,7 @@ import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useOptionalReauth } from "@/features/security/reauthContext";
 import { useMessages } from "@/i18n/context";
+import { failureText } from "./failureText";
 import { format } from "@/i18n/messages";
 import { DeviceLinkScreen } from "./DeviceLinkScreen";
 import { rememberTyped } from "./takenLinks";
@@ -89,7 +89,7 @@ function Steps({ close }: { close: () => void }) {
       rememberTyped(entered.id, entered.scan, entered.verifier);
       setTaken(entered.id);
     } catch (e) {
-      setError(e instanceof ApiProblemError ? e.message : String(e));
+      setError(failureText(e, m));
     } finally {
       setPending(false);
     }

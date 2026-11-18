@@ -6,6 +6,7 @@ import {
   MAX_PUZZLE_BITS,
   MemoryDeviceCredentialStore,
   MemorySessionStore,
+  UnreachableError,
   decodeChallenge,
   puzzleRanges,
   puzzleWork,
@@ -277,6 +278,81 @@ describe("AspenClient's device credential", () => {
       expect(stopped).toBe(true);
       expect(calls).toHaveLength(2);
     });
+  });
+
+  it("gives the caller the failed step's answer, not the refusal that sent it to earn one", async () => {
+    const { fetch, calls } = scripted([
+      () => problem(401, "deviceCredentialRequired"),
+      () => problem(429, "rateLimited"),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    const answer = await client.api.POST("/api/v1/auth/login", {
+      body: { username: "kate", password: "hunter22" },
+    });
+    expect(answer.response.status).toBe(429);
+    expect(answer.error).toMatchObject({ code: "rateLimited" });
+    expect(calls.map((call) => call.path)).toEqual([
+      "/api/v1/auth/login",
+      "/api/v1/auth/device-challenges",
+    ]);
+  });
+
+  it("gives a redemption's refusal, past an expired challenge asked for again", async () => {
+    const challenge = "Y2hhbGxlbmdl";
+    const asked = () =>
+      json(200, { challenge, difficulty: 1, expiresAt: new Date().toISOString() });
+    const { fetch } = scripted([
+      () => problem(401, "deviceCredentialRequired"),
+      asked,
+      () => problem(400, "deviceChallengeInvalid"),
+      asked,
+      () => problem(503, "serverBusy"),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    const answer = await client.api.GET("/api/v1/auth/methods");
+    expect(answer.response.status).toBe(503);
+    expect(answer.error).toMatchObject({ code: "serverBusy" });
+  });
+
+  it("gives every caller refused together its own copy of a failed step's answer", async () => {
+    const { fetch } = scripted([
+      () => problem(401, "deviceCredentialRequired"),
+      () => problem(401, "deviceCredentialRequired"),
+      () => problem(503, "serverBusy"),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    const answers = await Promise.all([
+      client.api.GET("/api/v1/auth/methods"),
+      client.api.GET("/api/v1/auth/methods"),
+    ]);
+    expect(answers.map((answer) => answer.error)).toMatchObject([
+      { code: "serverBusy" },
+      { code: "serverBusy" },
+    ]);
+  });
+
+  it("says the deployment could not be reached when a step gets no answer", async () => {
+    const { fetch } = scripted([
+      () => problem(401, "deviceCredentialRequired"),
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    const failure = await client.api.GET("/api/v1/auth/methods").catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(UnreachableError);
+    expect((failure as UnreachableError).server).toBe(baseUrl);
+    expect((failure as UnreachableError).cause).toBeInstanceOf(TypeError);
+  });
+
+  it("leaves a request stopped by its signal as stopped, not unreachable", async () => {
+    const stopped = new DOMException("stopped", "AbortError");
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: new MemorySessionStore(),
+      fetch: () => Promise.reject(stopped),
+    });
+    await expect(client.api.GET("/api/v1/auth/methods")).rejects.toBe(stopped);
   });
 
   it("earns one credential for requests refused together", async () => {

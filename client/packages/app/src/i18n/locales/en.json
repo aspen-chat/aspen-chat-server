@@ -26,6 +26,7 @@
   "passwordLabel": "Password",
   "signIn": "Sign in",
   "signingIn": "Signing in…",
+  "serverUnreachable": "{server} couldn't be reached. Check your connection, then try again.",
   "signOut": "Sign out",
   "signInWithPasskey": "Sign in with a passkey",
   "orDivider": "or",
