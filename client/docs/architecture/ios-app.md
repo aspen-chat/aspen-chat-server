@@ -696,17 +696,17 @@ reverse tunnels so the simulator reaches the API server and the voice server at 
 loopback (plain HTTP there, as a development build allows; media goes to the voice server's
 announced address over the network), Chromium as the second participant with a tone WAV as its
 microphone and its fake camera (`calls/second.ts`, which the script's helper drives: showing video,
-the camera on and off, and a frame of someone's camera sampled), the simulator granted the camera
-beside the microphone, and `xcodebuild test-without-building` on the Mac of the engine's, the
-bridge's, and the rings' tests (judged by the suites passing, each having printed its own line, and
-no test skipped but the trailing recording's own), with `--build` first building the engine, the
-bindings, and the app for the simulator there; `--worktree` and `--derived` name the Mac checkout
-and derived data of the branch under test, so two branches never build in one tree. The test reads
-its deployment, channel, user, refresh token, and the script's helper from the environment
-(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI runs the
-Android half of this check (`android-builds.md`) and not this one: the deployment runs in Docker,
-which GitHub's macOS runners lack, so the simulator's call is checked from a development machine
-with a Mac beside it.
+the camera on and off, and a frame of someone's camera sampled), the simulator booted when it is not
+and granted the camera beside the microphone (a refused grant fails the check), and
+`xcodebuild test-without-building` on the Mac of the engine's, the bridge's, and the rings' tests
+(judged by the suites passing, each having printed its own line, and no test skipped but the
+trailing recording's own), with `--build` first building the engine, the bindings, and the app for
+the simulator there; `--worktree` and `--derived` name the Mac checkout and derived data of the
+branch under test, so two branches never build in one tree. The test reads its deployment, channel,
+user, refresh token, and the script's helper from the environment (`TEST_RUNNER_ASPEN_CALL_*`; the
+test's comment lists them) and skips without them. CI runs the Android half of this check
+(`android-builds.md`) and not this one: the deployment runs in Docker, which GitHub's macOS runners
+lack, so the simulator's call is checked from a development machine with a Mac beside it.
 
 **On a phone.** `--device <udid>` (the UDID `xcrun devicectl list devices` prints on the Mac) runs
 the engine's and the bridge's proofs on an iPhone paired with the Mac, which reaches the machine the

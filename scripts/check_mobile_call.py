@@ -487,6 +487,7 @@ class Ios:
             self.build_destination = (f"platform=iOS Simulator,name={args.simulator}" if args.runner == "xcodebuild"
                                       else "generic/platform=iOS Simulator")
             self.test_destination = f"platform=iOS Simulator,name={args.simulator}"
+        self.simulator = args.simulator
         if ssh_output(self.mac, "pgrep -x xcodebuild || true"):
             raise Failed("an xcodebuild is running on the Mac; wait for it")
 
@@ -509,6 +510,16 @@ class Ios:
 
     def where(self) -> str:
         return f"the phone {self.device}" if self.device else "the simulator"
+
+    def booted_and_granted(self) -> None:
+        """Boots the simulator if it is not running (xcodebuild would boot it itself, but after the
+        grants, which name the booted device) and grants the app the microphone and the camera, so
+        the tests are never left waiting on the system's prompts, which nobody answers."""
+        if ssh(self.mac, f"xcrun simctl bootstatus '{self.simulator}' -b", timeout=180) != 0:
+            raise Failed(f"the simulator {self.simulator} did not boot")
+        for service in ("microphone", "camera"):
+            if ssh(self.mac, f"xcrun simctl privacy booted grant {service} {BUNDLE}") != 0:
+                raise Failed(f"the simulator did not grant the app the {service}")
 
     def build(self) -> None:
         target = "devices" if self.device else "the simulator"
@@ -608,8 +619,7 @@ class Ios:
             tunnel = tunnels(self.mac)
         try:
             if not self.device:
-                ssh_output(self.mac, f"xcrun simctl privacy booted grant microphone {BUNDLE}")
-                ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
+                self.booted_and_granted()
             say(f"running {', '.join(test.split('/')[1] for test in self.tests)} on {self.where()} through {self.runner}")
             log = WORK / "test.log"
             if self.runner == "xcodebuild":
