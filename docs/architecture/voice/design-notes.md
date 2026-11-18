@@ -328,13 +328,20 @@ its sound, play in step wherever the media carries what synchronizing them needs
 - **The desktop helper stamps every track it sends on one capture clock.** Its game picture and
   sound are encoded on threads of their own; stamping each frame with the instant it is sent would
   put each encoder's delay between them.
-- **The call check measures sync rather than assuming it.** It holds a stream's picture 400 ms back
-  at the receiver (`jitterBufferTarget`) and requires the browser to bring the sound within 45 ms,
-  read from both tracks' `estimatedPlayoutTimestamp`, which a browser reports only for tracks it
-  synchronizes: unsynchronized tracks leave no estimate, or one 400 ms apart. 45 ms of sound ahead
-  is where ITU-R BT.1359 puts the edge of what people notice. A browser makes its first estimate
-  once sender reports have come, a few seconds in, and closes the gap by about 30 ms a second
-  (Chromium and Firefox alike), so the check allows 45 seconds.
+- **The call check measures sync rather than assuming it, against the browser's own.** It holds a
+  stream's picture 400 ms back at the receiver (`jitterBufferTarget`) and reads both tracks'
+  `estimatedPlayoutTimestamp`, which a browser reports only for tracks it synchronizes:
+  unsynchronized tracks leave no estimate, or one 400 ms apart. A browser makes its first estimate
+  once sender reports have come, a few seconds in, and closes the gap tens of milliseconds a second,
+  slowing as it closes, so each stream is read for 45 seconds and judged by the median of its last
+  ten seconds. Under the hold, Chromium and Firefox settle with the sound 25 to 50 ms ahead of the
+  picture whether a stream comes through the voice server or straight from another peer connection
+  of the same page, and without the hold the voice server's streams settle within 15 ms, as a direct
+  connection's do. So the check measures such a direct stream in the receiving browser at the same
+  time and requires the call's to settle within 30 ms of it: where each settles wanders by about 10
+  ms either way, and the two differed by up to 23 ms on an idle machine. On a machine short of CPU
+  neither settles at all, the direct stream's offset swinging by hundreds of milliseconds, so sync
+  is measured in a call of its own after every other call check has finished.
 - **Someone a listener plays at nothing takes none of their slots.** Slots go to the loudest, and
   without the listener's volumes the server would fill one with a person the listener never hears,
   leaving a voice they would hear out. The list goes to the server rather than each volume, since
