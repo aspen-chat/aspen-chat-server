@@ -1048,7 +1048,8 @@ test.describe("on a phone", () => {
  * Stands in for the mobile apps' native side in the browser: Capacitor reports a native
  * platform, and the `AspenMedia` plugin's calls are answered here and recorded in
  * `window.mediaAsked`. The photo picker answers `beach.png`, the camera an unnamed picture, and
- * the camera is refused while `window.cameraRefused` is set.
+ * the camera is refused while `window.cameraRefused` is set. `AspenSecrets` keeps the saved
+ * sign-ins in memory, for the page's life.
  */
 async function inTheApp(page: Page) {
   await page.addInitScript((pixelBytes) => {
@@ -1063,10 +1064,21 @@ async function inTheApp(page: Page) {
           name: "AspenMedia",
           methods: ["sources", "choose", "release"].map((name) => ({ name, rtype: "promise" })),
         },
+        {
+          name: "AspenSecrets",
+          methods: ["read", "write"].map((name) => ({ name, rtype: "promise" })),
+        },
       ],
       convertFileSrc: (url: string) =>
         url.replace("file://", `${location.origin}/_capacitor_file_`),
-      nativePromise: (_plugin: string, method: string, options: Record<string, unknown>) => {
+      nativePromise: (plugin: string, method: string, options: Record<string, unknown>) => {
+        if (plugin === "AspenSecrets") {
+          if (method === "read") {
+            return Promise.resolve({ status: "ok", contents: own.savedSignIns ?? null });
+          }
+          own.savedSignIns = options.contents;
+          return Promise.resolve({ kept: true });
+        }
         asked.push({ method, options });
         if (method === "sources") {
           return Promise.resolve({ photo: true, video: true, library: true });
