@@ -4,11 +4,11 @@ An icon is a picture something is shown by: a user's profile, a bot's, a communi
 the deployment's profile, and a copy of a foreign user's avatar. Each is a row of `icon` and one
 object in storage, under the public prefix `icons/` (`media_store::PublicPrefix::Icons`).
 
-| Part           | Where                                                                   |
-| -------------- | ----------------------------------------------------------------------- |
-| Logic          | `app::icon`                                                             |
-| Handlers       | `api::icon`                                                             |
-| How it is kept | `icon::as_stored`, `aspen_previews::picture::fitted`                    |
+| Part           | Where                                                                    |
+| -------------- | ------------------------------------------------------------------------ |
+| Logic          | `app::icon`                                                              |
+| Handlers       | `api::icon`                                                              |
+| How it is kept | `icon::as_stored`, `aspen_previews::picture::fitted`                     |
 | Old icons      | the [`shrinkIcons`](jobs/kinds.md#shrinkicons) job (`icon::shrink_step`) |
 | Forgetting     | the [`forgetIcon`](jobs/kinds.md#forgeticon) job (`icon::forget_step`)   |
 
@@ -73,8 +73,8 @@ after an upload is confirmed and when what used it lets it go (see
 5. **Does every path that changes it announce it?** An `Icon` record has no events: its picture
    never changes but once, when `shrinkIcons` stores an older icon fitted under the same key and
    changes its type. Clients show the picture as storage serves it, by its own type, and read
-   `mimeType` for nothing, so a record read before then is stale only in a field no client uses.
-   The deployment's icon record, which every server holds a copy of, is read again on every server
+   `mimeType` for nothing, so a record read before then is stale only in a field no client uses. The
+   deployment's icon record, which every server holds a copy of, is read again on every server
    (`deployment_settings::icon_stored_anew`).
 6. **Is it published inside the transaction that makes the change?** The deployment's revision is
    rung in the transaction that writes the type; nothing else is published.
