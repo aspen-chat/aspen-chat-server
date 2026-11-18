@@ -74,11 +74,15 @@ test.describe("several accounts", () => {
     await signInToWorld(page, stubSecondPerson);
     await addPriya(page);
     await shownAs(page, "Priya");
+    // The world's community is Kate's: Priya is no member, so has no message box there.
+    await page.getByRole("button", { name: "Switch accounts" }).click();
+    await page.getByRole("menuitem", { name: /Kate/ }).click();
+    await shownAs(page, "Kate");
     await page
       .getByRole("row", { name: /^general/ })
       .getByText("general", { exact: true })
       .click();
-    await expect(page.getByText("Posting as Priya")).toBeVisible();
+    await expect(page.getByText("Posting as Kate")).toBeVisible();
     const keys = await sessionKeys(page);
     expect(keys).toHaveLength(2);
     expect(keys).toContain("aspen.session");
