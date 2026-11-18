@@ -272,9 +272,9 @@ pointer that carries text: the phone must show who is calling before it can reac
   a message's are, `push:ring:<session>:<user>`), waits for the ring's row to be committed, and
   reads its channel, its caller, and the caller's shown name (display name, else username) in one
   query (`ring_made`).
-- Every phone of the rung person is woken, whether or not they are active elsewhere: a ring reaches
-  every device. Who is rung at all is the ring's decision (not those in do not disturb), made before
-  the ring exists; the dispatcher filters nothing.
+- Every phone of the rung person is woken, whether or not they are in front of Aspen elsewhere: a
+  ring reaches every device. Who is rung at all is the ring's decision (not those in do not
+  disturb), made before the ring exists; the dispatcher filters nothing.
 - The pointer carries `channel`, `session`, `caller`, `callerName`, and `until` (the ring's end, on
   this server's clock). No badge.
 - It is sent `Urgency: high`, with its session id as its `Topic` (so it never replaces, or is

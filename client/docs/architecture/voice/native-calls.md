@@ -198,13 +198,13 @@ choice held there is the native side's own (or a test's), not the page's. One pa
 the choice to `CallRoutes` (iOS: the override of the output port, applied again on every route
 change and when CallKit activates the session; Android: Telecom's `requestEndpointChange`, kept as
 the call's `chosen` kind and applied once Telecom lists the call's endpoints), which moves the
-engine's own audio. The web view's audio has no route of its own any more: the former
-`AspenAudioRoute` plugin, which chose the web view's route, is gone. What the phone can play through
-comes back the same way, typed: `AspenCall.routes()` and its `routes` event give each route's kind
-(`receiver`, `loudspeaker`, `bluetooth`, `wiredHeadset`, `car`, `other`), the system's name for
-display alone, whether it is in use, whether the device has a receiver, and the kind chosen;
-`usePhoneOutputs` reads `PhoneOutputs` off them (`outputsOf`), so the Speaker button shows only
-while a phone has its receiver and loudspeaker and nothing else to play through, as before.
+engine's own audio. The web view's audio has no route of its own: in a call it plays nothing but the
+page's own sounds, and the plugin's choice is the call's. What the phone can play through comes back
+the same way, typed: `AspenCall.routes()` and its `routes` event give each route's kind (`receiver`,
+`loudspeaker`, `bluetooth`, `wiredHeadset`, `car`, `other`), the system's name for display alone,
+whether it is in use, whether the device has a receiver, and the kind chosen; `usePhoneOutputs`
+reads `PhoneOutputs` off them (`outputsOf`), so the Speaker button shows only while a phone has its
+receiver and loudspeaker and nothing else to play through, as before.
 
 ## Video
 

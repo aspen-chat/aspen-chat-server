@@ -401,9 +401,9 @@ role they hold, or everyone), unless:
   meanwhile a `badge` of 0.
 
 A person is sent a `call` pointer when a DM's call starts ringing them (`app::voice::ring`), to
-every phone they have, whether or not they are using Aspen elsewhere, as a phone call rings every
-handset. Who is rung is decided before the ring exists: not those in do not disturb, and no one a
-block stands between. Nothing is sent when the ring ends.
+every phone they have, whether or not they are in front of Aspen elsewhere, as a phone call rings
+every handset. Who is rung is decided before the ring exists: not those in do not disturb, and no
+one a block stands between. Nothing is sent when the ring ends.
 
 Which messages those settings ask for is part of notifications in general, not of this protocol. A
 message with no text of its own (a poll's result, a join, a community becoming large) is described

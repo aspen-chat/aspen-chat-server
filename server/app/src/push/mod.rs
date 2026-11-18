@@ -874,9 +874,9 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
 }
 
 /// Wakes every phone of `user` for the call of `session` ringing them: all of them, whether or
-/// not they are using Aspen elsewhere, since a ring reaches every device, as a phone call does.
-/// Who is rung at all (not those in do not disturb) is `app::voice::ring`'s decision, made before
-/// the ring exists; this only carries it to the phones.
+/// not they are in front of Aspen elsewhere (`app::attention`), since a ring reaches every
+/// device, as a phone call does. Who is rung at all (not those in do not disturb) is
+/// `app::voice::ring`'s decision, made before the ring exists; this only carries it to the phones.
 async fn ring_made(
     state: &GlobalServerContext,
     session: VoiceSessionId,
