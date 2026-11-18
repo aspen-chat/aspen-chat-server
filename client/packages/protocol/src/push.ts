@@ -47,10 +47,24 @@ export interface PushAccount {
   readonly deploymentSubscription: string;
 }
 
+/**
+ * The phone as the relay knows it: its id and secret there, and what it was registered as. The
+ * platform, app, and environment are absent from a state kept before they were, which is
+ * registered again as though they had changed.
+ */
+export interface RegisteredDevice {
+  readonly id: string;
+  readonly secret: string;
+  readonly token: string;
+  readonly platform?: PushDevice["platform"];
+  readonly app?: string;
+  readonly environment?: PushDevice["environment"];
+}
+
 /** Everything the phone keeps for push, as the native notification code reads it. */
 export interface PushState {
   readonly version: 1;
-  readonly device: { readonly id: string; readonly secret: string; readonly token: string } | null;
+  readonly device: RegisteredDevice | null;
   readonly accounts: readonly PushAccount[];
 }
 
@@ -257,8 +271,12 @@ export class RelayClient {
     return true;
   }
 
+  /** Ends the device and every subscription it has; one the relay no longer knows is ended too. */
   async deleteDevice(id: string, secret: string): Promise<void> {
-    await this.#call("DELETE", `/v1/devices/${id}`, undefined, secret);
+    const { status, json } = await this.#call("DELETE", `/v1/devices/${id}`, undefined, secret);
+    if (status !== 204 && status !== 404) {
+      throw new RelayError(status, json);
+    }
   }
 
   async subscribe(
@@ -310,7 +328,10 @@ export interface PushSource {
 
 /**
  * Brings `state` in line with the phone's `device` and the accounts it is signed in to: the
- * device registered with the relay under its current token, one subscription per account whose
+ * device registered with the relay under its current token, as the platform, app, and APNs
+ * environment it is now (a build signed otherwise installed over it changes the environment its
+ * tokens belong to, which the relay must send to, so the device is ended and registered anew,
+ * with every account's subscriptions), one subscription per account whose
  * deployment wakes phones, made for that deployment's current key and registered with it, and
  * none for accounts signed out of. Answers the new state, which the caller keeps; an account
  * that could not be subscribed, or whose deployment could not be asked, keeps the subscription
@@ -324,6 +345,15 @@ export async function syncPush(
 ): Promise<PushState> {
   let registered = state.device;
   let accounts = state.accounts;
+  if (
+    registered !== null &&
+    (registered.platform !== device.platform ||
+      registered.app !== device.app ||
+      registered.environment !== device.environment)
+  ) {
+    await stopPush(relay, state, sources);
+    registered = null;
+  }
   if (registered !== null && registered.token !== device.token) {
     const known = await relay.updateToken(registered.id, registered.secret, device.token);
     registered = known ? { ...registered, token: device.token } : null;
@@ -332,7 +362,14 @@ export async function syncPush(
     // A new device has no subscriptions at the relay, whatever was kept.
     accounts = [];
     const { id, secret } = await relay.registerDevice(device);
-    registered = { id, secret, token: device.token };
+    registered = {
+      id,
+      secret,
+      token: device.token,
+      platform: device.platform,
+      app: device.app,
+      environment: device.environment,
+    };
   }
   const { id, secret } = registered;
   const next: PushAccount[] = [];
@@ -345,7 +382,8 @@ export async function syncPush(
     let serverKey: string | null | undefined;
     try {
       serverKey = (await client.authMethods()).push?.applicationServerKey;
-    } catch {
+    } catch (error) {
+      console.warn(`push: ${origin} did not say whether it wakes phones`, error);
       // The deployment did not say whether it wakes phones, which is not it saying it does
       // not: what was kept stands, and it is asked again next time.
       if (kept !== undefined) {
@@ -360,9 +398,12 @@ export async function syncPush(
       next.push({ ...kept, sessionToken: session.sessionToken });
       continue;
     }
+    let step = "making keys";
     try {
       const keys = await generatePushKeys();
+      step = "subscribing at the relay";
       const { subscription, endpoint } = await relay.subscribe(id, secret, serverKey);
+      step = "registering the subscription";
       const registeredThere = await client.registerPushSubscription({
         endpoint,
         p256dh: keys.publicKey,
@@ -378,7 +419,8 @@ export async function syncPush(
         applicationServerKey: serverKey,
         deploymentSubscription: registeredThere.id,
       });
-    } catch {
+    } catch (error) {
+      console.warn(`push: ${origin}: failed ${step}`, error);
       if (kept !== undefined) {
         next.push(kept);
       }
@@ -387,8 +429,37 @@ export async function syncPush(
   // Whatever is not kept, the signed-out and the replaced alike, is unsubscribed.
   for (const gone of accounts) {
     if (!next.some((a) => a.subscription === gone.subscription)) {
-      await relay.unsubscribe(id, secret, gone.subscription).catch(() => undefined);
+      await relay.unsubscribe(id, secret, gone.subscription).catch((error: unknown) => {
+        console.warn(`push: ${gone.origin}: failed unsubscribing at the relay`, error);
+      });
     }
   }
   return { version: 1, device: registered, accounts: next };
+}
+
+/**
+ * Stops waking the phone until `syncPush` registers it again: each deployment's subscription is
+ * deleted, then the device at the relay with every subscription it has. A deployment that cannot
+ * be reached keeps its subscription until its next push finds the relay's gone (`404`), which
+ * deletes it there. Throws when the relay could not end the device, leaving `state` as it was.
+ */
+export async function stopPush(
+  relay: RelayClient,
+  state: PushState,
+  sources: readonly PushSource[],
+): Promise<PushState> {
+  for (const account of state.accounts) {
+    const source = sources.find(
+      (s) => s.origin === account.origin && s.client.session?.userId === account.userId,
+    );
+    await source?.client
+      .deletePushSubscription(account.deploymentSubscription)
+      .catch((error: unknown) => {
+        console.warn(`push: ${account.origin}: failed deleting its subscription`, error);
+      });
+  }
+  if (state.device !== null) {
+    await relay.deleteDevice(state.device.id, state.device.secret);
+  }
+  return EMPTY_PUSH_STATE;
 }

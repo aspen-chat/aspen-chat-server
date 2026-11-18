@@ -818,6 +818,17 @@ export class AspenClient {
     return result.data;
   }
 
+  /** Stops waking a phone through a subscription `registerPushSubscription` made. */
+  async deletePushSubscription(id: string): Promise<void> {
+    const result = await this.api.DELETE(
+      `${API_PREFIX}/users/@me/push-subscriptions/{subscription}`,
+      { params: { path: { subscription: id } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /**
    * Forgets the session locally without telling the server, as when another deployment's
    * session is abandoned and its server may be unreachable.

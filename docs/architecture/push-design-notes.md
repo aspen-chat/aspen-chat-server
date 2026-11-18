@@ -25,6 +25,20 @@ Why [Push](push.md) works as it does.
 - The dispatcher waits for the commit before reading, since events are published before their
   transaction commits. A message not there after `COMMIT_WAIT` was rolled back.
 
+## Attention rather than activity
+
+- Presence's `active` key would not do: it lasts ten minutes and belongs to the user, so it would
+  keep a phone silent long after the app on it was put away, and while a desktop window sat
+  unwatched. What decides a push is whether something is showing the message now, so a connection
+  says so itself and says at once when it stops.
+- Sixty seconds without input ends a connection's attention: someone reading without touching the
+  screen is not woken for a minute, and a desktop left focused stops holding pushes back soon after.
+- One member per connection, not one key per user, so a phone put away is woken even while the
+  user's desktop is still focused but idle, once that one's minute passes.
+- A message that arrives while its reader is attended elsewhere is not held and sent later unless
+  read: holding every attended recipient's push for a read check is a timer per person on every
+  message, which a message to a large community cannot afford.
+
 ## The badge
 
 - A counted badge is kept in Valkey for five minutes (`BADGE_KEPT`) and adjusted as messages arrive.

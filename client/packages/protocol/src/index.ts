@@ -333,6 +333,7 @@ export {
   decryptWebPush,
   generatePushKeys,
   parsePointer,
+  stopPush,
   syncPush,
   type PushAccount,
   type PushDevice,
@@ -340,6 +341,7 @@ export {
   type PushPointer,
   type PushSource,
   type PushState,
+  type RegisteredDevice,
 } from "./push";
 export {
   MEMBER_SEARCH_PAGE,

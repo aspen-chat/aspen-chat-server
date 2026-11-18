@@ -21,6 +21,7 @@ pub mod activity;
 pub mod admin;
 pub mod aspen_config;
 pub mod attachment;
+pub mod attention;
 pub mod ban;
 pub mod benchmark;
 pub mod block;

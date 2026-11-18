@@ -212,6 +212,21 @@ export class EventStream {
   }
 
   /**
+   * Tells the server whether the user is in front of the app on this connection, which keeps
+   * their phones from being woken while it is. Sent only on a connection that has identified;
+   * returns whether it was.
+   */
+  sendAttending(attending: boolean): boolean {
+    const socket = this.#socket;
+    if (this.#status !== "open" || socket === null || socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    const frame: ClientMessage = { type: attending ? "attending" : "stoppedAttending" };
+    socket.send(JSON.stringify(frame));
+    return true;
+  }
+
+  /**
    * Tells the server the user is typing in a channel, or (`typing` false) has stopped. Sent only
    * on a connection that has identified; returns whether it was.
    */

@@ -1863,6 +1863,13 @@
     "desktopHint": "Para los mensajes que tu configuración de notificaciones pide, mientras Aspen está abierto pero estás mirando otra cosa.",
     "desktopDenied": "Tu navegador bloquea las notificaciones de Aspen. Permítelas en la configuración del sitio e intenta de nuevo.",
     "desktopUnsupported": "Este navegador no puede mostrar notificaciones.",
+    "push": "Avisarme en este dispositivo de mensajes nuevos",
+    "pushHint": "Notificaciones push de los mensajes que pide tu configuración de notificaciones, mientras Aspen está cerrado o en segundo plano.",
+    "pushDenied": "Tu dispositivo bloquea las notificaciones de Aspen. Permítelas en su app de Configuración y vuelve a intentarlo.",
+    "pushPrompt": "¿Activar las notificaciones push de Aspen para mensajes nuevos?",
+    "pushPromptHint": "Puedes cambiarlo cuando quieras en Configuración, en Notificaciones.",
+    "pushAccept": "Aceptar",
+    "pushDecline": "Rechazar",
     "sounds": "Reproducir un sonido",
     "soundsHint": "Por el altavoz elegido para sonidos de notificación en Audio."
   },

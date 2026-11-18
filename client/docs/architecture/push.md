@@ -8,6 +8,8 @@ in [push-design-notes.md](push-design-notes.md).
 | Part                               | Where                                                                                                                              |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Asking, registering, subscribing   | `WakeThisPhone` (`src/api/push.tsx`)                                                                                               |
+| The person's answer                | `pushChoice.ts`, the prompt `PushPrompt`, and the switch in Settings' `NotificationsSection`                                       |
+| Saying the app is in front of them | `reportActivity` (`src/api/activity.ts`), `AspenSync.noteAttending`                                                                |
 | Relay subscriptions and decryption | `syncPush` (`packages/protocol/src/push.ts`)                                                                                       |
 | Native plugin bridge               | `AspenPush` (`src/api/pushBridge.ts`)                                                                                              |
 | Android                            | `packages/mobile/android`: `AspenPushPlugin`, `AspenMessagingService`, `PushHandler`, `WebPush`                                    |
@@ -17,10 +19,61 @@ in [push-design-notes.md](push-design-notes.md).
 
 On the mobile app, `WakeThisPhone`:
 
-1. asks to notify;
+1. asks whether to wake this device (`PushPrompt`), and only on Accept asks the system to notify;
 2. registers with `@capacitor/push-notifications`;
 3. keeps a relay subscription with every deployment of `useSources` through `syncPush`;
 4. saves the `PushState` through the native plugin `AspenPush`.
+
+### Asking
+
+The answer is this install's, kept in `localStorage` as `aspen.push`, not the account's: `on`,
+`off`, or not given.
+
+| Answer    | System says   | The app                                                      |
+| --------- | ------------- | ------------------------------------------------------------ |
+| Not given | Not asked yet | Shows the prompt                                             |
+| Not given | Allowed       | Takes it as `on`, asking nothing (an install from before it) |
+| Not given | Refused       | Asks nothing; Settings says to allow it in the system's      |
+| `on`      | Not asked yet | Asks the system, then registers if allowed                   |
+| `on`      | Allowed       | Registers                                                    |
+| `on`      | Refused       | Registers nothing; checks again each time the app comes back |
+| `off`     | Anything      | Registers nothing, and ends what was registered (`stopPush`) |
+
+- Accept answers `on`, Decline `off`. The X, Escape, or a tap beside the prompt leaves it unanswered
+  until the next start.
+- Settings' Notifications section, in the mobile app only, turns it on and off. Turning it off ends
+  the platform's token, each deployment's subscription, and the device at the relay. Turning it on
+  after the system refused looks again, since only the system's own settings can allow it then.
+- Android before 13 never asks; its system answers allowed, so it never shows the prompt.
+
+### While the app is open
+
+Every deployment's event stream says when the app is in front of the user (`attending`, at most
+every 15 seconds as they use it) and when it goes to the background or loses focus
+(`stoppedAttending`), which no phone of theirs is woken while (see the server's
+[Push](../../../docs/architecture/push.md#attention)). A window losing focus to a frame of its own,
+such as a plugin's view, still counts.
+
+### The device at the relay
+
+The kept `PushState` records what the device was registered as: its platform, app, and environment.
+When `describe` gives any of them otherwise, `syncPush` ends the device (`stopPush`: each
+deployment's subscription, then the device and its subscriptions at the relay) and registers it
+anew, subscribing every account again. A build signed otherwise installed over the app, a
+development build over a TestFlight one or the reverse, changes the environment its tokens belong
+to, and the relay would otherwise go on sending to the other APNs. A state kept without them is
+registered anew once.
+
+### Logs on a device
+
+`console` output reaches the system's log (os_log on iOS, logcat on Android) in debug builds only,
+unless the native projects are synced with `ASPEN_DEVICE_LOGS=1` (`cap sync`, which writes
+`capacitor.config.ts`'s `loggingBehavior` into them). Builds for the developers' own devices set it;
+CI and published builds never do. Every place where waking the phone can stop logs a `push:` warning
+or error with its cause: the build has no push, the system did not allow notifications (and which
+answer it gave), the platform refused to register, and each deployment's failing step in `syncPush`.
+
+### What else
 
 - `syncPush` also decrypts a push (RFC 8291), as the native code must.
 - `AspenPush` says which platform, app, and relay the build is.
@@ -81,11 +134,17 @@ A build naming no relay registers for nothing. `describe` refuses there, before 
 
 - APNs;
 - the bundle id;
-- the sandbox, for a debug build;
+- the APNs environment the build's tokens belong to: the `aps-environment` entitlement of the
+  provisioning profile in its bundle (`ApsEnvironment`), so a Release build signed for development
+  says the sandbox; with no profile, as the App Store's and TestFlight's builds have, production,
+  and on the simulator the sandbox;
 - the relay that `AspenPushRelay` in `Info.plist` names. It comes from the build setting
   `ASPEN_PUSH_RELAY`, which the app target sets to `https://notify.aspen-chat.com` and the
   `xcodebuild` command line or a publisher's project may replace. Empty, like Android's string, the
   build has no push.
+
+`describe` refuses, and the build has no push, when the relay is empty or when the profile grants no
+`aps-environment` or cannot be read.
 
 ### State
 

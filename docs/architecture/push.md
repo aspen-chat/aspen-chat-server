@@ -13,7 +13,7 @@ credentials, is its own repository (`aspen-push-relay`). Design notes:
 | Encryption and signing | `app::push::webpush` (the `aspen_webpush` crate)                    |
 | HTTP client            | `app::push::client`                                                 |
 | Dispatcher             | `app::push::spawn_dispatcher`, one per API server                   |
-| Who to wake            | `RECIPIENTS_SQL`, `visibility::viewers`                             |
+| Who to wake            | `RECIPIENTS_SQL`, `visibility::viewers`, `app::attention`           |
 | Send queue             | `app::push::queue`                                                  |
 | Who has phones         | `phones_of`                                                         |
 | Badge count            | `push::badge_of`, kept for `BADGE_KEPT`                             |
@@ -167,7 +167,37 @@ never wakes:
 - anyone who muted the channel, or its category without keeping the channel unmuted (a thread
   counting as its parent; `app::channel_mute::muted_sql!`);
 - anyone in do not disturb (see [Presence](event-routing/presence.md#choosing-a-status));
-- anyone active on Aspen at that moment.
+- anyone in front of Aspen at that moment (see [Attention](#attention)).
+
+### Attention
+
+Someone is in front of Aspen while any of their event stream connections is attended
+(`app::attention`):
+
+| Part     | Where                                                                                     |
+| -------- | ----------------------------------------------------------------------------------------- |
+| Frames   | `attending` and `stoppedAttending`, from the client                                       |
+| Key      | `user:{uuid}:attended`, a sorted set of connection ids scored by when each stops counting |
+| Lifetime | `ATTENDED_FOR` (60 seconds) after a connection's last `attending`                         |
+| Writes   | At most one per connection a second (`WRITE_GAP`); refreshes at most every 15 seconds     |
+
+- A client says `attending` as its user uses it while it is shown and focused, at most every
+  `ATTENDING_REFRESH` (15 seconds), and again on each `ready`. It says `stoppedAttending` when it
+  goes to the background or loses focus to another program.
+- A connection's member goes when it says `stoppedAttending`, when it closes, or `ATTENDED_FOR`
+  after its last `attending`, whichever is first. A server that stops without closing its
+  connections leaves its members to that last.
+- Scores are written and compared on Valkey's clock, in its scripts (`MARK`, `ASK`), so the server
+  that marks a connection and the one deciding a push never compare their own clocks.
+- Each connection is a member of its own, so one device going idle or to the background never
+  answers for another the user is using.
+- A client that never says `attending` (a version that predates it) is never attended, so its user
+  is woken as though it were not open.
+- It is not presence: the `active` key keeps someone online for ten minutes after their last use,
+  which says nothing of whether they are looking now (see
+  [Presence](event-routing/presence.md#valkey-keys)).
+- Nobody else can learn of it: it is read only to decide the user's own pushes, and no event or read
+  carries it. Nothing it decides gives or takes access.
 
 ### Finding them
 
@@ -185,7 +215,7 @@ never wakes:
 3. It leaves out those who blocked the author, muted the channel or its category, are in do not
    disturb, or have no phone.
 4. Who may view the channel is decided once for the candidates (`visibility::viewers`).
-5. Who is active is asked of Valkey, `ACTIVE_BATCH` (1000) at a time.
+5. Who is in front of Aspen is asked of Valkey, `attention::ASK_BATCH` (1000) at a time.
 
 Each is sent `message` with `Urgency: high`. Up to `FAN_OUT` people are prepared at once, their
 phones read in one query.

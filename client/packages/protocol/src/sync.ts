@@ -342,6 +342,14 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 export const ACTIVITY_INTERVAL_MS = 60_000;
 
 /**
+ * How long the server counts a connection as attended after its last `attending` frame, and the
+ * least time between two it writes; both mirror the event stream's (`ATTENDED_FOR`,
+ * `ATTENDING_REFRESH`).
+ */
+export const ATTENDED_FOR_MS = 60_000;
+export const ATTENDING_REFRESH_MS = 15_000;
+
+/**
  * How often the server is told again that the user is still typing in a channel, while they
  * type; mirrors the server's `TYPING_REFRESH_SECONDS`.
  */
@@ -538,6 +546,12 @@ export class AspenSync {
   /** When the user last did something in the app, and when the server was last told. */
   #lastActivityAt = Number.NEGATIVE_INFINITY;
   #activityReportedAt = Number.NEGATIVE_INFINITY;
+  /**
+   * When the user last used the app while it was in front of them, and when this connection last
+   * said so; `null` while it has not, or has since said they stopped.
+   */
+  #attendedAt = Number.NEGATIVE_INFINITY;
+  #attendingSentAt: number | null = null;
   /** The channels the server was told the user is typing in, and when it was last told. */
   readonly #typingSent = new Map<string, number>();
   /**
@@ -4771,6 +4785,39 @@ export class AspenSync {
     this.store.forgetTyping();
   }
 
+  /**
+   * The user did something in the app while it is shown and focused, which keeps their phones
+   * from being woken for as long as they go on (`ATTENDED_FOR_MS` after the last). The server
+   * hears of it at most every `ATTENDING_REFRESH_MS`, and again on each new connection.
+   */
+  noteAttending(): void {
+    const now = this.#now();
+    this.#attendedAt = now;
+    if (this.#attendingSentAt !== null && now - this.#attendingSentAt < ATTENDING_REFRESH_MS) {
+      return;
+    }
+    if (this.#stream.sendAttending(true)) {
+      this.#attendingSentAt = now;
+    }
+  }
+
+  /** The app went to the background or lost focus: the user's phones may be woken again. */
+  noteNotAttending(): void {
+    this.#attendedAt = Number.NEGATIVE_INFINITY;
+    if (this.#attendingSentAt !== null) {
+      this.#attendingSentAt = null;
+      this.#stream.sendAttending(false);
+    }
+  }
+
+  #reportAttending(): void {
+    this.#attendingSentAt = null;
+    const now = this.#now();
+    if (now - this.#attendedAt < ATTENDED_FOR_MS && this.#stream.sendAttending(true)) {
+      this.#attendingSentAt = now;
+    }
+  }
+
   #reportActivity(): void {
     const now = this.#now();
     if (
@@ -4786,6 +4833,8 @@ export class AspenSync {
 
   #onReady(info: ReadyInfo): void {
     this.#reportActivity();
+    // A new connection is not attended until it says so.
+    this.#reportAttending();
     this.#tellViewing();
     // A new connection watches nobody, and what it missed meanwhile is read whole once the
     // server says it has taken up whom it watches (`#onWatching`).

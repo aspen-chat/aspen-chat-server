@@ -349,6 +349,54 @@ describe("AspenSync", () => {
     sync.stop();
   });
 
+  it("says the user is attending at most every refresh, that they stopped once, and again on a new connection", async () => {
+    let now = 0;
+    const { sync } = makeSync(bootstrapResponses(), () => now);
+    // Attention before the stream is up is told when it comes up.
+    sync.noteAttending();
+    const socket = await goLive(sync);
+    const said = (s: FakeSocket) =>
+      s.sent
+        .map((f) => (f as { type: string }).type)
+        .filter((t) => t === "attending" || t === "stoppedAttending");
+    expect(said(socket)).toEqual(["attending"]);
+    now = 10_000;
+    sync.noteAttending();
+    expect(said(socket)).toEqual(["attending"]);
+    now = 15_000;
+    sync.noteAttending();
+    expect(said(socket)).toEqual(["attending", "attending"]);
+    sync.noteNotAttending();
+    sync.noteNotAttending();
+    expect(said(socket)).toEqual(["attending", "attending", "stoppedAttending"]);
+    // Coming back is told at once, however soon.
+    now = 16_000;
+    sync.noteAttending();
+    expect(said(socket)).toEqual(["attending", "attending", "stoppedAttending", "attending"]);
+    // A new connection is told while the user is still attending, and not once they have left it.
+    now = 40_000;
+    socket.close();
+    await settle();
+    const again = FakeSocket.instances[1];
+    if (again === undefined) {
+      throw new Error("no reconnect attempt");
+    }
+    again.onopen?.();
+    again.frame(ready({ resumed: true }));
+    expect(said(again)).toEqual(["attending"]);
+    now = 200_000;
+    again.close();
+    await settle();
+    const late = FakeSocket.instances[2];
+    if (late === undefined) {
+      throw new Error("no second reconnect attempt");
+    }
+    late.onopen?.();
+    late.frame(ready({ resumed: true }));
+    expect(said(late)).toEqual([]);
+    sync.stop();
+  });
+
   it("says the user is typing at most every refresh, and that they stopped once", async () => {
     let now = 0;
     let values: Record<string, unknown> = {};

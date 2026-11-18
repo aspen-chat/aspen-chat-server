@@ -105,6 +105,16 @@ pub enum ClientMessage {
     /// while they don't. A connected user shows as away once `[presence] away_after_seconds` pass
     /// without one from any of their devices. Frames closer together than that are ignored.
     Activity,
+    /// The user is in front of the app on this connection: it is shown and focused, and they
+    /// used it just now. Send it as they use it, at most every `ATTENDING_REFRESH_SECONDS` (15)
+    /// while they go on, and on every `ready` while they are. The connection counts as attended
+    /// for `ATTENDED_FOR_SECONDS` (60) after the last, and while any of a user's connections is,
+    /// no phone of theirs is woken, since what they are using tells them. Closer frames are
+    /// ignored. Nothing answers it.
+    Attending,
+    /// The user stopped being in front of the app on this connection: it went to the background
+    /// or lost focus. A connection that closes says so on its own. Nothing answers it.
+    StoppedAttending,
     /// The user is typing in a channel: send it when they start, again every
     /// `TYPING_REFRESH_SECONDS` (3) while they go on, and not while they don't. Those who may
     /// view the channel are told by `ephemeral` frames, and show it for
@@ -763,6 +773,8 @@ async fn pump_events(
     let mut last_activity: Option<tokio::time::Instant> = None;
     // Dropped with the connection, which says the user stopped wherever they were typing.
     let typist = Typist::spawn(state.clone(), user);
+    // Dropped with the connection, which ends its attention.
+    let attention = app::attention::Attention::spawn(state.clone(), user);
     // Dropped with the connection, which ends its watch.
     let mut presence = state.presence_feed.watch(user);
     // Dropped with the connection, which ends its task.
@@ -885,7 +897,7 @@ async fn pump_events(
                 }
             },
             // Drive the read side of the socket too. After `identify` the client sends only
-            // `activity`, typing, and watching frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
+            // `activity`, attention, typing, and watching frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
             // arrive on this same channel. Tungstenite only reacts to them while the stream is
             // being polled, so without this arm a client-initiated close frame would sit unread
             // indefinitely and pongs would never be counted.
@@ -912,6 +924,8 @@ async fn pump_events(
                                 app::user_status::mark_active(state, user);
                             }
                         }
+                        Ok(ClientMessage::Attending) => attention.attending(),
+                        Ok(ClientMessage::StoppedAttending) => attention.stopped(),
                         Ok(ClientMessage::Typing { channel_id }) => typist.typing(channel_id),
                         Ok(ClientMessage::StoppedTyping { channel_id }) => {
                             typist.stopped(channel_id);
@@ -1063,6 +1077,14 @@ mod tests {
     fn activity_parses() {
         let frame: ClientMessage = serde_json::from_str(r#"{"type":"activity"}"#).unwrap();
         assert!(matches!(frame, ClientMessage::Activity));
+    }
+
+    #[test]
+    fn attention_parses() {
+        let frame: ClientMessage = serde_json::from_str(r#"{"type":"attending"}"#).unwrap();
+        assert!(matches!(frame, ClientMessage::Attending));
+        let frame: ClientMessage = serde_json::from_str(r#"{"type":"stoppedAttending"}"#).unwrap();
+        assert!(matches!(frame, ClientMessage::StoppedAttending));
     }
 
     #[test]

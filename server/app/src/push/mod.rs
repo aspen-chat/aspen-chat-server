@@ -493,8 +493,8 @@ fn reaches_inside(state: &GlobalServerContext, endpoint: &reqwest::Url) -> bool 
         && !(loopback && state.config.federation.development.allow_private_addresses)
 }
 
-/// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now or are
-/// in do not disturb, as for a message (`spec/push.md`).
+/// Wakes `user`'s phones for a plugin's notice to them, unless they are in front of Aspen now
+/// (`app::attention`) or in do not disturb, as for a message (`spec/push.md`).
 pub async fn notice(
     state: &GlobalServerContext,
     user: UserId,
@@ -505,11 +505,7 @@ pub async fn notice(
         return;
     }
     let woken = async {
-        let active: Option<i64> = state
-            .valkey
-            .get(crate::user_status::active_key(user))
-            .await?;
-        if active.is_some()
+        if crate::attention::attended(state, &[user]).await?[0]
             || crate::presence_override::do_not_disturb(
                 state.connection_pool.get().await?.as_mut(),
                 user,
@@ -1015,30 +1011,16 @@ async fn recipients(
     }
     drop(conn);
     let listed: Vec<(UserId, bool)> = candidates.into_iter().collect();
-    // Those using Aspen right now are not woken; asked in batches, so a message to a whole
-    // community never sends Valkey one command naming every member, and the batches at once.
-    let batches = futures_util::future::try_join_all(listed.chunks(ACTIVE_BATCH).map(|batch| {
-        let keys: Vec<String> = batch
-            .iter()
-            .map(|(user, _)| crate::user_status::active_key(*user))
-            .collect();
-        async move {
-            let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
-            Ok::<_, crate::Error>(
-                batch
-                    .iter()
-                    .zip(active)
-                    .filter_map(|(recipient, active)| active.is_none().then_some(*recipient))
-                    .collect::<Vec<_>>(),
-            )
-        }
-    }))
-    .await?;
-    Ok((batches.into_iter().flatten().collect(), community.is_some()))
+    // Those in front of Aspen right now are not woken: what they are using tells them.
+    let users: Vec<UserId> = listed.iter().map(|(user, _)| *user).collect();
+    let attended = crate::attention::attended(state, &users).await?;
+    let woken = listed
+        .into_iter()
+        .zip(attended)
+        .filter_map(|(recipient, attended)| (!attended).then_some(recipient))
+        .collect();
+    Ok((woken, community.is_some()))
 }
-
-/// How many people's activity one Valkey command asks about.
-const ACTIVE_BATCH: usize = 1000;
 
 #[derive(diesel::QueryableByName)]
 struct Recipient {

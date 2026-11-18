@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_PUSH_STATE,
   RelayClient,
+  RelayError,
   base64UrlDecode,
   decryptWebPush,
   parsePointer,
+  stopPush,
   syncPush,
   type AspenClient,
   type PushDevice,
   type PushSource,
+  type PushState,
 } from "../src";
 
 describe("decryptWebPush", () => {
@@ -103,6 +106,7 @@ function fakeRelay() {
 
 function account(origin: string, userId: string, key: string | null, refreshToken = "r") {
   const registered: unknown[] = [];
+  const deleted: string[] = [];
   const client = {
     session: { userId, refreshToken, sessionToken: "s", sessionTokenExpires: "" },
     authMethods: () =>
@@ -111,8 +115,12 @@ function account(origin: string, userId: string, key: string | null, refreshToke
       registered.push(body);
       return Promise.resolve({ id: `dep-${userId}`, endpoint: "", createdAt: "" });
     },
+    deletePushSubscription: (id: string) => {
+      deleted.push(id);
+      return Promise.resolve();
+    },
   } as unknown as AspenClient;
-  return { source: { origin, client } satisfies PushSource, registered };
+  return { source: { origin, client } satisfies PushSource, registered, deleted };
 }
 
 const phone: PushDevice = {
@@ -129,7 +137,14 @@ describe("syncPush", () => {
     const quiet = account("https://b.example", "u2", null);
     const state = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source, quiet.source]);
     expect(calls).toEqual(["POST /v1/devices", "POST /v1/devices/d1/subscriptions"]);
-    expect(state.device).toEqual({ id: "d1", secret: "s1", token: "t1" });
+    expect(state.device).toEqual({
+      id: "d1",
+      secret: "s1",
+      token: "t1",
+      platform: "apns",
+      app: "com.aspen-chat.client",
+      environment: "production",
+    });
     expect(state.accounts.map((a) => [a.origin, a.subscription, a.deploymentSubscription])).toEqual(
       [["https://a.example", "sub1", "dep-u1"]],
     );
@@ -206,5 +221,103 @@ describe("syncPush", () => {
       "POST /v1/devices/d1/subscriptions",
     ]);
     expect(again.accounts).toHaveLength(1);
+  });
+});
+
+describe("syncPush, when the phone is registered as something else", () => {
+  it("ends the device and registers it anew when its environment changes", async () => {
+    const { relay, calls } = fakeRelay();
+    const home = account("https://a.example", "u1", "KEY-A");
+    const first = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source]);
+    calls.length = 0;
+    const sandbox = { ...phone, environment: "sandbox" as const, token: "t2" };
+    const again = await syncPush(relay, first, sandbox, [home.source]);
+    expect(home.deleted).toEqual(["dep-u1"]);
+    expect(calls).toEqual([
+      "DELETE /v1/devices/d1",
+      "POST /v1/devices",
+      "POST /v1/devices/d1/subscriptions",
+    ]);
+    expect(again.device?.environment).toBe("sandbox");
+    expect(again.device?.token).toBe("t2");
+    expect(again.accounts.map((a) => a.subscription)).toEqual(["sub2"]);
+  });
+
+  it("registers anew a device kept before what it was registered as was", async () => {
+    const { relay, calls } = fakeRelay();
+    const home = account("https://a.example", "u1", "KEY-A");
+    const first = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source]);
+    const { id, secret, token } = first.device ?? { id: "", secret: "", token: "" };
+    const kept: PushState = { ...first, device: { id, secret, token } };
+    calls.length = 0;
+    const again = await syncPush(relay, kept, phone, [home.source]);
+    expect(calls).toEqual([
+      "DELETE /v1/devices/d1",
+      "POST /v1/devices",
+      "POST /v1/devices/d1/subscriptions",
+    ]);
+    expect(again.device?.environment).toBe("production");
+  });
+
+  it("changes nothing when the relay will not end the device", async () => {
+    const failing = new RelayClient("https://relay.example", () =>
+      Promise.resolve(new Response(JSON.stringify({}), { status: 503 })),
+    );
+    const state: PushState = {
+      version: 1,
+      device: { id: "d1", secret: "s1", token: "t1", platform: "apns", app: phone.app },
+      accounts: [],
+    };
+    await expect(syncPush(failing, state, phone, [])).rejects.toBeInstanceOf(RelayError);
+  });
+});
+
+describe("stopPush", () => {
+  it("deletes each deployment's subscription and then the device", async () => {
+    const { relay, calls } = fakeRelay();
+    const home = account("https://a.example", "u1", "KEY-A");
+    const away = account("https://b.example", "u2", "KEY-B");
+    const state = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source, away.source]);
+    calls.length = 0;
+    // A deployment no longer signed in to is left to find the relay's subscription gone.
+    const stopped = await stopPush(relay, state, [home.source]);
+    expect(home.deleted).toEqual(["dep-u1"]);
+    expect(away.deleted).toEqual([]);
+    expect(calls).toEqual(["DELETE /v1/devices/d1"]);
+    expect(stopped).toEqual(EMPTY_PUSH_STATE);
+  });
+
+  it("goes on past a deployment that cannot be reached", async () => {
+    const { relay, calls } = fakeRelay();
+    const home = account("https://a.example", "u1", "KEY-A");
+    const state = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source]);
+    calls.length = 0;
+    const unreachable = {
+      origin: home.source.origin,
+      client: {
+        session: home.source.client.session,
+        deletePushSubscription: () => Promise.reject(new TypeError("Failed to fetch")),
+      } as unknown as AspenClient,
+    } satisfies PushSource;
+    expect(await stopPush(relay, state, [unreachable])).toEqual(EMPTY_PUSH_STATE);
+    expect(calls).toEqual(["DELETE /v1/devices/d1"]);
+  });
+
+  it("refuses to forget a device the relay would not end", async () => {
+    const failing = new RelayClient("https://relay.example", () =>
+      Promise.resolve(new Response(JSON.stringify({}), { status: 503 })),
+    );
+    const state: PushState = {
+      version: 1,
+      device: { id: "d1", secret: "s1", token: "t1" },
+      accounts: [],
+    };
+    await expect(stopPush(failing, state, [])).rejects.toBeInstanceOf(RelayError);
+  });
+
+  it("has nothing to end for a phone never registered", async () => {
+    const { relay, calls } = fakeRelay();
+    expect(await stopPush(relay, EMPTY_PUSH_STATE, [])).toEqual(EMPTY_PUSH_STATE);
+    expect(calls).toEqual([]);
   });
 });
