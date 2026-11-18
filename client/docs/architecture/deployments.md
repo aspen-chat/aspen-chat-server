@@ -1,7 +1,8 @@
 # Deployments and federation
 
-The user's home is the server they chose and signed in to. The other deployments they use are signed
-in to from there. The app shows them all together: one rail, one DM list, one call at a time.
+An account's home is the server it signed in to. The other deployments it uses are signed in to from
+there. The app shows them all together: one rail, one DM list, one call at a time. An install may
+hold several accounts ([accounts.md](accounts.md)), each with its own home and deployments.
 
 Design notes: [deployments-design-notes.md](deployments-design-notes.md).
 
@@ -110,7 +111,7 @@ calls `useSync()` acts where it is shown.
 | (default)      | The home                                                                                       |
 | `ForeignScope` | Under `/at/{domain}`, that deployment                                                          |
 | `HomeScope`    | The home again, for what is the account's: the user footer, settings, security, bots, sign-out |
-| `SourceScope`  | One deployment for each entry of a list that mixes them                                        |
+| `SourceScope`  | One deployment for each entry of a list that mixes them, under that source's account           |
 
 ## Reading across deployments
 
@@ -154,11 +155,11 @@ link does.
 
 ## Adding, leaving, and signing out
 
-| Action       | Where                                                   |
-| ------------ | ------------------------------------------------------- |
-| Add a server | The add dialog's last option (`OtherServerForm`)        |
-| Leave one    | Settings (`OtherServersSection`)                        |
-| Sign out     | Signing out at home signs out everywhere (`useSignOut`) |
+| Action       | Where                                                                 |
+| ------------ | --------------------------------------------------------------------- |
+| Add a server | The add dialog's last option (`OtherServerForm`)                      |
+| Leave one    | Settings (`OtherServersSection`)                                      |
+| Sign out     | Signing an account out at home signs it out everywhere (`useSignOut`) |
 
 The join form (`JoinForm`: the add dialog's join step, and the empty home screen's) hands a
 registration invite of another deployment, scanned or pasted, to the add-a-server form

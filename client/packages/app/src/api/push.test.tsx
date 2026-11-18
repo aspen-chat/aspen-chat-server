@@ -53,7 +53,10 @@ vi.mock("./pushBridge", () => ({
   },
   loadState: () => Promise.resolve(saved),
 }));
-vi.mock("./everywhere", () => ({ useSources: () => [] }));
+vi.mock("./accounts", () => ({
+  useAllSources: () => [],
+  useAccountsHub: () => ({ isFront: () => true, bringToFront: () => undefined }),
+}));
 vi.mock("@/config", () => ({ detectShell: () => "mobile" }));
 vi.mock("@tanstack/react-router", () => {
   const navigate = () => undefined;

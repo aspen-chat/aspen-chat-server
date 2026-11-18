@@ -1,4 +1,10 @@
-import { AspenClient, AspenSync, Deployments, SESSION_KEY, deploymentUrl } from "@aspen/protocol";
+import {
+  AspenClient,
+  AspenSync,
+  Deployments,
+  deploymentUrl,
+  foreignSessionKey,
+} from "@aspen/protocol";
 import { ArrowClockwiseIcon, GlobeIcon } from "@phosphor-icons/react";
 import {
   useContext,
@@ -9,9 +15,10 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "react-aria-components";
+import { useAccount } from "./accounts";
 import { reportActivity } from "./activity";
 import type { Source } from "./everywhere";
-import { AspenClientContext, useHomeClient } from "./context";
+import { AspenClientContext, HomeClientContext, useHomeClient } from "./context";
 import { clockStore, deviceStore, solveInWorkers } from "./devices";
 import {
   DeploymentsContext,
@@ -29,26 +36,22 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
- * Where a session for another deployment is kept: one key per home account and deployment, so
- * an account signed in later on the same browser never picks up another's sessions.
- */
-function sessionKey(homeUser: string, domain: string): string {
-  return `${SESSION_KEY}.${homeUser}@${domain}`;
-}
-
-/**
  * Owns the user's other deployments for as long as they are signed in at home: signs in to each
  * the home lists, gives each a sync sharing the home's preferences, reports the user's activity
- * to each so they show as present there too, and disconnects on unmount.
+ * to each while the account is `attended`, so they show as present there too, and disconnects on
+ * unmount.
  */
 export function DeploymentsProvider({
   homeSync,
+  attended,
   children,
 }: {
   homeSync: AspenSync;
+  attended: boolean;
   children: ReactNode;
 }) {
   const home = useHomeClient();
+  const account = useAccount();
   // Each deployment's uploads are watched while it is signed in to (`guardSending`,
   // `tellUploadFailures`).
   const [guards] = useState<(() => void)[]>(() => []);
@@ -59,8 +62,10 @@ export function DeploymentsProvider({
         client: (domain) =>
           new AspenClient({
             baseUrl: deploymentUrl(domain),
-            sessionStore: sessionStore(sessionKey(home.session?.userId ?? "", domain)),
-            deviceStore: deviceStore(deploymentUrl(domain)),
+            sessionStore: sessionStore(
+              foreignSessionKey(account, home.session?.userId ?? "", domain),
+            ),
+            deviceStore: deviceStore(deploymentUrl(domain), account.id),
             clockStore: clockStore(deploymentUrl(domain)),
             solvePuzzle: solveInWorkers,
           }),
@@ -78,7 +83,7 @@ export function DeploymentsProvider({
           return sync;
         },
       }),
-    [home, homeSync, guards],
+    [home, homeSync, guards, account],
   );
   useEffect(() => {
     void hub.start();
@@ -111,15 +116,15 @@ export function DeploymentsProvider({
   );
   const list = useSyncExternalStore(hub.subscribe, () => hub.list);
   useEffect(() => {
-    const stops = list.flatMap((entry) =>
-      entry.sync === null ? [] : [reportActivity(entry.sync)],
-    );
+    const stops = attended
+      ? list.flatMap((entry) => (entry.sync === null ? [] : [reportActivity(entry.sync)]))
+      : [];
     return () => {
       for (const stop of stops) {
         stop();
       }
     };
-  }, [list]);
+  }, [list, attended]);
   return <DeploymentsContext.Provider value={hub}>{children}</DeploymentsContext.Provider>;
 }
 
@@ -208,14 +213,18 @@ export function HomeScope({ children }: { children: ReactNode }) {
 
 /**
  * Runs `children` against one deployment, as a list that mixes deployments does for each of
- * its entries, so what an entry shows and does is that deployment's.
+ * its entries, so what an entry shows and does is that deployment's, under its own account.
  */
 export function SourceScope({ source, children }: { source: Source; children: ReactNode }) {
   return (
     <ScopeDomainContext.Provider value={source.domain}>
-      <AspenClientContext.Provider value={source.client}>
-        <AspenSyncContext.Provider value={source.sync}>{children}</AspenSyncContext.Provider>
-      </AspenClientContext.Provider>
+      <HomeClientContext.Provider value={source.homeClient}>
+        <HomeSyncContext.Provider value={source.homeSync}>
+          <AspenClientContext.Provider value={source.client}>
+            <AspenSyncContext.Provider value={source.sync}>{children}</AspenSyncContext.Provider>
+          </AspenClientContext.Provider>
+        </HomeSyncContext.Provider>
+      </HomeClientContext.Provider>
     </ScopeDomainContext.Provider>
   );
 }

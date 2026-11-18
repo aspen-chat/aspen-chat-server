@@ -298,9 +298,9 @@ message as one with no text. Which markers make a spoiler is the client's Markdo
 notification code reads no Markdown, so it shows nothing a spoiler hides at the cost of hiding some
 texts that only look as if they held one, a table or a shell pipeline among them.
 
-A notification it posts carries `{ origin, channel, message, community, parentChannel }`, the
-channel's community (`null` in a DM) and, for a message in a thread, the channel the thread is in,
-so that tapping it opens the message.
+A notification it posts carries `{ origin, userId, channel, message, community, parentChannel }`,
+the channel's community (`null` in a DM) and, for a message in a thread, the channel the thread is
+in, so that tapping it opens the message.
 
 `AspenPush.describe()` says what the build is: `platform` (`apns` or `fcm`), `app` (the bundle id or
 Firebase project), `environment`, and `relay`, the URL of the relay of whoever published the build,

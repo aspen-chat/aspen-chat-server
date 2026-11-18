@@ -69,6 +69,9 @@ same commit, as with comments.
 - [`apple-builds.md`](docs/architecture/apple-builds.md): the iOS and macOS builds in CI, signing
   the dmg and notarizing it (stapled later by `notarized-dmg.yml`), the App Store build for
   TestFlight, and the secrets they need.
+- [`accounts.md`](docs/architecture/accounts.md): several accounts on one install, each on any
+  deployment: the setting, the account in front and those connected behind it, adding and signing
+  out, and what is kept per account or once per device.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions
   each needs, directories, moderation log, growth charts, registration invites, identity providers,
   and foreign users' bans.

@@ -33,6 +33,8 @@ export interface NotificationTarget {
   community: string | null;
   /** The channel a thread's message is in, when it is in a thread. */
   parentChannel: string | null;
+  /** Who it was for, among the accounts this phone holds on `origin`. */
+  userId?: string;
 }
 
 export async function loadState(): Promise<PushState> {
@@ -45,16 +47,21 @@ export async function loadState(): Promise<PushState> {
 }
 
 /**
- * Forgets every account the phone is woken for, as signing out does; the deployments drop their
- * subscriptions with the sign-in, and the relay's are swept at the next sign-in.
+ * Stops waking the phone for `gone`, as signing out does; the deployments drop their subscriptions
+ * with the sign-in, and the relay's are swept at the next sign-in.
  */
-export async function forgetPushAccounts(): Promise<void> {
+export async function forgetPushAccounts(
+  gone: readonly { origin: string; userId: string }[],
+): Promise<void> {
   if (detectShell() !== "mobile") {
     return;
   }
   const state = await loadState().catch(() => null);
   if (state !== null) {
-    await AspenPush.saveState({ state: JSON.stringify({ ...state, accounts: [] }) }).catch(
+    const accounts = state.accounts.filter(
+      (kept) => !gone.some((g) => g.origin === kept.origin && g.userId === kept.userId),
+    );
+    await AspenPush.saveState({ state: JSON.stringify({ ...state, accounts }) }).catch(
       () => undefined,
     );
   }

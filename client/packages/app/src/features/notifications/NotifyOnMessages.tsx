@@ -8,12 +8,15 @@ import {
 } from "@aspen/protocol";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useContext, useEffect, useRef } from "react";
+import { useAccountsHub } from "@/api/accounts";
 import { useSources, type Source } from "@/api/everywhere";
 import { HomeSyncContext } from "@/api/syncContext";
 import { detectShell } from "@/config";
 import { channelLink, messageLink, threadLink } from "@/features/messages/links";
 import { notificationOutputDevice } from "@/features/settings/audioDevices";
+import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 import { describe } from "./describe";
 import { messageBody, ReadBudget } from "./messageBody";
 import { playSound } from "./sounds";
@@ -32,7 +35,7 @@ function budgetOf(sync: AspenSync): ReadBudget {
 }
 
 /**
- * Tells the user of new messages their notification settings ask for (`AspenSync.onNotify`), and
+ * Tells an account of new messages its notification settings ask for (`AspenSync.onNotify`), and
  * of what plugins notify them of (`AspenSync.onPluginNotice`, which the server sends only where
  * those settings would tell of a message that tags them), on every deployment they use: a sound
  * (`NOTIFICATION_SOUNDS`), and, where they turned it on (`DESKTOP_NOTIFICATIONS`) and the browser
@@ -42,12 +45,14 @@ function budgetOf(sync: AspenSync): ReadBudget {
  * will be shown, and the app's own wording (`describe`) where that cannot be had in time
  * (`messageBody`). Nothing for the conversation the user is looking at, nothing at all in do
  * not disturb (the home's, which holds on every deployment), and no system notification in the
- * mobile app, whose phone is woken by push instead.
+ * mobile app, whose phone is woken by push instead. With several accounts held, a notification
+ * names the account it is for, and opening it brings that account to the front.
  */
 export function NotifyOnMessages() {
   const m = useMessages();
   const sources = useSources();
   const home = useContext(HomeSyncContext);
+  const accounts = useAccountsHub();
   const navigate = useNavigate();
   const params = useParams({ strict: false });
   const shown = useRef(params);
@@ -67,6 +72,7 @@ export function NotifyOnMessages() {
         home.store.doNotDisturb() ||
         (document.visibilityState === "visible" &&
           document.hasFocus() &&
+          accounts.isFront(source.accountId) &&
           (shown.current.domain ?? null) === source.domain &&
           (shown.current.channelId === channelId || shown.current.threadId === channelId)),
       // The mobile app sounds only while open; closed, its phone's own notification does.
@@ -84,10 +90,17 @@ export function NotifyOnMessages() {
         typeof Notification !== "undefined" &&
         Notification.permission === "granted",
       show: ({ title, body, tag, open }: Shown) => {
-        const notification = new Notification(title, { body, tag });
+        const me = home.store.me();
+        const notification = new Notification(
+          accounts.several && me !== null
+            ? format(m.accounts.notificationTitle, { title, account: displayNameOf(me) })
+            : title,
+          { body, tag: `${source.accountId}/${tag}` },
+        );
         notification.onclick = () => {
           window.focus();
           notification.close();
+          accounts.bringToFront(source.accountId);
           open();
         };
       },
@@ -154,7 +167,7 @@ export function NotifyOnMessages() {
         stop();
       }
     };
-  }, [sources, home, m, navigate]);
+  }, [sources, home, m, navigate, accounts]);
 
   return null;
 }

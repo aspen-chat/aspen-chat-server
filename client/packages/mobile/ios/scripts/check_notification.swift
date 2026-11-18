@@ -65,7 +65,7 @@ print("body: \(shown.body)")
 print("opens: channel \(shown.channel), message \(shown.message ?? "none"), community \(shown.community ?? "none"), parent channel \(shown.parentChannel ?? "none")")
 if arguments.count == 4 {
     let content = UNMutableNotificationContent()
-    shown.fill(content, origin: account.origin, thread: pointer["channel"] as? String ?? shown.channel)
+    shown.fill(content, origin: account.origin, userId: account.userId, thread: pointer["channel"] as? String ?? shown.channel)
     var payload: [String: Any] = [
         "aps": [
             "alert": ["title": content.title, "subtitle": content.subtitle, "body": content.body],

@@ -9,13 +9,22 @@ import { nativeSendsUploads, nativeUploadTransport, wordNativeUploads } from "./
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 
 /**
- * Owns the `AspenSync` for the signed-in session at home: it bootstraps on mount and stops,
- * forgetting the cache, on unmount, and meanwhile reports the user's activity so they show as
- * away when they stop using the app. The other deployments the user signs in to from home are
- * owned beneath it (`DeploymentsProvider`). Mount it only while a session exists, so signing out
- * unmounts it and signing in mounts a fresh one.
+ * Owns the `AspenSync` for an account's signed-in session at home: it bootstraps on mount and
+ * stops, forgetting the cache, on unmount. While the account is `attended`, in front of the
+ * person, it reports their activity, so they show as away when they stop using it; an account
+ * behind it stays connected and shows as away. The other deployments the account signs in to from
+ * home are owned beneath it (`DeploymentsProvider`). Mount it only while a session exists, so
+ * signing out unmounts it and signing in mounts a fresh one.
  */
-export function SyncProvider({ client, children }: { client: AspenClient; children: ReactNode }) {
+export function SyncProvider({
+  client,
+  attended,
+  children,
+}: {
+  client: AspenClient;
+  attended: boolean;
+  children: ReactNode;
+}) {
   const sync = useMemo(
     () =>
       new AspenSync({
@@ -30,16 +39,15 @@ export function SyncProvider({ client, children }: { client: AspenClient; childr
   );
   useEffect(() => {
     sync.start();
-    const stopReporting = reportActivity(sync);
     const stopGuarding = guardSending(sync);
     const stopTelling = tellUploadFailures(sync);
     return () => {
       stopTelling();
       stopGuarding();
-      stopReporting();
       sync.stop();
     };
   }, [sync]);
+  useEffect(() => (attended ? reportActivity(sync) : undefined), [sync, attended]);
   const m = useMessages();
   useEffect(() => {
     wordSendingGuard(m);
@@ -49,7 +57,9 @@ export function SyncProvider({ client, children }: { client: AspenClient; childr
   return (
     <HomeSyncContext.Provider value={sync}>
       <AspenSyncContext.Provider value={sync}>
-        <DeploymentsProvider homeSync={sync}>{children}</DeploymentsProvider>
+        <DeploymentsProvider homeSync={sync} attended={attended}>
+          {children}
+        </DeploymentsProvider>
       </AspenSyncContext.Provider>
     </HomeSyncContext.Provider>
   );

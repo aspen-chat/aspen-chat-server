@@ -1,10 +1,11 @@
 import type { IdentityProviderOutcome } from "@aspen/protocol";
 import { SignInIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { Button } from "react-aria-components";
 import { detectShell } from "@/config";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { AddingAccountContext } from "@/features/accounts/addingAccount";
 import { useIdentityProviders, useProviderFlow } from "./identityProviders";
 import { outlineButtonClass } from "./styles";
 
@@ -29,7 +30,12 @@ export function IdentityProviderButtons({
   const providers = useIdentityProviders();
   const run = useProviderFlow();
   const [pending, setPending] = useState<string | null>(null);
+  const adding = useContext(AddingAccountContext);
   const web = detectShell() === "web";
+  // The tab would leave for the provider, and with it the account being added.
+  if (web && adding) {
+    return null;
+  }
   return providers.map((provider) => (
     <Button
       key={provider.id}
