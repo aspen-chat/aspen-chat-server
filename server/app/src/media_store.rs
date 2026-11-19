@@ -174,8 +174,9 @@ pub enum Promotion {
     TooLarge,
 }
 
+/// The S3 API's side of a [`MediaStore`]: the bucket, and the clients that reach it.
 #[derive(Clone)]
-pub struct MediaStore {
+pub struct S3 {
     client: Client,
     /// Signs upload URLs for clients: the same credentials, addressed to the S3
     /// API as clients reach it. Signing is local, so this client never needs to
@@ -209,11 +210,7 @@ fn https_client_trusting(
         .build_https())
 }
 
-impl MediaStore {
-    pub async fn new(config: &AspenConfig) -> crate::error::Result<Self> {
-        Self::from_s3(&config.media.s3).await
-    }
-
+impl S3 {
     async fn from_s3(s3: &MediaS3Config) -> crate::error::Result<Self> {
         let mut sdk_config = aws_config::defaults(BehaviorVersion::latest());
         if let Some(ca) = s3.tls.as_ref().and_then(|tls| tls.ca_file.as_ref()) {
@@ -249,12 +246,7 @@ impl MediaStore {
         })
     }
 
-    /// Server-side upload.
-    ///
-    /// Used by [`crate::link_preview`] for OG-image thumbnails the server
-    /// fetches itself; client-driven uploads go through [`presign_upload`]
-    /// instead so the bytes never touch this process.
-    pub async fn put_bytes(
+    pub(crate) async fn put_bytes(
         &self,
         key: &str,
         bytes: Vec<u8>,
@@ -272,13 +264,7 @@ impl MediaStore {
         Ok(())
     }
 
-    /// Mint a short-lived presigned `PUT` URL for what becomes `key` once [`promote`]d: it
-    /// writes the staging key ([`upload_key`]), never `key` itself.
-    ///
-    /// The client must upload with `Content-Type: <content_type>` and exactly `length` bytes:
-    /// both are part of the canonical request the signature covers, so the store refuses
-    /// anything else.
-    pub async fn presign_upload(
+    pub(crate) async fn presign_upload(
         &self,
         key: &str,
         content_type: &str,
@@ -306,14 +292,7 @@ impl MediaStore {
         })
     }
 
-    /// The size in bytes of the object at `key`, or `None` when there is none.
-    ///
-    /// Used by [`promote`] to find a client's upload, and by
-    /// `app::attachment::preview` to weigh a preview against its original. A
-    /// missing object is a normal control-flow case (caller surfaces a
-    /// validation error to the client), so 404s are folded into `Ok(None)`;
-    /// every other transport / auth failure is propagated as `S3HeadObject`.
-    pub async fn head_object(&self, key: &str) -> crate::error::Result<Option<u64>> {
+    pub(crate) async fn head_object(&self, key: &str) -> crate::error::Result<Option<u64>> {
         Ok(self.head(key).await?.map(|(size, _)| size))
     }
 
@@ -342,9 +321,7 @@ impl MediaStore {
         }
     }
 
-    /// Streams the object at `key` into `sink`, answering how many bytes it wrote, or `None`
-    /// without writing them all when the object holds more than `limit`.
-    pub async fn copy_object_to(
+    pub(crate) async fn copy_object_to(
         &self,
         key: &str,
         limit: u64,
@@ -371,16 +348,7 @@ impl MediaStore {
         Ok((written <= limit).then_some(written))
     }
 
-    /// Moves a client's upload of `key` from its staging key to `key`, served as `served` says.
-    /// The copy is the store's own, so no byte passes through this process, and the staging
-    /// object is deleted after it. An upload of more than `max_bytes` is deleted instead. An
-    /// upload promoted already, by a confirm that then failed, is answered as it is, since only
-    /// the server writes `key`.
-    ///
-    /// What is copied is the object weighed and no other (`x-amz-copy-source-if-match` with its
-    /// `ETag`): the URL can write the staging key again until it expires, and an object replaced
-    /// between the weighing and the copy is weighed afresh, up to [`PROMOTE_ATTEMPTS`] times.
-    pub async fn promote(
+    pub(crate) async fn promote(
         &self,
         key: &str,
         max_bytes: u64,
@@ -520,17 +488,15 @@ impl MediaStore {
         result
     }
 
-    /// The time before which a staging object was written by a URL that expired more than
-    /// [`STAGING_GRACE`] ago, and is no use to anyone.
-    pub fn staging_cutoff(&self) -> DateTime<Utc> {
+    pub(crate) fn staging_cutoff(&self) -> DateTime<Utc> {
         Utc::now()
             - Duration::from_std(self.upload_url_ttl + STAGING_GRACE).unwrap_or(Duration::hours(2))
     }
 
-    /// Deletes the staging objects last written before `older_than` ([`staging_cutoff`]): what a
-    /// URL wrote after its upload was promoted, and uploads never confirmed. Answers how many it
-    /// deleted.
-    pub async fn sweep_uploads(&self, older_than: DateTime<Utc>) -> crate::error::Result<usize> {
+    pub(crate) async fn sweep_uploads(
+        &self,
+        older_than: DateTime<Utc>,
+    ) -> crate::error::Result<usize> {
         let mut pages = self
             .client
             .list_objects_v2()
@@ -555,10 +521,11 @@ impl MediaStore {
         Ok(swept)
     }
 
-    /// Reads the object at `key`, as the server serves a copy of it itself
-    /// (`app::federation::abroad`); `None`, having read no more than `limit` bytes of it, when
-    /// it holds more.
-    pub async fn get_bytes(&self, key: &str, limit: u64) -> crate::error::Result<Option<Vec<u8>>> {
+    pub(crate) async fn get_bytes(
+        &self,
+        key: &str,
+        limit: u64,
+    ) -> crate::error::Result<Option<Vec<u8>>> {
         let mut bytes = Vec::new();
         Ok(self
             .copy_object_to(key, limit, &mut bytes)
@@ -566,7 +533,7 @@ impl MediaStore {
             .map(|_| bytes))
     }
 
-    pub async fn delete(&self, key: &str) -> crate::error::Result<()> {
+    pub(crate) async fn delete(&self, key: &str) -> crate::error::Result<()> {
         self.client
             .delete_object()
             .bucket(&self.bucket)
@@ -577,16 +544,12 @@ impl MediaStore {
         Ok(())
     }
 
-    /// Deletes a client's upload of `key`: the object, and its staging key, where one never
-    /// confirmed still is.
-    pub async fn delete_upload(&self, key: &str) -> crate::error::Result<()> {
+    pub(crate) async fn delete_upload(&self, key: &str) -> crate::error::Result<()> {
         self.delete(&upload_key(key)).await?;
         self.delete(key).await
     }
 
-    /// Moves the object at `from` to `to` with the store's own copy, keeping how it is served,
-    /// and deletes `from`. Answers `false`, moving nothing, when there is no object at `from`.
-    pub async fn move_object(&self, from: &str, to: &str) -> crate::error::Result<bool> {
+    pub(crate) async fn move_object(&self, from: &str, to: &str) -> crate::error::Result<bool> {
         let head = match self
             .client
             .head_object()
@@ -648,9 +611,11 @@ impl MediaStore {
         Ok(true)
     }
 
-    /// A URL that reads the object at `key` for `ttl`, signed for the S3 API as clients reach it,
-    /// for what the anonymous read path does not serve ([`EVIDENCE_PREFIX`]).
-    pub async fn presign_get(&self, key: &str, ttl: StdDuration) -> crate::error::Result<String> {
+    pub(crate) async fn presign_get(
+        &self,
+        key: &str,
+        ttl: StdDuration,
+    ) -> crate::error::Result<String> {
         let presigned = self
             .presign_client
             .get_object()
@@ -662,13 +627,169 @@ impl MediaStore {
         Ok(presigned.uri().to_string())
     }
 
+    pub(crate) fn public_url(&self, key: &str) -> String {
+        format!("{}/{}", self.public_base_url, key)
+    }
+}
+
+/// Where the deployment's files are kept: uploads, attachments, their previews, icons, link
+/// preview pictures, and the evidence kept for reviewing reports. Objects are named by keys
+/// (`PublicPrefix::key`, [`upload_key`], [`evidence_key`]) whatever keeps them.
+#[derive(Clone)]
+pub enum MediaStore {
+    /// An S3 API: `[media.s3]`.
+    S3(S3),
+}
+
+impl MediaStore {
+    pub async fn new(config: &AspenConfig) -> crate::error::Result<Self> {
+        S3::from_s3(&config.media.s3).await.map(MediaStore::S3)
+    }
+
+    /// Server-side upload.
+    ///
+    /// Used by [`crate::link_preview`] for OG-image thumbnails the server
+    /// fetches itself; client-driven uploads go through [`presign_upload`]
+    /// instead so the bytes never touch this process.
+    pub async fn put_bytes(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> crate::error::Result<()> {
+        match self {
+            MediaStore::S3(store) => store.put_bytes(key, bytes, content_type).await,
+        }
+    }
+
+    /// Mint a short-lived presigned `PUT` URL for what becomes `key` once [`promote`]d: it
+    /// writes the staging key ([`upload_key`]), never `key` itself.
+    ///
+    /// The client must upload with `Content-Type: <content_type>` and exactly `length` bytes:
+    /// both are part of the canonical request the signature covers, so the store refuses
+    /// anything else.
+    pub async fn presign_upload(
+        &self,
+        key: &str,
+        content_type: &str,
+        length: u64,
+    ) -> crate::error::Result<PresignedUpload> {
+        match self {
+            MediaStore::S3(store) => store.presign_upload(key, content_type, length).await,
+        }
+    }
+
+    /// The size in bytes of the object at `key`, or `None` when there is none.
+    ///
+    /// Used by [`promote`] to find a client's upload, and by
+    /// `app::attachment::preview` to weigh a preview against its original. A
+    /// missing object is a normal control-flow case (caller surfaces a
+    /// validation error to the client), so 404s are folded into `Ok(None)`;
+    /// every other transport / auth failure is propagated as `S3HeadObject`.
+    pub async fn head_object(&self, key: &str) -> crate::error::Result<Option<u64>> {
+        match self {
+            MediaStore::S3(store) => store.head_object(key).await,
+        }
+    }
+
+    /// Streams the object at `key` into `sink`, answering how many bytes it wrote, or `None`
+    /// without writing them all when the object holds more than `limit`.
+    pub async fn copy_object_to(
+        &self,
+        key: &str,
+        limit: u64,
+        sink: &mut (impl tokio::io::AsyncWrite + Unpin),
+    ) -> crate::error::Result<Option<u64>> {
+        match self {
+            MediaStore::S3(store) => store.copy_object_to(key, limit, sink).await,
+        }
+    }
+
+    /// Moves a client's upload of `key` from its staging key to `key`, served as `served` says.
+    /// The copy is the store's own, so no byte passes through this process, and the staging
+    /// object is deleted after it. An upload of more than `max_bytes` is deleted instead. An
+    /// upload promoted already, by a confirm that then failed, is answered as it is, since only
+    /// the server writes `key`.
+    ///
+    /// What is copied is the object weighed and no other (`x-amz-copy-source-if-match` with its
+    /// `ETag`): the URL can write the staging key again until it expires, and an object replaced
+    /// between the weighing and the copy is weighed afresh, up to [`PROMOTE_ATTEMPTS`] times.
+    pub async fn promote(
+        &self,
+        key: &str,
+        max_bytes: u64,
+        served: &Served,
+    ) -> crate::error::Result<Promotion> {
+        match self {
+            MediaStore::S3(store) => store.promote(key, max_bytes, served).await,
+        }
+    }
+
+    /// The time before which a staging object was written by a URL that expired more than
+    /// [`STAGING_GRACE`] ago, and is no use to anyone.
+    pub fn staging_cutoff(&self) -> DateTime<Utc> {
+        match self {
+            MediaStore::S3(store) => store.staging_cutoff(),
+        }
+    }
+
+    /// Deletes the staging objects last written before `older_than` ([`staging_cutoff`]): what a
+    /// URL wrote after its upload was promoted, and uploads never confirmed. Answers how many it
+    /// deleted.
+    pub async fn sweep_uploads(&self, older_than: DateTime<Utc>) -> crate::error::Result<usize> {
+        match self {
+            MediaStore::S3(store) => store.sweep_uploads(older_than).await,
+        }
+    }
+
+    /// Reads the object at `key`, as the server serves a copy of it itself
+    /// (`app::federation::abroad`); `None`, having read no more than `limit` bytes of it, when
+    /// it holds more.
+    pub async fn get_bytes(&self, key: &str, limit: u64) -> crate::error::Result<Option<Vec<u8>>> {
+        match self {
+            MediaStore::S3(store) => store.get_bytes(key, limit).await,
+        }
+    }
+
+    pub async fn delete(&self, key: &str) -> crate::error::Result<()> {
+        match self {
+            MediaStore::S3(store) => store.delete(key).await,
+        }
+    }
+
+    /// Deletes a client's upload of `key`: the object, and its staging key, where one never
+    /// confirmed still is.
+    pub async fn delete_upload(&self, key: &str) -> crate::error::Result<()> {
+        match self {
+            MediaStore::S3(store) => store.delete_upload(key).await,
+        }
+    }
+
+    /// Moves the object at `from` to `to` with the store's own copy, keeping how it is served,
+    /// and deletes `from`. Answers `false`, moving nothing, when there is no object at `from`.
+    pub async fn move_object(&self, from: &str, to: &str) -> crate::error::Result<bool> {
+        match self {
+            MediaStore::S3(store) => store.move_object(from, to).await,
+        }
+    }
+
+    /// A URL that reads the object at `key` for `ttl`, signed for the S3 API as clients reach it,
+    /// for what the anonymous read path does not serve ([`EVIDENCE_PREFIX`]).
+    pub async fn presign_get(&self, key: &str, ttl: StdDuration) -> crate::error::Result<String> {
+        match self {
+            MediaStore::S3(store) => store.presign_get(key, ttl).await,
+        }
+    }
+
     /// Build the anonymous-read URL clients fetch the bytes from.
     ///
     /// The base URL is normalised once at construction time, so this is a
     /// straight `format!`; the caller is responsible for never passing a
     /// leading `/` in `key`.
     pub fn public_url(&self, key: &str) -> String {
-        format!("{}/{}", self.public_base_url, key)
+        match self {
+            MediaStore::S3(store) => store.public_url(key),
+        }
     }
 }
 
@@ -790,7 +911,7 @@ mod tests {
             endpoint: "http://127.0.0.1:8333".to_string(),
             ..keyed()
         };
-        let store = MediaStore::from_s3(&internal).await.unwrap();
+        let store = S3::from_s3(&internal).await.unwrap();
         let url = store
             .presign_upload("attachments/a", "text/plain", 1)
             .await
@@ -804,7 +925,7 @@ mod tests {
             public_endpoint: Some("https://media.example.org".to_string()),
             ..internal
         };
-        let store = MediaStore::from_s3(&public).await.unwrap();
+        let store = S3::from_s3(&public).await.unwrap();
         let url = store
             .presign_upload("attachments/a", "text/plain", 1)
             .await
@@ -815,7 +936,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_urls_are_signed_for_their_type_and_size() {
-        let store = MediaStore::from_s3(&keyed()).await.unwrap();
+        let store = S3::from_s3(&keyed()).await.unwrap();
         let signed_headers = |url: &str| {
             url::Url::parse(url)
                 .unwrap()
