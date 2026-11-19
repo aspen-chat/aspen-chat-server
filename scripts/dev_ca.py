@@ -134,6 +134,10 @@ def issue(*names: str) -> tuple[Path, Path]:
         "extendedKeyUsage=serverAuth\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature\n"
+        # Named outright: OpenSSL 4 no longer adds them to a certificate signed from an
+        # extensions file, and Python 3.13 and later refuse a certificate without the authority's.
+        "subjectKeyIdentifier=hash\n"
+        "authorityKeyIdentifier=keyid:always\n"
     )
     run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
         "-keyout", str(key), "-out", str(request), "-subj", f"/CN={names_list[0]}")
