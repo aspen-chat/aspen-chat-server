@@ -8,7 +8,9 @@ signalling and rooms on Tokio; the signalling is in [Signalling and media](signa
 
 | Piece                                         | Code                                                                            |
 | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| What it serves, started                       | `voice_server::VoiceServer` (`voice_server/src/lib.rs`)                         |
 | Listener                                      | `serve` in `voice_server/src/main.rs`                                           |
+| Its link to the API servers                   | `voice_server::Link` (`voice_server/src/reporter.rs`)                           |
 | Media threads                                 | `voice_media/` (`Media::start`, `src/thread.rs`, `src/net.rs`)                  |
 | Synthetic peer                                | `voice_media::peer` (feature `peer`)                                            |
 | Metrics                                       | `voice_server/src/metrics.rs`, names in `aspen_metrics::voice`                  |

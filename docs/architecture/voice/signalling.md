@@ -14,7 +14,7 @@ runs over WebRTC peer connections the server holds on its media threads (`voice_
 | Connections, offers, sections | `voice_media/src/connection.rs`                                                                                                                    |
 | Forwarding, slots, levels     | `voice_media/src/thread.rs`, `levels.rs`, `keyframe.rs`                                                                                            |
 | Per-section format parameters | `voice_media/src/sdp.rs`                                                                                                                           |
-| A media thread stopping       | `Stopped::MediaThread` in `voice_server/src/main.rs`                                                                                               |
+| A media thread stopping       | `voice_server::Failure::MediaThread`, which ends the process (`voice_server/src/main.rs`)                                                          |
 | A socket's place              | `Seat`                                                                                                                                             |
 | Client                        | `VoiceCall` in `client/packages/protocol/src/voice.ts`                                                                                             |
 | Test server                   | `voice_protocol/examples/fake_voice_server.rs`, which sends any report or command by hand. The API server's side is tested this way without media. |

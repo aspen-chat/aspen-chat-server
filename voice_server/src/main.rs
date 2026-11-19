@@ -1,27 +1,14 @@
-//! An Aspen voice server. See `voice_protocol` for what it agrees with the API server and the
-//! clients, `rooms` for the calls it carries, and `voice_server.toml` for its settings.
-
-mod capacity;
-mod config;
-mod limits;
-mod metrics;
-mod outbox;
-mod reporter;
-mod rooms;
-mod signalling;
-mod token_keys;
-mod transfer;
+//! The Aspen voice server's process: its allocator, command line, logging, NATS connection,
+//! metrics, and listeners. What it serves is `voice_server::VoiceServer`.
 
 use anyhow::Context;
 use axum::Router;
-use axum::http::StatusCode;
-use axum::routing::get;
 use clap::Parser;
 use schemars::schema_for;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use voice_protocol::signal::VoiceSignalProtocol;
+use voice_server::{Failure, Link, VoiceServer, capacity, config};
 
 /// jemalloc for the whole process (it also replaces `malloc`), which keeps memory from
 /// fragmenting across threads and reports what it holds (`aspen_metrics::memory`).
@@ -86,18 +73,6 @@ async fn main() -> anyhow::Result<()> {
     }
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
-    config.check_secret()?;
-    if config.token_secret.is_some() {
-        tracing::warn!(
-            "token_secret is set, so this server also takes join tokens of the shared-secret \
-             form; leave it out once every API server signs join tokens with its key"
-        );
-    }
-    config.transfer.check(&config.rtc)?;
-    let limits = Arc::new(
-        limits::Limits::new(&config.rate_limits)
-            .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,
-    );
     // Listening on loopback means a proxy on this machine passes every client on, and without
     // it trusted every client has the proxy's address: the per-address limits then count
     // everyone together, and a few clients lock out the rest.
@@ -118,103 +93,14 @@ async fn main() -> anyhow::Result<()> {
              the API servers can; give it a NATS user of its own ([nats_user])"
         );
     }
-    let reporter = reporter::Reporter::connect(&config, config.nats_auth()?)
+    let link = Link::connect(&config, config.nats_auth()?)
         .await
         .context("failed to connect to NATS")?;
-    aspen_limits::suspension::watch(reporter.bus(), limits.suspension().clone(), "voice");
-    let token_keys = token_keys::TokenKeys::start(reporter.bus(), config.id);
-    let media_addresses = config.rtc.media_addresses()?;
-    let ports = config.rtc.media_ports(config.media_threads)?;
-    // A media thread that stops takes its calls' media with it and would leave their rooms
-    // looking alive; the server stops instead, telling everyone, so their clients rejoin and
-    // whatever supervises the process starts it again.
-    let media = voice_media::Media::start(voice_media::MediaConfig {
-        addresses: media_addresses
-            .iter()
-            .map(config::MediaAddress::resolved)
-            .collect::<anyhow::Result<_>>()?,
-        first_port: *ports.start(),
-        threads: config.media_threads.max(1),
-        audio_slots: rooms::AUDIO_SLOTS,
-        max_watched_video: rooms::MAX_WATCHED_VIDEO,
-    })
-    .context("could not start the media threads")?;
-    for address in &media_addresses {
-        info!(
-            ip = %address.ip,
-            announced = address.host(),
-            ports = format!("{}-{}", ports.start(), ports.end()),
-            "media listening, over UDP and TCP"
-        );
-    }
-    let relay = Arc::new(
-        transfer::Relay::start(&config.transfer, &media_addresses)
-            .await
-            .context("could not start STUN and TURN for file transfers")?,
-    );
-    let rooms = rooms::Rooms::new(
-        config.id,
-        media,
-        reporter.reports(),
-        Arc::clone(&relay),
-        &config.rate_limits,
-        rooms::AUDIO_SLOTS,
-    );
-    {
-        let rooms = Arc::clone(&rooms);
-        reporter
-            .clone()
-            .spawn_load_reports(config.id, move || rooms.participant_count());
-    }
-    {
-        let rooms = Arc::clone(&rooms);
-        reporter.clone().spawn_snapshots(move || rooms.snapshot());
-    }
-    {
-        let rooms = Arc::clone(&rooms);
-        reporter
-            .spawn_commands(config.id, move |command| {
-                let rooms = Arc::clone(&rooms);
-                tokio::spawn(async move { rooms.command(command).await });
-            })
-            .await?;
-    }
-
+    let server = VoiceServer::start(&config, link).await?;
     if config.metrics.enabled {
         aspen_metrics::install(config.metrics.listen_addr).map_err(|e| anyhow::anyhow!(e))?;
-        metrics::spawn_samplers(Arc::clone(&rooms), Arc::clone(&limits));
+        server.spawn_metrics_samplers();
     }
-    let state = signalling::AppState {
-        server: config.id,
-        token_secret: config.token_secret.as_deref().map(Arc::from),
-        token_keys: Arc::clone(&token_keys),
-        rooms: Arc::clone(&rooms),
-        limits,
-        used_tokens: Arc::default(),
-        // Sized for the messages compressed at one moment, about one per runtime thread.
-        deflate: yawc::DeflatePool::new(
-            std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
-        ),
-    };
-    // The health check is what clients measure latency against, from any origin. The limits
-    // run inside the CORS layer, so a refusal still reaches the page that asked.
-    let app = Router::new()
-        .route(
-            signalling::HEALTH_PATH,
-            get(|| async { StatusCode::NO_CONTENT }),
-        )
-        .route(signalling::SIGNALLING_PATH, get(signalling::upgrade))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            signalling::limit_http,
-        ))
-        .with_state(state)
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .expose_headers([axum::http::header::RETRY_AFTER]),
-        );
     let listeners = aspen_sockets::tcp_listeners(&listen_addrs, listen_required)?;
     for listener in &listeners {
         info!(
@@ -223,15 +109,19 @@ async fn main() -> anyhow::Result<()> {
             "voice server listening"
         );
     }
-    let stopped = serve(listeners, app, config.rate_limits.max_connections, async {
-        tokio::select! {
-            () = rooms.media_stopped() => Stopped::MediaThread,
-            () = token_keys.unregistered() => Stopped::Unregistered,
-        }
-    })
+    let stopped = serve(
+        listeners,
+        server.router.clone(),
+        config.rate_limits.max_connections,
+        async {
+            match server.failed().await {
+                Failure::MediaThread => Stopped::MediaThread,
+                Failure::Unregistered => Stopped::Unregistered,
+            }
+        },
+    )
     .await;
-    rooms.shutdown().await;
-    relay.shutdown().await;
+    server.shutdown().await;
     match stopped {
         Stopped::Asked => Ok(()),
         Stopped::MediaThread => anyhow::bail!("a media thread stopped"),
