@@ -158,13 +158,13 @@ impl PresenceFeed {
     /// Starts publishing hints and, with `route`, the timers and the router for this server's
     /// event stream connections.
     pub fn start(
-        nats: async_nats::Client,
+        bus: aspen_bus::Bus,
         valkey: fred::clients::Client,
         pool: Pool,
         route: bool,
     ) -> Self {
         let (hints, published) = mpsc::channel(HINT_QUEUE);
-        tokio::spawn(publish_hints(nats.clone(), published));
+        tokio::spawn(publish_hints(bus.clone(), published));
         if !route {
             return PresenceFeed {
                 hints,
@@ -178,7 +178,7 @@ impl PresenceFeed {
         let lists = Arc::new(Mutex::new(HashMap::new()));
         let listed = Arc::new(Notify::new());
         tokio::spawn(route_presence(
-            nats,
+            bus,
             valkey,
             pool,
             expiries.clone(),
@@ -277,7 +277,7 @@ impl Drop for PresenceWatch {
 }
 
 /// Publishes the hints made on this server, those made meanwhile together.
-async fn publish_hints(nats: async_nats::Client, mut hints: mpsc::Receiver<UserId>) {
+async fn publish_hints(bus: aspen_bus::Bus, mut hints: mpsc::Receiver<UserId>) {
     let mut batch: HashSet<UserId> = HashSet::new();
     while let Some(user) = hints.recv().await {
         batch.insert(user);
@@ -297,7 +297,7 @@ async fn publish_hints(nats: async_nats::Client, mut hints: mpsc::Receiver<UserI
                 continue;
             }
         };
-        if let Err(e) = nats.publish(PRESENCE_SUBJECT, payload.into()).await {
+        if let Err(e) = bus.publish(PRESENCE_SUBJECT, payload.into()).await {
             warn!("a presence hint could not be published: {e}");
         }
     }
@@ -740,11 +740,11 @@ async fn read(
     Ok((statuses, expiries, visible))
 }
 
-/// Subscribes to presence hints, retried until NATS answers.
-pub(crate) async fn subscribe_hints(nats: &async_nats::Client) -> async_nats::Subscriber {
+/// Subscribes to presence hints, retried until the bus answers.
+pub(crate) async fn subscribe_hints(bus: &aspen_bus::Bus) -> aspen_bus::Subscriber {
     let mut wait = Duration::from_millis(250);
     loop {
-        match nats.subscribe(PRESENCE_SUBJECT).await {
+        match bus.subscribe(PRESENCE_SUBJECT).await {
             Ok(subscriber) => return subscriber,
             Err(e) => {
                 error!("could not subscribe to presence hints, retrying: {e}");
@@ -785,7 +785,7 @@ fn register(router: &mut Router, registration: Option<Registration>) -> bool {
 /// says how long what makes each user's presence has left, and a timer for each is kept here
 /// (`expiries`), so the hint when it runs out is made wherever the user is watched.
 async fn route_presence(
-    nats: async_nats::Client,
+    bus: aspen_bus::Bus,
     valkey: fred::clients::Client,
     pool: Pool,
     expiries: mpsc::Sender<(UserId, Expiry, Instant)>,
@@ -793,7 +793,7 @@ async fn route_presence(
     lists: Arc<Mutex<HashMap<u64, Vec<UserId>>>>,
     listed: Arc<Notify>,
 ) {
-    let mut hints = subscribe_hints(&nats).await;
+    let mut hints = subscribe_hints(&bus).await;
     let mut router = Router::default();
     let mut reading: Option<tokio::task::JoinHandle<Reading>> = None;
     loop {
@@ -852,7 +852,7 @@ async fn route_presence(
             message = hints.next() => {
                 let Some(message) = message else {
                     error!("the presence hint subscription ended, subscribing again");
-                    hints = subscribe_hints(&nats).await;
+                    hints = subscribe_hints(&bus).await;
                     continue;
                 };
                 match serde_json::from_slice::<Vec<UserId>>(&message.payload) {

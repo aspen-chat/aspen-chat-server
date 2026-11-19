@@ -550,42 +550,34 @@ pub fn spawn_dispatcher(state: GlobalServerContext) {
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 async fn dispatch(state: &GlobalServerContext) -> anyhow::Result<()> {
-    use async_nats::jetstream::AckKind;
-    use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, pull};
-    let stream = state
-        .nats_context
-        .get_stream(ASPEN_NATS_STREAM_NAME)
-        .await?;
-    let consumer = stream
-        .get_or_create_consumer(
-            CONSUMER,
-            pull::Config {
-                durable_name: Some(CONSUMER.into()),
-                deliver_policy: DeliverPolicy::New,
-                ack_policy: AckPolicy::Explicit,
+    state
+        .bus
+        .durable(
+            ASPEN_NATS_STREAM_NAME,
+            aspen_bus::DurableConfig {
+                name: CONSUMER.into(),
+                filter: format!("{}.>", crate::events::SUBJECT_ROOT),
+                deliver: aspen_bus::Deliver::New,
                 ack_wait: Duration::from_secs(60),
-                max_deliver: 3,
-                filter_subject: format!("{}.>", crate::events::SUBJECT_ROOT),
-                ..Default::default()
+                max_deliver: Some(3),
+                max_ack_pending: None,
             },
         )
-        .await?;
-    consumer
-        .messages()
         .await?
         .for_each_concurrent(CONCURRENCY, |received| async move {
             let Ok(received) = received else {
                 return;
             };
+            let event = &received.message;
             // A failure is delivered again, up to `max_deliver` times in all.
-            let ack = match handle(state, &received.subject, &received.payload).await {
-                Ok(()) => AckKind::Ack,
+            let acknowledged = match handle(state, &event.subject, &event.payload).await {
+                Ok(()) => received.ack().await,
                 Err(e) => {
                     tracing::warn!("handling an event for push failed: {e}");
-                    AckKind::Nak(Some(RETRY_AFTER))
+                    received.nak(Some(RETRY_AFTER)).await
                 }
             };
-            if let Err(e) = received.ack_with(ack).await {
+            if let Err(e) = acknowledged {
                 tracing::warn!("acknowledging an event for push failed: {e}");
             }
         })

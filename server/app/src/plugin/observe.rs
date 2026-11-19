@@ -49,56 +49,39 @@ pub async fn run(state: GlobalServerContext, plugin: Arc<LoadedPlugin>) {
 }
 
 async fn consume(state: &GlobalServerContext, plugin: &Arc<LoadedPlugin>) -> anyhow::Result<()> {
-    use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, pull};
-    let stream = state
-        .nats_context
-        .get_stream(ASPEN_NATS_STREAM_NAME)
-        .await?;
-    let name = consumer_name(&plugin.id);
-    let consumer = stream
-        .get_or_create_consumer(
-            &name,
-            pull::Config {
-                durable_name: Some(name.clone()),
-                deliver_policy: DeliverPolicy::New,
-                ack_policy: AckPolicy::Explicit,
+    state
+        .bus
+        .durable(
+            ASPEN_NATS_STREAM_NAME,
+            aspen_bus::DurableConfig {
+                name: consumer_name(&plugin.id),
+                filter: format!("{}.>", crate::events::SUBJECT_ROOT),
+                deliver: aspen_bus::Deliver::New,
                 ack_wait: Duration::from_millis(state.config.plugins.observe_millis)
                     + Duration::from_secs(5),
-                max_deliver: MAX_DELIVER,
-                filter_subject: format!("{}.>", crate::events::SUBJECT_ROOT),
-                ..Default::default()
+                max_deliver: Some(MAX_DELIVER),
+                max_ack_pending: None,
             },
         )
-        .await?;
-    consumer
-        .messages()
         .await?
         .for_each_concurrent(CONCURRENCY, |received| async move {
             let Ok(received) = received else {
                 return;
             };
-            let event_id = received
-                .headers
-                .as_ref()
-                .and_then(|h| h.get(EVENT_ID_HEADER))
-                .map(|v| v.as_str().to_string());
+            let event = &received.message;
             let outcome = handle(
                 state,
                 plugin,
-                &received.subject,
-                event_id.as_deref(),
-                &received.payload,
+                &event.subject,
+                event.headers.get(EVENT_ID_HEADER),
+                &event.payload,
             )
             .await;
             let ack = match outcome {
                 Ok(()) => received.ack().await,
                 Err(e) => {
                     tracing::warn!(plugin = plugin.id, "observing an event failed: {e}");
-                    received
-                        .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                            Duration::from_secs(1),
-                        )))
-                        .await
+                    received.nak(Some(Duration::from_secs(1))).await
                 }
             };
             if let Err(e) = ack {

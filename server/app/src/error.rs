@@ -13,32 +13,10 @@ pub enum Error {
     Argon2(#[from] argon2::password_hash::Error),
     #[error("error while connecting to NATS message broker {0}")]
     NatsConnect(#[from] async_nats::ConnectError),
-    #[error("error while creating or updating NATS stream {0}")]
-    NatsCreateStream(#[from] async_nats::jetstream::context::CreateStreamError),
-    #[error("error while reading the NATS account {0}")]
-    NatsAccount(#[from] async_nats::jetstream::context::AccountError),
-    #[error("error while getting NATS stream {0}")]
-    NatsGetStream(#[from] async_nats::jetstream::context::GetStreamError),
-    #[error("error while querying NATS stream state {0}")]
-    NatsRequest(#[from] async_nats::jetstream::context::RequestError),
-    #[error("error while creating NATS stream consumer {0}")]
-    NatsConsumer(#[from] async_nats::jetstream::stream::ConsumerError),
-    #[error("error while reading from NATS stream consumer {0}")]
-    NatsStream(#[from] async_nats::jetstream::consumer::StreamError),
-    #[error("error while publishing to NATS event stream {0}")]
-    NatsPublish(#[from] async_nats::jetstream::context::PublishError),
-    #[error("error while subscribing to a NATS subject {0}")]
-    NatsSubscribe(#[from] async_nats::SubscribeError),
-    #[error("error while opening a NATS key-value bucket {0}")]
-    NatsKeyValue(#[from] async_nats::jetstream::context::CreateKeyValueError),
-    #[error("error while listing a NATS key-value bucket's keys {0}")]
-    NatsKeys(#[from] async_nats::jetstream::kv::WatchError),
-    #[error("error while writing to a NATS key-value bucket {0}")]
-    NatsKeyValuePut(#[from] async_nats::jetstream::kv::PutError),
-    #[error("error while watching a NATS key-value bucket {0}")]
-    NatsKeyValueWatch(#[from] async_nats::jetstream::kv::WatcherError),
+    #[error("{0}")]
+    Bus(#[from] aspen_bus::Error),
     #[error("could not send a voice command: {0}")]
-    VoiceCommand(#[source] async_nats::client::PublishError),
+    VoiceCommand(#[source] aspen_bus::Error),
     #[error("event published with the wrong scope: {0}")]
     EventRouting(String),
     #[error("error serializing as YAML {0}")]

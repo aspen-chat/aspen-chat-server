@@ -249,7 +249,7 @@ pub async fn enable(
             .scope_boxed()
         })
         .await?;
-    registry::announce(&state.nats_context.client(), Some(community)).await?;
+    registry::announce(&state.bus, Some(community)).await?;
     Ok(result)
 }
 
@@ -321,7 +321,7 @@ pub async fn configure(
             .scope_boxed()
         })
         .await?;
-    registry::announce(&state.nats_context.client(), Some(community)).await?;
+    registry::announce(&state.bus, Some(community)).await?;
     Ok(record)
 }
 
@@ -383,6 +383,6 @@ pub async fn disable(
         .scope_boxed()
     })
     .await?;
-    registry::announce(&state.nats_context.client(), Some(community)).await?;
+    registry::announce(&state.bus, Some(community)).await?;
     Ok(())
 }

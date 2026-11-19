@@ -170,7 +170,7 @@ pub async fn plugins(config: &AspenConfig, command: PluginsCommand) -> Result<()
 
 async fn announce(publisher: &Publisher) -> Result<()> {
     use aspen_app::events::Publishing;
-    aspen_app::plugin::registry::announce(&publisher.nats().client(), None)
+    aspen_app::plugin::registry::announce(publisher.bus(), None)
         .await
         .map_err(|e| anyhow!("{e}"))
 }

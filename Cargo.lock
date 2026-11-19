@@ -317,7 +317,6 @@ dependencies = [
  "aspen_schema",
  "aspen_sockets",
  "aspen_wire",
- "async-nats",
  "chrono",
  "clap",
  "console-subscriber",
@@ -415,6 +414,7 @@ dependencies = [
  "argon2",
  "askama",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_config_values",
  "aspen_database",
  "aspen_email_templates",
@@ -530,6 +530,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "aspen_bus"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "bytes",
+ "futures-util",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

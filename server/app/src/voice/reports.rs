@@ -14,11 +14,7 @@ use super::sessions::apply_report;
 use crate::VoiceServerId;
 use crate::context::GlobalServerContext;
 use crate::events::Publishing;
-use async_nats::jetstream;
-use async_nats::jetstream::AckKind;
-use async_nats::jetstream::consumer::pull::MessagesErrorKind;
-use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, pull};
-use async_nats::jetstream::stream::{DiscardPolicy, RetentionPolicy, StorageType};
+use aspen_bus::{Deliver, Delivery, DurableConfig, Retention, Storage, StreamConfig};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -70,26 +66,28 @@ impl Kind {
 /// The stream voice servers publish their reports to, which keeps each until an API server has
 /// applied it, for at most [`REPORT_MAX_AGE`], and holds at most `max_bytes`, its oldest going
 /// first past it (`app::nats_memory` chooses the size).
-pub fn stream_config(max_bytes: u64) -> jetstream::stream::Config {
-    jetstream::stream::Config {
+pub fn stream_config(max_bytes: u64) -> StreamConfig {
+    StreamConfig {
         name: REPORT_STREAM.to_string(),
         subjects: vec![
             format!("{REPORT_SUBJECT_ROOT}.*.*"),
             format!("{SPEAKING_SUBJECT_ROOT}.*.*"),
         ],
-        retention: RetentionPolicy::WorkQueue,
-        storage: StorageType::Memory,
+        retention: Retention::WorkQueue,
+        storage: Storage::Memory,
         max_age: REPORT_MAX_AGE,
-        max_bytes: i64::try_from(max_bytes).unwrap_or(i64::MAX),
-        discard: DiscardPolicy::Old,
-        ..Default::default()
+        max_bytes,
+        max_messages: None,
+        consumer_limits: None,
     }
 }
 
 /// Starts reading every lane of the report stream, which the server made as it started
 /// (`app::nats_memory::fit`).
 pub async fn spawn_report_listener(state: GlobalServerContext) -> crate::Result<()> {
-    let stream = state.nats_context.get_stream(REPORT_STREAM).await?;
+    if state.bus.stream_info(REPORT_STREAM).await?.is_none() {
+        return Err(aspen_bus::Error::NoSuchStream(REPORT_STREAM.to_string()).into());
+    }
     let applying = Arc::new(Semaphore::new(
         (state.connection_pool.status().max_size / 2).max(1),
     ));
@@ -97,7 +95,6 @@ pub async fn spawn_report_listener(state: GlobalServerContext) -> crate::Result<
         for partition in 0..REPORT_PARTITIONS {
             tokio::spawn(read_lane(
                 state.clone(),
-                stream.clone(),
                 Arc::clone(&applying),
                 kind,
                 partition,
@@ -110,13 +107,12 @@ pub async fn spawn_report_listener(state: GlobalServerContext) -> crate::Result<
 /// Applies one lane's reports for as long as the server runs, starting again after a failure.
 async fn read_lane(
     state: GlobalServerContext,
-    stream: jetstream::stream::Stream,
     applying: Arc<Semaphore>,
     kind: Kind,
     partition: u8,
 ) {
     loop {
-        if let Err(e) = read(&state, &stream, &applying, kind, partition).await {
+        if let Err(e) = read(&state, &applying, kind, partition).await {
             warn!(
                 lane = kind.consumer(partition),
                 error = e.to_string(),
@@ -129,29 +125,27 @@ async fn read_lane(
 
 async fn read(
     state: &GlobalServerContext,
-    stream: &jetstream::stream::Stream,
     applying: &Semaphore,
     kind: Kind,
     partition: u8,
 ) -> anyhow::Result<()> {
     let name = kind.consumer(partition);
-    let consumer = stream
-        .get_or_create_consumer(
-            &name,
-            pull::Config {
-                durable_name: Some(name.clone()),
-                filter_subject: format!("{}.{partition}.*", kind.root()),
-                deliver_policy: DeliverPolicy::All,
-                ack_policy: AckPolicy::Explicit,
+    let mut messages = state
+        .bus
+        .durable(
+            REPORT_STREAM,
+            DurableConfig {
+                name: name.clone(),
+                filter: format!("{}.{partition}.*", kind.root()),
+                deliver: Deliver::All,
                 ack_wait: ACK_WAIT,
+                max_deliver: None,
                 // One at a time across every API server: the next report is handed out only
                 // once this one is acknowledged, which is what keeps the order.
-                max_ack_pending: 1,
-                ..Default::default()
+                max_ack_pending: Some(1),
             },
         )
         .await?;
-    let mut messages = consumer.messages().await?;
     while let Some(message) = messages.next().await {
         match message {
             Ok(message) => {
@@ -161,7 +155,7 @@ async fn read(
                     tokio::select! {
                         permit = applying.acquire() => break permit?,
                         () = tokio::time::sleep(ACK_WAIT / 2) => {
-                            message.ack_with(AckKind::Progress).await.map_err(|e| anyhow::anyhow!(e))?;
+                            message.progress().await?;
                         }
                     }
                 };
@@ -170,15 +164,12 @@ async fn read(
             // A consumer that was removed, or one that is not what this reads, ends the
             // reading; anything else (a missed heartbeat, a refused pull while another API
             // server holds the one report out) passes.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    MessagesErrorKind::ConsumerDeleted | MessagesErrorKind::PushBasedConsumer
-                ) =>
-            {
-                return Err(e.into());
-            }
-            Err(e) => tracing::debug!(
+            Err(e @ aspen_bus::Error::ConsumerEnded(_)) => return Err(e.into()),
+            Err(
+                e @ (aspen_bus::Error::NoSuchStream(_)
+                | aspen_bus::Error::NoRoom(_)
+                | aspen_bus::Error::Failed { .. }),
+            ) => tracing::debug!(
                 lane = name,
                 error = e.to_string(),
                 "a lane of voice reports was interrupted"
@@ -189,25 +180,18 @@ async fn read(
 }
 
 /// Applies one report and tells the stream what became of it.
-async fn handle(state: &GlobalServerContext, message: &jetstream::Message) {
-    let (attempt, published) = match message.info() {
-        Ok(info) => (
-            info.delivered,
-            DateTime::from_timestamp(info.published.unix_timestamp(), info.published.nanosecond())
-                .unwrap_or_else(Utc::now),
-        ),
-        Err(e) => {
-            warn!(
-                error = e.to_string(),
-                "a voice report came without its details"
-            );
-            (1, Utc::now())
-        }
-    };
+async fn handle(state: &GlobalServerContext, delivery: &Delivery) {
+    let message = &delivery.message;
+    let attempt = message.delivered;
+    let published = DateTime::from_timestamp(
+        message.published.unix_timestamp(),
+        message.published.nanosecond(),
+    )
+    .unwrap_or_else(Utc::now);
     let outcome = match serde_json::from_slice::<VoiceReport>(&message.payload) {
         Err(e) => {
             warn!(error = e.to_string(), "unreadable voice report dropped");
-            AckKind::Ack
+            Outcome::Done
         }
         Ok(report) => {
             let kind: &'static str = (&report).into();
@@ -233,14 +217,14 @@ async fn handle(state: &GlobalServerContext, message: &jetstream::Message) {
                         .increment(1);
                     metrics::histogram!(aspen_metrics::api::VOICE_REPORT_WAIT_DURATION, "report" => kind)
                     .record((Utc::now() - published).as_seconds_f64().max(0.0));
-                    AckKind::Ack
+                    Outcome::Done
                 }
                 Err(e) if worth_retrying(&e) && attempt < MAX_ATTEMPTS => {
                     warn!(
                         error = e.to_string(),
                         attempt, "applying a voice report failed; trying it again"
                     );
-                    AckKind::Nak(Some(RETRY_DELAY))
+                    Outcome::Again
                 }
                 Err(e) => {
                     error!(
@@ -248,17 +232,28 @@ async fn handle(state: &GlobalServerContext, message: &jetstream::Message) {
                         attempt,
                         "applying a voice report failed; it is dropped, and the server's next snapshot repairs what it would have changed"
                     );
-                    AckKind::Ack
+                    Outcome::Done
                 }
             }
         }
     };
-    if let Err(e) = message.ack_with(outcome).await {
+    let told = match outcome {
+        Outcome::Done => delivery.ack().await,
+        Outcome::Again => delivery.nak(Some(RETRY_DELAY)).await,
+    };
+    if let Err(e) = told {
         warn!(
             error = e.to_string(),
             "could not tell the report stream what became of a voice report"
         );
     }
+}
+
+/// What became of a report: applied or given up (`Done`), or to be tried again after
+/// [`RETRY_DELAY`] (`Again`).
+enum Outcome {
+    Done,
+    Again,
 }
 
 /// Whether a report that failed this way may succeed if tried again: the database or NATS
@@ -286,27 +281,31 @@ fn worth_retrying(error: &crate::Error) -> bool {
 /// registered. A failure is logged: the server is gone either way, and what is left of its
 /// reports ages out of the stream.
 pub(super) async fn forget_server(state: &impl Publishing, server: VoiceServerId) {
-    let stream = match state.nats().get_stream(REPORT_STREAM).await {
-        Ok(stream) => stream,
-        Err(e) => {
-            warn!(
-                error = e.to_string(),
-                "could not open the voice report stream"
-            );
-            return;
-        }
-    };
     for root in [REPORT_SUBJECT_ROOT, SPEAKING_SUBJECT_ROOT] {
-        if let Err(e) = stream
-            .purge()
-            .filter(format!("{root}.*.{}", server.0))
+        match state
+            .bus()
+            .purge(REPORT_STREAM, format!("{root}.*.{}", server.0))
             .await
         {
-            warn!(
-                server = server.0.to_string(),
-                error = e.to_string(),
-                "could not clear a removed voice server's waiting reports"
-            );
+            Ok(()) => {}
+            Err(e @ aspen_bus::Error::NoSuchStream(_)) => {
+                warn!(
+                    error = e.to_string(),
+                    "could not open the voice report stream"
+                );
+                return;
+            }
+            Err(
+                e @ (aspen_bus::Error::NoRoom(_)
+                | aspen_bus::Error::ConsumerEnded(_)
+                | aspen_bus::Error::Failed { .. }),
+            ) => {
+                warn!(
+                    server = server.0.to_string(),
+                    error = e.to_string(),
+                    "could not clear a removed voice server's waiting reports"
+                );
+            }
         }
     }
 }

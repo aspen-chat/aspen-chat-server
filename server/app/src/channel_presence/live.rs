@@ -514,8 +514,7 @@ async fn route(
     state: GlobalServerContext,
     mut registrations: mpsc::UnboundedReceiver<Registration>,
 ) {
-    let nats = state.nats_context.client();
-    let mut hints = crate::presence_feed::subscribe_hints(&nats).await;
+    let mut hints = crate::presence_feed::subscribe_hints(&state.bus).await;
     let mut router = Router::default();
     let mut window = tokio::time::interval(WINDOW);
     window.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -532,7 +531,7 @@ async fn route(
             message = hints.next() => {
                 let Some(message) = message else {
                     error!("the presence hint subscription ended, subscribing again");
-                    hints = crate::presence_feed::subscribe_hints(&nats).await;
+                    hints = crate::presence_feed::subscribe_hints(&state.bus).await;
                     continue;
                 };
                 match serde_json::from_slice::<Vec<UserId>>(&message.payload) {

@@ -22,9 +22,7 @@ use crate::context::GlobalServerContext;
 use crate::deployment_settings::DeploymentSettings;
 use crate::jobs::{Claimed, Outcome};
 use crate::t;
-use async_nats::jetstream::context::{CreateStreamErrorKind, GetStreamErrorKind};
-use async_nats::jetstream::stream::{Info, StorageType};
-use async_nats::jetstream::{Context, ErrorCode};
+use aspen_bus::{AccountMemory, Bus, Storage, StreamInfo};
 use chrono::{DateTime, Utc};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection};
@@ -215,42 +213,30 @@ impl Monitor {
 
 /// NATS's memory and the two streams as they are now.
 struct Reading {
-    account: async_nats::jetstream::account::Account,
+    account: AccountMemory,
     /// The server's own figures, where its monitoring port is named and answered.
     server: Option<ServerMemory>,
     /// Whether a monitoring port is named and did not answer.
     monitor_failed: bool,
-    events: Option<Info>,
-    voice_reports: Option<Info>,
-}
-
-/// The stream `name` as NATS holds it; `None` when it has none.
-async fn stream_info(nats: &Context, name: &str) -> crate::Result<Option<Info>> {
-    match nats.get_stream(name).await {
-        Ok(stream) => Ok(Some(stream.cached_info().clone())),
-        Err(e) => match e.kind() {
-            GetStreamErrorKind::JetStream(e) if e.error_code() == ErrorCode::STREAM_NOT_FOUND => {
-                Ok(None)
-            }
-            _ => Err(e.into()),
-        },
-    }
+    events: Option<StreamInfo>,
+    voice_reports: Option<StreamInfo>,
 }
 
 /// What a stream has reserved of NATS's memory.
-fn reserved(stream: Option<&Info>) -> u64 {
-    stream
-        .filter(|info| info.config.storage == StorageType::Memory)
-        .map_or(0, |info| u64::try_from(info.config.max_bytes).unwrap_or(0))
+fn reserved(stream: Option<&StreamInfo>) -> u64 {
+    stream.map_or(0, |info| match info.config.storage {
+        Storage::Memory => info.config.max_bytes,
+        Storage::File => 0,
+    })
 }
 
 impl Reading {
-    async fn take(nats: &Context, monitor: &Monitor) -> crate::Result<Self> {
+    async fn take(bus: &Bus, monitor: &Monitor) -> crate::Result<Self> {
         let (account, server, events, voice_reports) = tokio::join!(
-            nats.query_account(),
+            bus.account_memory(),
             monitor.read(),
-            stream_info(nats, crate::ASPEN_NATS_STREAM_NAME),
-            stream_info(nats, REPORT_STREAM),
+            bus.stream_info(crate::ASPEN_NATS_STREAM_NAME),
+            bus.stream_info(REPORT_STREAM),
         );
         let monitor_failed = matches!(server, Some(Err(_)));
         if let Some(Err(e)) = &server {
@@ -275,10 +261,8 @@ impl Reading {
             .map(|server| room(server.config.max_memory, server.reserved_memory));
         let account = self
             .account
-            .limits
-            .max_memory
-            .and_then(|limit| u64::try_from(limit).ok())
-            .map(|limit| room(limit, self.account.reserved_memory));
+            .limit
+            .map(|limit| room(limit, self.account.reserved));
         [server, account].into_iter().flatten().min()
     }
 }
@@ -290,14 +274,15 @@ impl Reading {
 /// While a monitoring port is named and does not answer, an automatic stream keeps the size it
 /// has rather than falling back to a smaller one.
 pub async fn fit(
-    nats: &Context,
+    bus: &Bus,
     monitor: &Monitor,
     mut wanted: Wanted,
     always: bool,
 ) -> crate::Result<Sizes> {
-    let reading = Reading::take(nats, monitor).await?;
+    let reading = Reading::take(bus, monitor).await?;
     if reading.monitor_failed {
-        let held = |stream: &Option<Info>| Some(reserved(stream.as_ref())).filter(|held| *held > 0);
+        let held =
+            |stream: &Option<StreamInfo>| Some(reserved(stream.as_ref())).filter(|held| *held > 0);
         wanted.events = wanted.events.or_else(|| held(&reading.events));
         wanted.voice_reports = wanted
             .voice_reports
@@ -328,18 +313,16 @@ pub async fn fit(
             continue;
         }
         let (name, max_bytes) = (config.name.clone(), config.max_bytes);
-        nats.create_or_update_stream(config)
+        bus.create_or_update_stream(config)
             .await
-            .map_err(|e| match e.kind() {
-                CreateStreamErrorKind::JetStream(refusal)
-                    if refusal.error_code() == ErrorCode::MEMORY_RESOURCES_EXCEEDED =>
-                {
-                    crate::Error::Validation(t!(
-                        "streamSizesRefused",
-                        asked = (sizes.events + sizes.voice_reports) / MIB
-                    ))
-                }
-                _ => e.into(),
+            .map_err(|e| match e {
+                aspen_bus::Error::NoRoom(_) => crate::Error::Validation(t!(
+                    "streamSizesRefused",
+                    asked = (sizes.events + sizes.voice_reports) / MIB
+                )),
+                aspen_bus::Error::NoSuchStream(_)
+                | aspen_bus::Error::ConsumerEnded(_)
+                | aspen_bus::Error::Failed { .. } => e.into(),
             })?;
         if !fits {
             tracing::info!(stream = name, max_bytes, "sized a NATS stream");
@@ -351,14 +334,14 @@ pub async fn fit(
 /// [`fit`], for the sizes the settings row holds, while holding its lock.
 pub async fn fit_locked(
     conn: &mut AsyncPgConnection,
-    nats: &Context,
+    bus: &Bus,
     monitor: &Monitor,
     always: bool,
 ) -> crate::Result<Sizes> {
     conn.transaction(|conn| {
         async move {
             let settings = crate::deployment_settings::load_locked(conn).await?;
-            fit(nats, monitor, (&settings).into(), always).await
+            fit(bus, monitor, (&settings).into(), always).await
         }
         .scope_boxed()
     })
@@ -369,14 +352,7 @@ pub async fn fit_locked(
 /// job's backoff being longer than the streams should go without.
 pub async fn fit_step(state: &GlobalServerContext, _job: &Claimed) -> crate::Result<Outcome> {
     let mut conn = state.connection_pool.get().await?;
-    if let Err(e) = fit_locked(
-        conn.as_mut(),
-        &state.nats_context,
-        &state.nats_monitor,
-        false,
-    )
-    .await
-    {
+    if let Err(e) = fit_locked(conn.as_mut(), &state.bus, &state.nats_monitor, false).await {
         tracing::warn!(error = %e, "could not fit the NATS streams to its memory");
     }
     Ok(Outcome::Done)
@@ -424,16 +400,16 @@ pub struct Usage {
 
 /// NATS's memory now: the server's where its monitoring port answers, else the account's.
 pub async fn usage(state: &GlobalServerContext) -> crate::Result<Usage> {
-    let reading = Reading::take(&state.nats_context, &state.nats_monitor).await?;
+    let reading = Reading::take(&state.bus, &state.nats_monitor).await?;
     let wanted = Wanted::from(&*state.settings());
-    let stream = |info: Option<&Info>, wanted: Option<u64>| {
+    let stream = |info: Option<&StreamInfo>, wanted: Option<u64>| {
         info.map(|info| StreamUsage {
             bytes: info.state.bytes,
-            max_bytes: u64::try_from(info.config.max_bytes).unwrap_or(0),
+            max_bytes: info.config.max_bytes,
             messages: info.state.messages,
             oldest_at: (info.state.messages > 0)
                 .then(|| {
-                    let at = info.state.first_timestamp;
+                    let at = info.state.first_published;
                     DateTime::from_timestamp(at.unix_timestamp(), at.nanosecond())
                 })
                 .flatten(),
@@ -452,12 +428,9 @@ pub async fn usage(state: &GlobalServerContext) -> crate::Result<Usage> {
         ),
         None => (
             Scope::Account,
-            account.memory,
-            account.reserved_memory,
-            account
-                .limits
-                .max_memory
-                .and_then(|limit| u64::try_from(limit).ok()),
+            account.used,
+            account.reserved,
+            account.limit,
         ),
     };
     Ok(Usage {

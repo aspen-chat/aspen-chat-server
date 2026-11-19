@@ -199,12 +199,7 @@ fn tell(state: GlobalServerContext, pool: Pool, level: Level) {
                 return;
             }
         };
-        if let Err(e) = state
-            .nats_context
-            .client()
-            .publish(MANA_SUBJECT, payload.into())
-            .await
-        {
+        if let Err(e) = state.bus.publish(MANA_SUBJECT, payload.into()).await {
             warn!(error = %e, "could not publish a channel's mana");
         }
     });

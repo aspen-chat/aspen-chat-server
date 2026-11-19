@@ -834,6 +834,10 @@ wherever it lives:
   machine without a family leaves out.
 - `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections
   made with them, and the warning for NATS reached without TLS.
+- `aspen_bus` (`bus/`): the message bus behind Aspen's own types (subjects, streams and their
+  consumers, key-value buckets), which `GlobalServerContext::bus` and `app::events::Publishing` hand
+  out; NATS JetStream is `aspen_bus::Bus::Nats`, and of the API server's code only what connects
+  names `async_nats`.
 - `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview`
   (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link
   previews.

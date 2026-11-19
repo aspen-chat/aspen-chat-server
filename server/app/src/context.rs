@@ -24,7 +24,7 @@ pub enum Role {
 #[derive(Clone)]
 pub struct GlobalServerContext {
     pub connection_pool: Pool,
-    pub nats_context: Arc<async_nats::jetstream::Context>,
+    pub bus: aspen_bus::Bus,
     pub valkey: fred::clients::Client,
     pub media_store: Arc<crate::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
@@ -130,7 +130,7 @@ impl GlobalServerContext {
         let client = config.connect_nats().await?;
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
         aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
-        let context = async_nats::jetstream::new(client);
+        let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(client));
         let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
         // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
         // `[valkey.tls]` without one.
@@ -205,7 +205,7 @@ impl GlobalServerContext {
             )
             .await?;
             // Before anything reads or publishes to the streams, which this makes.
-            crate::nats_memory::fit_locked(conn.as_mut(), &context, &nats_monitor, true).await?;
+            crate::nats_memory::fit_locked(conn.as_mut(), &bus, &nats_monitor, true).await?;
             (
                 crate::deployment_settings::load_with_icon(conn.as_mut()).await?,
                 crate::server_secret::CodeKey::load(conn.as_mut()).await?,
@@ -223,7 +223,7 @@ impl GlobalServerContext {
         };
 
         let presence_feed = crate::presence_feed::PresenceFeed::start(
-            context.client(),
+            bus.clone(),
             valkey.clone(),
             connection_pool.clone(),
             role == Role::Public,
@@ -255,7 +255,7 @@ impl GlobalServerContext {
             connection_pool,
             event_feed: match role {
                 Role::Public => crate::event_feed::EventFeed::start(
-                    context.clone(),
+                    bus.clone(),
                     config.event_queue_size,
                     config.event_feed_shards,
                     config.event_retained_mib.saturating_mul(1 << 20),
@@ -263,7 +263,7 @@ impl GlobalServerContext {
                 ),
                 Role::PrivateWorker => crate::event_feed::EventFeed::idle(),
             },
-            nats_context: Arc::new(context),
+            bus,
             valkey,
             media_store,
             rate_limiter: Arc::new(rate_limiter),

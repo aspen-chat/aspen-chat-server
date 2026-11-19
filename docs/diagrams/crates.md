@@ -84,11 +84,12 @@ flowchart TB
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
     sockets["aspen_sockets<br/>dual-stack listeners"]
     tls["aspen_tls<br/>TLS files, NATS connections"]
+    bus["aspen_bus<br/>the message bus: subjects,<br/>streams, buckets"]
     config_values["aspen_config_values<br/>lists and tables in settings"]
     bench_protocol["aspen_bench_protocol<br/>seeding and suspension messages"]
 
     chat --> app & voice_protocol & limits & metrics & sockets & bench_protocol
-    app --> database & voice_protocol & tls & config_values & bench_protocol
+    app --> database & voice_protocol & tls & bus & config_values & bench_protocol
     voice_server --> voice_protocol & voice_media & limits & metrics & sockets & tls & config_values
     migrate --> database & search_text
     bench --> voice_protocol & voice_media & limits & metrics & bench_protocol
