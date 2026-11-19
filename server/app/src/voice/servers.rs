@@ -10,6 +10,7 @@ use crate::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::t;
 use crate::user::UserPg;
 use crate::{ChannelId, UserId, VoiceServerId};
+use aspen_ephemeral::{Expiry, Pipeline};
 use aspen_schema::{channel, voice_server, voice_server_failure, voice_session};
 use aspen_wire::message_enum;
 use aspen_wire::voice::VoiceSessionEndReason;
@@ -20,8 +21,6 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::KeysInterface;
-use fred::types::Expiration;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -539,23 +538,17 @@ async fn note_offered(
         seconds(OFFER_REPORT_GRACE_SECONDS),
         seconds(JOIN_REPORT_GRACE_SECONDS),
     );
-    let pipeline = state.valkey.pipeline();
-    let noted: Result<Vec<fred::types::Value>, fred::error::Error> = async {
-        for server in servers {
-            for (key, ttl) in [
-                (offered_key(server.id, user), failures),
-                (offered_for_key(server.id, channel, Some(user)), joins),
-                (offered_for_key(server.id, channel, None), joins),
-            ] {
-                let () = pipeline
-                    .set(key, 1, Some(Expiration::EX(ttl)), None, false)
-                    .await?;
-            }
+    let mut pipeline = Pipeline::new();
+    for server in servers {
+        for (key, ttl) in [
+            (offered_key(server.id, user), failures),
+            (offered_for_key(server.id, channel, Some(user)), joins),
+            (offered_for_key(server.id, channel, None), joins),
+        ] {
+            pipeline.set(key, 1, Some(Expiry::Seconds(ttl)), None);
         }
-        pipeline.all().await
     }
-    .await;
-    if let Err(e) = noted {
+    if let Err(e) = state.ephemeral.run(pipeline).await {
         warn!(error = %e, "could not note the voice servers offered to a joiner");
     }
 }
@@ -572,11 +565,11 @@ pub(super) async fn offered_for(
     user: Option<UserId>,
 ) -> bool {
     match state
-        .valkey
-        .exists::<i64, _>(offered_for_key(server, channel, user))
+        .ephemeral
+        .exists(&offered_for_key(server, channel, user))
         .await
     {
-        Ok(found) => found > 0,
+        Ok(found) => found,
         Err(e) => {
             warn!(error = %e, "could not read whether a voice server was offered for a call");
             true
@@ -587,12 +580,8 @@ pub(super) async fn offered_for(
 /// Whether `user` was offered `server` recently enough for their report about it to count. A
 /// Valkey outage counts as not offered.
 async fn was_offered(state: &GlobalServerContext, user: UserId, server: VoiceServerId) -> bool {
-    match state
-        .valkey
-        .exists::<i64, _>(offered_key(server, user))
-        .await
-    {
-        Ok(found) => found > 0,
+    match state.ephemeral.exists(&offered_key(server, user)).await {
+        Ok(found) => found,
         Err(e) => {
             warn!(error = %e, "could not read whether a voice server was offered to a reporter");
             false
@@ -641,14 +630,13 @@ async fn note_carried(state: &GlobalServerContext, lost: &VoiceSession) {
             return;
         }
     };
-    let noted: Result<(), fred::error::Error> = state
-        .valkey
+    let noted = state
+        .ephemeral
         .set(
-            carried_key(lost.channel),
+            &carried_key(lost.channel),
             payload,
-            Some(Expiration::EX(ttl)),
+            Some(Expiry::Seconds(ttl)),
             None,
-            false,
         )
         .await;
     if let Err(e) = noted {
@@ -664,8 +652,8 @@ pub(super) async fn carried(
     state: &GlobalServerContext,
     channel: ChannelId,
 ) -> Option<CarriedCall> {
-    let read: Result<Option<String>, fred::error::Error> =
-        state.valkey.get(carried_key(channel)).await;
+    let read: aspen_ephemeral::Result<Option<String>> =
+        state.ephemeral.get(&carried_key(channel)).await;
     match read {
         Ok(Some(carried)) => match serde_json::from_str(&carried) {
             Ok(carried) => Some(carried),
@@ -686,8 +674,7 @@ pub(super) async fn carried(
 /// recorded for good, so the next session in the channel does not take it too. A Valkey outage
 /// is logged, and it is forgotten when it expires.
 pub(super) async fn forget_carried(state: &GlobalServerContext, channel: ChannelId) {
-    let forgotten: Result<u32, fred::error::Error> = state.valkey.del(carried_key(channel)).await;
-    if let Err(e) = forgotten {
+    if let Err(e) = state.ephemeral.del(carried_key(channel)).await {
         warn!(error = %e, "could not forget what a lost call passed on");
     }
 }
@@ -702,14 +689,13 @@ fn joined_key(server: VoiceServerId, user: UserId) -> String {
 /// A Valkey outage is logged and leaves it unnoted.
 pub(super) async fn note_joined(state: &GlobalServerContext, server: VoiceServerId, user: UserId) {
     let ttl = i64::try_from(state.config.voice.failure_window_seconds).unwrap_or(i64::MAX);
-    let noted: Result<(), fred::error::Error> = state
-        .valkey
+    let noted = state
+        .ephemeral
         .set(
-            joined_key(server, user),
+            &joined_key(server, user),
             1,
-            Some(Expiration::EX(ttl)),
+            Some(Expiry::Seconds(ttl)),
             None,
-            false,
         )
         .await;
     if let Err(e) = noted {
@@ -720,12 +706,8 @@ pub(super) async fn note_joined(state: &GlobalServerContext, server: VoiceServer
 /// Whether `user` joined a call on `server` within the failure window. A Valkey outage counts
 /// as joined, so that reports then count for nothing rather than for anyone.
 async fn joined_there(state: &GlobalServerContext, user: UserId, server: VoiceServerId) -> bool {
-    match state
-        .valkey
-        .exists::<i64, _>(joined_key(server, user))
-        .await
-    {
-        Ok(found) => found > 0,
+    match state.ephemeral.exists(&joined_key(server, user)).await {
+        Ok(found) => found,
         Err(e) => {
             warn!(error = %e, "could not read whether a reporter joined a call on a voice server");
             true

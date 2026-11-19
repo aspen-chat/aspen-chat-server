@@ -1,0 +1,14 @@
+[package]
+name = "aspen_ephemeral"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The short-lived state every API server shares: keys that expire, counters, sets, rate limit buckets, and channel mana, over Valkey."
+
+[dependencies]
+fred = { version = "10.1.0", features = ["i-scripts"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "time"] }
+uuid = { version = "1.16.0", features = ["v7"] }

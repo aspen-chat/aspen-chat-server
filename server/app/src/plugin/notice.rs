@@ -282,7 +282,7 @@ pub async fn take_turn(
         }
         .rate();
         let key = format!("aspen:plugin_notify:{per}:{plugin}:{}", user.0);
-        match crate::rate_limit::take(&state.valkey, &key, rate).await {
+        match crate::rate_limit::take(&state.ephemeral, &key, rate).await {
             Ok(None) => {}
             Ok(Some(_)) => {
                 return Err(super::host::wit::Error::Limit(format!(

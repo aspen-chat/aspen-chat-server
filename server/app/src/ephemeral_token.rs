@@ -2,8 +2,7 @@
 //! each stored under a digest of its token and expiring on its own.
 
 use crate::context::GlobalServerContext;
-use fred::interfaces::KeysInterface;
-use fred::types::Expiration;
+use aspen_ephemeral::Expiry;
 use sha2::{Digest, Sha256};
 
 /// Shared by every short-lived secret kept in Valkey: its key holds a digest of the token, so a
@@ -25,14 +24,13 @@ pub async fn put_token<V: serde::Serialize>(
     value: &V,
     ttl_seconds: i64,
 ) -> crate::Result<()> {
-    let _: () = state
-        .valkey
+    state
+        .ephemeral
         .set(
-            token_key(prefix, token),
+            &token_key(prefix, token),
             serde_json::to_string(value)?,
-            Some(Expiration::EX(ttl_seconds)),
+            Some(Expiry::Seconds(ttl_seconds)),
             None,
-            false,
         )
         .await?;
     Ok(())
@@ -56,9 +54,9 @@ pub async fn get_at<V: serde::de::DeserializeOwned>(
     take: bool,
 ) -> crate::Result<Option<V>> {
     let raw: Option<String> = if take {
-        state.valkey.getdel(key).await?
+        state.ephemeral.getdel(&key).await?
     } else {
-        state.valkey.get(key).await?
+        state.ephemeral.get(&key).await?
     };
     raw.map(|raw| serde_json::from_str(&raw).map_err(crate::Error::from))
         .transpose()

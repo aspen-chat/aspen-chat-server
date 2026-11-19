@@ -26,7 +26,7 @@ pub enum Error {
     #[error("I/O error {0}")]
     Io(#[from] std::io::Error),
     #[error("valkey error {0}")]
-    Valkey(#[from] fred::error::Error),
+    Ephemeral(#[from] aspen_ephemeral::Error),
     #[error("failed to build connection pool: {0}")]
     DeadpoolBuild(#[from] deadpool::BuildError),
     #[error("validation error: {0}")]

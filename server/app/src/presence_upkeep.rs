@@ -35,12 +35,11 @@ use crate::database::Pool;
 use crate::presence_feed::PresenceFeed;
 use crate::presence_override::{ChosenPresence, PresenceOverride};
 use crate::{CommunityId, UserId};
+use aspen_ephemeral::{Condition, Ephemeral, Expiry, Pipeline};
 use aspen_schema::community_user;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::{KeysInterface, SortedSetsInterface};
-use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -150,7 +149,7 @@ struct Arrived {
 /// What the task works with.
 struct Upkeep {
     pool: Pool,
-    valkey: fred::clients::Client,
+    ephemeral: Ephemeral,
     feed: PresenceFeed,
     times: ListingTimes,
 }
@@ -159,7 +158,7 @@ impl PresenceUpkeep {
     /// Starts the task that does the upkeep.
     pub fn start(
         pool: Pool,
-        valkey: fred::clients::Client,
+        ephemeral: Ephemeral,
         feed: PresenceFeed,
         times: ListingTimes,
     ) -> Self {
@@ -169,7 +168,7 @@ impl PresenceUpkeep {
         };
         tokio::spawn(upkeep.clone().run(Upkeep {
             pool,
-            valkey,
+            ephemeral,
             feed,
             times,
         }));
@@ -277,14 +276,14 @@ impl Upkeep {
             let bot = arriving.get(&user).copied().unwrap_or(false);
             let came = async {
                 crate::presence_override::copy_row_to_valkey(
-                    &self.valkey,
+                    &self.ephemeral,
                     &self.feed,
                     user,
                     row.presence_override,
                     row.presence_override_until,
                 )
                 .await?;
-                crate::user_status::set_online_keys(&self.valkey, &self.feed, user, bot).await
+                crate::user_status::set_online_keys(&self.ephemeral, &self.feed, user, bot).await
             };
             match came.await {
                 Ok(()) => Some(user),
@@ -333,10 +332,9 @@ impl Upkeep {
             tracing::warn!(error = %e, "failed to renew users' community listings");
             // The next time a key of theirs is set tries again rather than waiting out the
             // margin.
-            let dels = due.iter().map(|user| {
-                self.valkey
-                    .del::<(), _>(crate::user_status::listed_key(*user))
-            });
+            let dels = due
+                .iter()
+                .map(|user| self.ephemeral.del(crate::user_status::listed_key(*user)));
             futures_util::future::join_all(dels).await;
         }
     }
@@ -344,18 +342,17 @@ impl Upkeep {
     /// Those of `users` with no listing made within the margin, each now marked as listed.
     async fn due_for_listing(&self, users: &[UserId]) -> Vec<UserId> {
         let marks = users.iter().map(|user| async move {
-            let fresh: Result<Option<String>, _> = self
-                .valkey
+            let fresh = self
+                .ephemeral
                 .set(
-                    crate::user_status::listed_key(*user),
+                    &crate::user_status::listed_key(*user),
                     1,
-                    Some(Expiration::EX(self.times.margin.max(1))),
-                    Some(SetOptions::NX),
-                    false,
+                    Some(Expiry::Seconds(self.times.margin.max(1))),
+                    Some(Condition::Absent),
                 )
                 .await;
             match fresh {
-                Ok(fresh) => fresh.is_some().then_some(*user),
+                Ok(fresh) => fresh.then_some(*user),
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to renew the user's community listings");
                     None
@@ -389,19 +386,17 @@ impl Upkeep {
             .timestamp()
             .saturating_add(self.times.ttl.saturating_add(self.times.margin))
             as f64;
-        let pipeline = self.valkey.pipeline();
+        let mut pipeline = Pipeline::new();
         for (community, members) in by_community {
             let key = crate::user_status::community_online_key(community);
             let scored: Vec<(f64, String)> = members
                 .into_iter()
                 .map(|user| (until, user.0.to_string()))
                 .collect();
-            let () = pipeline
-                .zadd(&key, None, None, false, false, scored)
-                .await?;
-            let () = pipeline.expire(&key, self.times.set_lifetime, None).await?;
+            pipeline.zadd(&key, scored);
+            pipeline.expire(&key, self.times.set_lifetime);
         }
-        let _: Vec<fred::types::Value> = pipeline.all().await?;
+        self.ephemeral.run(pipeline).await?;
         Ok(())
     }
 }

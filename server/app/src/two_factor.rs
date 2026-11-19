@@ -25,7 +25,6 @@ use data_encoding::BASE32_NOPAD;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::LuaInterface;
 use hmac::{Hmac, Mac};
 use rand::RngExt;
 use sha1::Sha1;
@@ -201,19 +200,6 @@ pub const HAS_SECOND_FACTOR_SQL: &str = "(EXISTS (SELECT 1 FROM totp_secret t \
 // Failure counting
 // ---------------------------------------------------------------------------------------------
 
-/// Counts one attempt and answers how many the window holds now, starting the window with the
-/// first. One script, so the count and its expiry are set together and a lost connection never
-/// leaves a count that does not expire. Used for counts that live and die with a short-lived
-/// record of their own in Valkey (a password reset's misses, an address's verification tries);
-/// an account's own limits are `attempt_count`'s.
-const COUNT_ATTEMPT: &str = "
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return count
-";
-
 /// Runs `check`, which answers whether a presented secret was right, under the failure limits:
 /// refused outright once either is reached, a wrong answer counted, a right one clearing the
 /// quarter hour's count. When a wrong answer reaches the daily limit, the account's address is
@@ -252,15 +238,16 @@ enum Attempt {
 /// Counts one attempt at the count `key`, whose window of `window_seconds` starts with its first
 /// attempt, and answers how many the window holds now. Counting before checking, as every guess
 /// of a secret here does, means attempts sent all at once are checked no more often than the
-/// limit allows.
+/// limit allows. The count and its expiry are set together, so a lost connection never leaves a
+/// count that does not expire. Used for counts that live and die with a short-lived record of
+/// their own in Valkey (a password reset's misses, an address's verification tries); an
+/// account's own limits are `attempt_count`'s.
 pub async fn count_attempt(
-    valkey: &fred::clients::Client,
+    ephemeral: &aspen_ephemeral::Ephemeral,
     key: &str,
     window_seconds: i64,
 ) -> crate::Result<i64> {
-    Ok(valkey
-        .eval(COUNT_ATTEMPT, key.to_string(), window_seconds)
-        .await?)
+    Ok(ephemeral.count_attempt(key, window_seconds).await?)
 }
 
 /// `limited` on `user`'s counts. The attempt is counted before `check` runs, so however many

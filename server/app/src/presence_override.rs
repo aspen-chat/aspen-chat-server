@@ -21,6 +21,7 @@ use crate::context::GlobalServerContext;
 use crate::presence_feed::PresenceFeed;
 use crate::t;
 use crate::{EventScope, UserId, publish_event};
+use aspen_ephemeral::{Ephemeral, Expiry};
 use aspen_schema::user;
 use aspen_wire::message_enum::server_event::ServerEvent;
 pub use aspen_wire::user::PresenceOverride;
@@ -28,8 +29,6 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::KeysInterface;
-use fred::types::Expiration;
 
 /// The longest a timed override may last: thirty days. Longer, it lasts until it is changed.
 pub const MAX_OVERRIDE_SECONDS: u32 = 30 * 24 * 60 * 60;
@@ -199,14 +198,14 @@ async fn restore(state: &GlobalServerContext, user_id: UserId) -> crate::Result<
 /// Copies the override held by a `user` row's two columns, as they were read when the user came
 /// online, to Valkey.
 pub(crate) async fn copy_row_to_valkey(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     feed: &PresenceFeed,
     user_id: UserId,
     presence_override: Option<PresenceOverride>,
     until: Option<DateTime<Utc>>,
 ) -> crate::Result<()> {
     let chosen = ChosenPresence::in_force(presence_override, until, Utc::now());
-    copy_with(valkey, feed, user_id, chosen).await
+    copy_with(ephemeral, feed, user_id, chosen).await
 }
 
 /// Sets `user:{uuid}:override` to `chosen`, expiring when it does, or removes it for `None`. A
@@ -216,11 +215,11 @@ async fn copy_to_valkey(
     user_id: UserId,
     chosen: Option<ChosenPresence>,
 ) -> crate::Result<()> {
-    copy_with(&state.valkey, &state.presence_feed, user_id, chosen).await
+    copy_with(&state.ephemeral, &state.presence_feed, user_id, chosen).await
 }
 
 async fn copy_with(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     feed: &PresenceFeed,
     user_id: UserId,
     chosen: Option<ChosenPresence>,
@@ -230,15 +229,9 @@ async fn copy_with(
         Some(chosen) => {
             let expiry = chosen
                 .until
-                .map(|until| Expiration::PXAT(until.timestamp_millis()));
-            let () = valkey
-                .set(
-                    key,
-                    chosen.presence_override.to_string(),
-                    expiry,
-                    None,
-                    false,
-                )
+                .map(|until| Expiry::AtMillis(until.timestamp_millis()));
+            ephemeral
+                .set(&key, chosen.presence_override.to_string(), expiry, None)
                 .await?;
             if let Some(until) = chosen.until {
                 feed.expires(
@@ -249,7 +242,7 @@ async fn copy_with(
             }
         }
         None => {
-            let () = valkey.del(key).await?;
+            ephemeral.del(key).await?;
         }
     }
     Ok(())

@@ -6,7 +6,6 @@
 
 use crate::context::GlobalServerContext;
 use diesel_async::RunQueryDsl;
-use fred::interfaces::ClientLike;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 
@@ -83,7 +82,7 @@ async fn check(state: &GlobalServerContext) -> Readiness {
     };
     let (database, valkey) = tokio::join!(
         timeout(ANSWER_WITHIN, database),
-        timeout(ANSWER_WITHIN, state.valkey.ping::<String>(None)),
+        timeout(ANSWER_WITHIN, state.ephemeral.ping()),
     );
     Readiness {
         database: matches!(database, Ok(Some(_))),

@@ -701,16 +701,12 @@ pub async fn count(
     window: u32,
     amount: u32,
 ) -> crate::Result<u64> {
-    use fred::prelude::KeysInterface;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let index = now / u64::from(window);
     let name = format!("plugin:{plugin_id}:count:{window}:{index}:{key}");
-    let count: i64 = state.valkey.incr_by(&name, i64::from(amount)).await?;
+    let count = state.ephemeral.incr_by(&name, i64::from(amount)).await?;
     if count == i64::from(amount) {
-        let _: () = state
-            .valkey
-            .expire(&name, i64::from(window) + 1, None)
-            .await?;
+        state.ephemeral.expire(&name, i64::from(window) + 1).await?;
     }
     Ok(u64::try_from(count).unwrap_or(0))
 }

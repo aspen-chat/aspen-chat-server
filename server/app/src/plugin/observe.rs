@@ -126,7 +126,6 @@ async fn first_copy(
     event_id: Option<&str>,
     subject: &str,
 ) -> crate::Result<bool> {
-    use fred::prelude::KeysInterface;
     // Only what is published to each of a DM's people comes in copies.
     let (Some(event_id), Some(crate::events::SubjectOwner::User(_))) =
         (event_id, crate::events::subject_owner(subject))
@@ -134,20 +133,19 @@ async fn first_copy(
         return Ok(true);
     };
     let key = format!("plugin:{plugin}:seen:{event_id}");
-    let set: Option<String> = state
-        .valkey
+    let set = state
+        .ephemeral
         .set(
             &key,
             subject,
-            Some(fred::types::Expiration::EX(600)),
-            Some(fred::types::SetOptions::NX),
-            false,
+            Some(aspen_ephemeral::Expiry::Seconds(600)),
+            Some(aspen_ephemeral::Condition::Absent),
         )
         .await?;
-    if set.is_some() {
+    if set {
         return Ok(true);
     }
-    let holder: Option<String> = state.valkey.get(&key).await?;
+    let holder: Option<String> = state.ephemeral.get(&key).await?;
     Ok(holder.as_deref() == Some(subject))
 }
 

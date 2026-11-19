@@ -419,6 +419,7 @@ dependencies = [
  "aspen_config_values",
  "aspen_database",
  "aspen_email_templates",
+ "aspen_ephemeral",
  "aspen_federation_core",
  "aspen_limits",
  "aspen_link_preview",
@@ -579,6 +580,16 @@ name = "aspen_email_templates"
 version = "0.1.0"
 dependencies = [
  "askama",
+]
+
+[[package]]
+name = "aspen_ephemeral"
+version = "0.1.0"
+dependencies = [
+ "fred",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

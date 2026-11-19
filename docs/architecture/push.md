@@ -187,8 +187,9 @@ Someone is in front of Aspen while any of their event stream connections is atte
 - A connection's member goes when it says `stoppedAttending`, when it closes, or `ATTENDED_FOR`
   after its last `attending`, whichever is first. A server that stops without closing its
   connections leaves its members to that last.
-- Scores are written and compared on Valkey's clock, in its scripts (`MARK`, `ASK`), so the server
-  that marks a connection and the one deciding a push never compare their own clocks.
+- Scores are written and compared on Valkey's clock, in its scripts (`aspen_ephemeral`'s
+  `attention_mark` and `attention_ask`), so the server that marks a connection and the one deciding
+  a push never compare their own clocks.
 - Each connection is a member of its own, so one device going idle or to the background never
   answers for another the user is using.
 - A client that never says `attending` (a version that predates it) is never attended, so its user

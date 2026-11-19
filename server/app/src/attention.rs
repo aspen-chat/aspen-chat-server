@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use fred::prelude::{LuaInterface as _, SortedSetsInterface as _};
+use aspen_ephemeral::Ephemeral;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -38,55 +38,19 @@ pub fn attended_key(user: UserId) -> String {
     format!("user:{}:attended", user.0)
 }
 
-/// Marks `ARGV[2]`, a connection of the user whose set is `KEYS[1]`, attended for `ARGV[1]`
-/// milliseconds, forgetting members whose time has passed. The set lives as long as its newest
-/// member, which this one is.
-const MARK: &str = r"
-local time = redis.call('TIME')
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-local lasting = tonumber(ARGV[1])
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
-redis.call('ZADD', KEYS[1], now + lasting, ARGV[2])
-redis.call('PEXPIRE', KEYS[1], lasting)
-return 1
-";
-
-/// For each set of `KEYS`, whether any member's time has not yet passed: 1 or 0.
-const ASK: &str = r"
-local time = redis.call('TIME')
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-local found = {}
-for i, key in ipairs(KEYS) do
-  found[i] = math.min(redis.call('ZCOUNT', key, '(' .. now, '+inf'), 1)
-end
-return found
-";
-
 /// Which of `users` have a connection attended now, in their order. Asked [`ASK_BATCH`] at a
 /// time, the batches at once, so a message to a whole community never sends Valkey one command
 /// naming every member.
 pub async fn attended(state: &GlobalServerContext, users: &[UserId]) -> crate::Result<Vec<bool>> {
-    attended_on(&state.valkey, users).await
+    attended_on(&state.ephemeral, users).await
 }
 
-async fn attended_on(valkey: &fred::clients::Client, users: &[UserId]) -> crate::Result<Vec<bool>> {
+async fn attended_on(ephemeral: &Ephemeral, users: &[UserId]) -> crate::Result<Vec<bool>> {
     let batches = futures_util::future::try_join_all(users.chunks(ASK_BATCH).map(|batch| {
-        let keys: Vec<String> = batch.iter().map(|user| attended_key(*user)).collect();
-        async move {
-            let found: Vec<i64> = valkey.eval(ASK, keys, Vec::<String>::new()).await?;
-            Ok::<_, crate::Error>(found)
-        }
+        ephemeral.attention_ask(batch.iter().map(|user| attended_key(*user)).collect())
     }))
     .await?;
-    let found: Vec<bool> = batches.into_iter().flatten().map(|n| n > 0).collect();
-    if found.len() != users.len() {
-        return Err(fred::error::Error::new(
-            fred::error::ErrorKind::Unknown,
-            "Valkey answered whether users are attended for a different number of them",
-        )
-        .into());
-    }
-    Ok(found)
+    Ok(batches.into_iter().flatten().collect())
 }
 
 /// One event stream connection's attention, written in the order its frames say it by a task of
@@ -99,7 +63,7 @@ pub struct Attention {
 impl Attention {
     pub fn spawn(state: GlobalServerContext, user: UserId) -> Self {
         let (wanted, received) = watch::channel(false);
-        tokio::spawn(run(state.valkey, user, received));
+        tokio::spawn(run(state.ephemeral, user, received));
         Attention { wanted }
     }
 
@@ -115,7 +79,7 @@ impl Attention {
     }
 }
 
-async fn run(valkey: fred::clients::Client, user: UserId, mut wanted: watch::Receiver<bool>) {
+async fn run(ephemeral: Ephemeral, user: UserId, mut wanted: watch::Receiver<bool>) {
     let key = attended_key(user);
     let connection = uuid::Uuid::now_v7().to_string();
     // When this connection was last written attended, while it still is.
@@ -127,41 +91,35 @@ async fn run(valkey: fred::clients::Client, user: UserId, mut wanted: watch::Rec
             if marked.is_some_and(|at| now.duration_since(at) + REFRESH_GRACE < ATTENDING_REFRESH) {
                 continue;
             }
-            match mark(&valkey, &key, &connection, ATTENDED_FOR).await {
+            match mark(&ephemeral, &key, &connection, ATTENDED_FOR).await {
                 Ok(()) => marked = Some(now),
                 Err(e) => tracing::warn!(error = %e, "failed to record a connection as attended"),
             }
         } else if marked.take().is_some() {
-            unmark(&valkey, &key, &connection).await;
+            unmark(&ephemeral, &key, &connection).await;
         } else {
             continue;
         }
         tokio::time::sleep(WRITE_GAP).await;
     }
     if marked.is_some() {
-        unmark(&valkey, &key, &connection).await;
+        unmark(&ephemeral, &key, &connection).await;
     }
 }
 
+/// Marks `connection` attended for `lasting`, forgetting the user's connections whose time has
+/// passed. The set lives as long as its newest member, which this one is.
 async fn mark(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     key: &str,
     connection: &str,
     lasting: Duration,
-) -> Result<(), fred::error::Error> {
-    let _: i64 = valkey
-        .eval(
-            MARK,
-            vec![key.to_string()],
-            vec![lasting.as_millis().to_string(), connection.to_string()],
-        )
-        .await?;
-    Ok(())
+) -> aspen_ephemeral::Result<()> {
+    ephemeral.attention_mark(key, connection, lasting).await
 }
 
-async fn unmark(valkey: &fred::clients::Client, key: &str, connection: &str) {
-    let removed: Result<i64, fred::error::Error> = valkey.zrem(key, connection).await;
-    if let Err(e) = removed {
+async fn unmark(ephemeral: &Ephemeral, key: &str, connection: &str) {
+    if let Err(e) = ephemeral.zrem(key, connection).await {
         // Its member is forgotten [`ATTENDED_FOR`] after it was written instead.
         tracing::warn!(error = %e, "failed to record a connection as no longer attended");
     }
@@ -172,20 +130,11 @@ mod tests {
     use super::*;
 
     /// Uses the Valkey of `docker-compose.yaml`, or `VALKEY_URL`.
-    async fn test_valkey() -> fred::clients::Client {
-        use fred::interfaces::ClientLike;
+    async fn test_valkey() -> Ephemeral {
         let url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        let client = fred::clients::Client::new(
-            fred::prelude::Config::from_url(&url).unwrap(),
-            None,
-            None,
-            None,
-        );
-        client
-            .init()
+        Ephemeral::valkey_at(&url)
             .await
-            .expect("Valkey from docker-compose.yaml");
-        client
+            .expect("Valkey from docker-compose.yaml")
     }
 
     const SHORT: Duration = Duration::from_millis(300);

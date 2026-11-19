@@ -61,10 +61,9 @@
 
 use crate::UserId;
 use crate::aspen_config::{Limit, LimitSetting, RateLimitConfig};
+use aspen_ephemeral::{Ephemeral, GcraRate};
 use aspen_limits::ClientAddresses;
 use aspen_limits::suspension::{Exemption, SuspensionState};
-use fred::clients::Client;
-use fred::interfaces::LuaInterface;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -81,79 +80,34 @@ pub const DEVICE_ROUTES: [&str; 2] = [
     "POST /auth/device-credentials",
 ];
 
-/// Checks and updates one GCRA bucket. `KEYS[1]` is the bucket; `ARGV[1]` the emission interval
-/// (milliseconds per request) and `ARGV[2]` the burst tolerance (milliseconds of credit beyond
-/// one request). Returns 0 when the request is allowed, otherwise the milliseconds until it
-/// would be.
-const GCRA: &str = r"
-local time = redis.call('TIME')
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-local emission = tonumber(ARGV[1])
-local tolerance = tonumber(ARGV[2])
-local tat = tonumber(redis.call('GET', KEYS[1]) or now)
-if tat < now then
-  tat = now
-end
-local allow_at = tat - tolerance
-if now < allow_at then
-  return allow_at - now
-end
-local next_tat = tat + emission
-redis.call('SET', KEYS[1], next_tat, 'PX', next_tat - now)
-return 0
-";
-
-/// As [`GCRA`], but only answers whether a request would be allowed, counting nothing.
-const GCRA_PEEK: &str = r"
-local time = redis.call('TIME')
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-local tolerance = tonumber(ARGV[2])
-local tat = tonumber(redis.call('GET', KEYS[1]) or now)
-if tat < now then
-  tat = now
-end
-local allow_at = tat - tolerance
-if now < allow_at then
-  return allow_at - now
-end
-return 0
-";
-
-/// Gives back one request [`GCRA`] counted, as if it had not been made: `KEYS[1]` is the bucket
-/// and `ARGV[1]` the emission interval. Requests counted since are kept, since each moved the
-/// bucket by its own interval.
-const GCRA_REFUND: &str = r"
-local time = redis.call('TIME')
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-local tat = tonumber(redis.call('GET', KEYS[1]))
-if not tat then
-  return 0
-end
-local next_tat = tat - tonumber(ARGV[1])
-if next_tat <= now then
-  redis.call('DEL', KEYS[1])
-else
-  redis.call('SET', KEYS[1], next_tat, 'PX', next_tat - now)
-end
-return 0
-";
-
 /// Takes one request from the GCRA bucket `key` at `rate`, for limits kept outside the API's
 /// routes (`app::email::outbox`'s sending rate): `None` when it is allowed, or how long until it
 /// would be.
 pub async fn take(
-    valkey: &Client,
+    ephemeral: &Ephemeral,
     key: &str,
     rate: aspen_limits::Rate,
-) -> Result<Option<Duration>, fred::error::Error> {
-    let wait: i64 = valkey
-        .eval(
-            GCRA,
-            key.to_string(),
-            vec![rate.emission_ms, rate.tolerance_ms],
+) -> aspen_ephemeral::Result<Option<Duration>> {
+    ephemeral
+        .gcra_take(
+            key,
+            GcraRate {
+                emission_ms: rate.emission_ms,
+                tolerance_ms: rate.tolerance_ms,
+            },
         )
-        .await?;
-    Ok((wait > 0).then(|| Duration::from_millis(wait.unsigned_abs())))
+        .await
+}
+
+/// What a check does to each GCRA bucket it names.
+#[derive(Clone, Copy)]
+enum Step {
+    /// Counts the request (`Ephemeral::gcra_take`).
+    Take,
+    /// Counts nothing (`Ephemeral::gcra_peek`).
+    Peek,
+    /// Gives back a request counted (`Ephemeral::gcra_refund`).
+    Refund,
 }
 
 /// Who may call a route.
@@ -609,24 +563,26 @@ impl RateLimiter {
     /// Checks the rules of `route` that belong to `stage`, counting the request against each.
     pub async fn check(
         &self,
-        valkey: &Client,
+        ephemeral: &Ephemeral,
         route: &str,
         stage: Stage,
         identity: &Identity<'_>,
     ) -> Decision {
-        self.run(valkey, route, stage, identity, GCRA).await
+        self.run(ephemeral, route, stage, identity, Step::Take)
+            .await
     }
 
     /// Whether the rules of `route` that belong to `stage` would allow a request, counting
     /// nothing; [`check`](Self::check) counts it once it should.
     pub async fn peek(
         &self,
-        valkey: &Client,
+        ephemeral: &Ephemeral,
         route: &str,
         stage: Stage,
         identity: &Identity<'_>,
     ) -> Decision {
-        self.run(valkey, route, stage, identity, GCRA_PEEK).await
+        self.run(ephemeral, route, stage, identity, Step::Peek)
+            .await
     }
 
     /// Gives back a request [`check`](Self::check) counted against the rules of `route` that
@@ -634,21 +590,23 @@ impl RateLimiter {
     /// prove wrong) and then proves not to.
     pub async fn refund(
         &self,
-        valkey: &Client,
+        ephemeral: &Ephemeral,
         route: &str,
         stage: Stage,
         identity: &Identity<'_>,
     ) {
-        let _ = self.run(valkey, route, stage, identity, GCRA_REFUND).await;
+        let _ = self
+            .run(ephemeral, route, stage, identity, Step::Refund)
+            .await;
     }
 
     async fn run(
         &self,
-        valkey: &Client,
+        ephemeral: &Ephemeral,
         route: &str,
         stage: Stage,
         identity: &Identity<'_>,
-        script: &'static str,
+        step: Step,
     ) -> Decision {
         if !self.enabled {
             return Decision::Allowed;
@@ -671,13 +629,23 @@ impl RateLimiter {
         // Sent concurrently, which the client pipelines on its connection: one round trip.
         let waits = futures_util::future::join_all(keyed.iter().map(|(rule, key)| {
             let (emission_ms, tolerance_ms) = self.rate_for(rule, identity);
-            valkey.eval::<i64, _, _, _>(script, key.clone(), vec![emission_ms, tolerance_ms])
+            let rate = GcraRate {
+                emission_ms,
+                tolerance_ms,
+            };
+            async move {
+                match step {
+                    Step::Take => ephemeral.gcra_take(key, rate).await,
+                    Step::Peek => ephemeral.gcra_peek(key, rate).await,
+                    Step::Refund => ephemeral.gcra_refund(key, rate).await.map(|()| None),
+                }
+            }
         }))
         .await;
-        let mut longest = 0;
+        let mut longest = Duration::ZERO;
         for wait in waits {
             match wait {
-                Ok(wait) => longest = longest.max(wait),
+                Ok(wait) => longest = longest.max(wait.unwrap_or_default()),
                 Err(e) => {
                     let refused = matches!(stage, Stage::Username | Stage::UsernameFailures)
                         || (stage != Stage::RejectedTokens && self.fail_closed.contains(route));
@@ -692,11 +660,11 @@ impl RateLimiter {
         }
         metrics::histogram!(aspen_metrics::api::RATE_LIMIT_CHECK_DURATION)
             .record(started.elapsed().as_secs_f64());
-        if longest > 0 {
+        if longest > Duration::ZERO {
             metrics::counter!(aspen_metrics::api::RATE_LIMIT_REFUSALS, "route" => route.to_string())
                 .increment(1);
             Decision::Limited {
-                retry_after: Duration::from_millis(longest.unsigned_abs()),
+                retry_after: longest,
             }
         } else {
             Decision::Allowed
@@ -760,7 +728,7 @@ impl RateLimiter {
         ))
     }
 
-    fn log_failure(&self, error: &fred::error::Error) {
+    fn log_failure(&self, error: &aspen_ephemeral::Error) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));

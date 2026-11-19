@@ -25,6 +25,7 @@ flowchart LR
         webpush["aspen_webpush<br/>RFC 8291 and 8292"]
         fed_core["aspen_federation_core<br/>JWS, gates' policy"]
         email_tpl["aspen_email_templates"]
+        ephemeral["aspen_ephemeral<br/>short-lived shared state:<br/>keys, buckets, mana (Valkey)"]
     end
 
     subgraph foundation["What every layer speaks"]
@@ -38,7 +39,7 @@ flowchart LR
 
     bin --> api --> app
     bin --> app
-    app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl
+    app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl & ephemeral
     link_preview --> outbound
     plugin_rt & fed_core & link_preview --> wire
     api & app --> wire & locale

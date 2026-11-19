@@ -38,7 +38,6 @@ use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Nullable, Text, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::prelude::{KeysInterface as _, LuaInterface as _, SetsInterface as _};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -73,13 +72,6 @@ const MAX_BADGED: usize = 100;
 /// (`badge_of`). A change no push follows (a role taken away, a channel hidden from them) shows
 /// on their phone within it.
 const BADGE_KEPT: Duration = Duration::from_secs(300);
-/// Adds one to a kept badge, answering it, or nothing when none is kept.
-const BADGE_ADD: &str = r#"
-if redis.call('EXISTS', KEYS[1]) == 1 then
-    return redis.call('INCR', KEYS[1])
-end
-return false
-"#;
 /// The longest endpoint URL taken.
 const MAX_ENDPOINT_CHARS: usize = 2048;
 /// The most phones one account has woken. Subscribing another lets go of the oldest beyond it,
@@ -641,17 +633,15 @@ async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> c
 /// Whether this is the first time `key` is seen: a DM's events are published once for each of
 /// its people, and each copy must wake them once.
 async fn first_time(state: &GlobalServerContext, key: &str) -> crate::Result<bool> {
-    let set: Option<String> = state
-        .valkey
+    Ok(state
+        .ephemeral
         .set(
             key,
             1,
-            Some(fred::types::Expiration::EX(600)),
-            Some(fred::types::SetOptions::NX),
-            false,
+            Some(aspen_ephemeral::Expiry::Seconds(600)),
+            Some(aspen_ephemeral::Condition::Absent),
         )
-        .await?;
-    Ok(set.is_some())
+        .await?)
 }
 
 /// `result`, of handling what `first_time` claimed as `key`; a failure lets the claim go, so
@@ -662,7 +652,7 @@ async fn released_on_failure(
     result: crate::Result<()>,
 ) -> crate::Result<()> {
     if result.is_err()
-        && let Err(e) = state.valkey.del::<(), _>(key).await
+        && let Err(e) = state.ephemeral.del(key).await
     {
         tracing::warn!("letting go of a push claim failed: {e}");
     }
@@ -740,32 +730,31 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
         message: id,
     };
     let badge = recipients.len() <= MAX_BADGED;
-    let _: () = state
-        .valkey
+    state
+        .ephemeral
         .sadd(
-            message_key(id),
+            &message_key(id),
             recipients
                 .iter()
                 .map(|u| u.0.to_string())
                 .collect::<Vec<_>>(),
         )
         .await?;
-    let _: () = state
-        .valkey
-        .expire(message_key(id), REMEMBERED.as_secs() as i64, None)
+    state
+        .ephemeral
+        .expire(&message_key(id), REMEMBERED.as_secs() as i64)
         .await?;
     let phones = &phones_of(state, &recipients).await?;
     let tagged = &tagged;
     futures_util::stream::iter(recipients)
         .for_each_concurrent(FAN_OUT, |user| async move {
-            let _: Result<(), _> = state
-                .valkey
+            let _ = state
+                .ephemeral
                 .set(
-                    woken_key(user, channel_id),
+                    &woken_key(user, channel_id),
                     id.0.to_string(),
-                    Some(fred::types::Expiration::EX(REMEMBERED.as_secs() as i64)),
+                    Some(aspen_ephemeral::Expiry::Seconds(REMEMBERED.as_secs() as i64)),
                     None,
-                    false,
                 )
                 .await;
             // A kept badge follows the message whether or not this push carries it.
@@ -795,7 +784,7 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
 }
 
 async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> crate::Result<()> {
-    let woken: Vec<String> = state.valkey.smembers(message_key(id)).await?;
+    let woken: Vec<String> = state.ephemeral.smembers(&message_key(id)).await?;
     if woken.is_empty() {
         return Ok(());
     }
@@ -821,8 +810,8 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> crate::R
     let phones = phones_of(state, &woken).await?;
     // The message no longer counts toward their badges, which are counted afresh when next
     // shown.
-    let _: () = state
-        .valkey
+    state
+        .ephemeral
         .del(
             woken
                 .iter()
@@ -831,7 +820,7 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> crate::R
         )
         .await?;
     // Forgotten only now, so that a failure before here leaves it for the event's next delivery.
-    let _: () = state.valkey.del(message_key(id)).await?;
+    state.ephemeral.del(message_key(id)).await?;
     futures_util::stream::iter(phones.values())
         .for_each_concurrent(FAN_OUT, |phones| wake(state, phones, pointer, None))
         .await;
@@ -844,7 +833,7 @@ async fn channel_read(
     channel: ChannelId,
     last_read: MessageId,
 ) -> crate::Result<()> {
-    let woken: Option<String> = state.valkey.get(woken_key(user, channel)).await?;
+    let woken: Option<String> = state.ephemeral.get(&woken_key(user, channel)).await?;
     let Some(woken) = woken.and_then(|w| w.parse().ok().map(MessageId)) else {
         return Ok(());
     };
@@ -853,7 +842,7 @@ async fn channel_read(
     if woken > last_read {
         return Ok(());
     }
-    let _: () = state.valkey.del(woken_key(user, channel)).await?;
+    state.ephemeral.del(woken_key(user, channel)).await?;
     forget_badge(state, user).await;
     // The badge is counted once the position has moved.
     once_committed(|| async move {
@@ -1114,8 +1103,8 @@ const RECIPIENTS_SQL: &str = concat!(
 /// Pushes that tell of something new never reach them then, so only these need it.
 async fn shown_badge(state: &GlobalServerContext, user: UserId) -> crate::Result<i64> {
     let chosen: Option<String> = state
-        .valkey
-        .get(crate::presence_override::override_key(user))
+        .ephemeral
+        .get(&crate::presence_override::override_key(user))
         .await?;
     if chosen.and_then(|c| c.parse().ok())
         == Some(crate::presence_override::PresenceOverride::DoNotDisturb)
@@ -1131,19 +1120,18 @@ async fn shown_badge(state: &GlobalServerContext, user: UserId) -> crate::Result
 /// when a DM speaks, or when a message that woke them is deleted ([`forget_badge`]), so a busy
 /// community's tags cost a person one count, not one per message.
 async fn badge_of(state: &GlobalServerContext, user: UserId) -> crate::Result<i64> {
-    let kept: Option<i64> = state.valkey.get(badge_key(user)).await?;
+    let kept: Option<i64> = state.ephemeral.get(&badge_key(user)).await?;
     if let Some(kept) = kept {
         return Ok(kept);
     }
     let counted = count_badge(state, user).await?;
-    let _: Result<(), _> = state
-        .valkey
+    let _ = state
+        .ephemeral
         .set(
-            badge_key(user),
+            &badge_key(user),
             counted,
-            Some(fred::types::Expiration::EX(BADGE_KEPT.as_secs() as i64)),
+            Some(aspen_ephemeral::Expiry::Seconds(BADGE_KEPT.as_secs() as i64)),
             None,
-            false,
         )
         .await;
     Ok(counted)
@@ -1152,11 +1140,7 @@ async fn badge_of(state: &GlobalServerContext, user: UserId) -> crate::Result<i6
 /// Grows `user`'s kept badge by one more unread message tagging them, answering it; `None` when
 /// none is kept, and a count afresh then finds the message, already committed.
 async fn grow_badge(state: &GlobalServerContext, user: UserId) -> Option<i64> {
-    match state
-        .valkey
-        .eval::<Option<i64>, _, _, _>(BADGE_ADD, badge_key(user), Vec::<String>::new())
-        .await
-    {
+    match state.ephemeral.badge_add(&badge_key(user)).await {
         Ok(grown) => grown,
         Err(e) => {
             tracing::warn!("growing a badge failed: {e}");
@@ -1168,7 +1152,7 @@ async fn grow_badge(state: &GlobalServerContext, user: UserId) -> Option<i64> {
 
 /// Forgets `user`'s kept badge, so it is counted afresh when next shown.
 async fn forget_badge(state: &GlobalServerContext, user: UserId) {
-    if let Err(e) = state.valkey.del::<(), _>(badge_key(user)).await {
+    if let Err(e) = state.ephemeral.del(badge_key(user)).await {
         tracing::warn!("forgetting a badge failed: {e}");
     }
 }

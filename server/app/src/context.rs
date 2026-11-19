@@ -25,7 +25,7 @@ pub enum Role {
 pub struct GlobalServerContext {
     pub connection_pool: Pool,
     pub bus: aspen_bus::Bus,
-    pub valkey: fred::clients::Client,
+    pub ephemeral: aspen_ephemeral::Ephemeral,
     pub media_store: Arc<crate::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
     pub rate_limiter: Arc<crate::rate_limit::RateLimiter>,
@@ -131,7 +131,8 @@ impl GlobalServerContext {
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
         let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(client));
         aspen_limits::suspension::watch(bus.clone(), rate_limiter.suspension().clone(), "api");
-        let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
+        let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)
+            .map_err(aspen_ephemeral::Error::from)?;
         // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
         // `[valkey.tls]` without one.
         if let Some(tls) = &config.valkey.tls {
@@ -171,7 +172,8 @@ impl GlobalServerContext {
             Some(valkey_connection),
             Some(valkey_reconnect),
         );
-        valkey.init().await?;
+        valkey.init().await.map_err(aspen_ephemeral::Error::from)?;
+        let ephemeral = aspen_ephemeral::Ephemeral::Valkey(valkey);
 
         let media_store = Arc::new(crate::media_store::MediaStore::new(&config).await?);
         // Built now so that a `public_url` no relying party can be made for stops the server as
@@ -224,7 +226,7 @@ impl GlobalServerContext {
 
         let presence_feed = crate::presence_feed::PresenceFeed::start(
             bus.clone(),
-            valkey.clone(),
+            ephemeral.clone(),
             connection_pool.clone(),
             role == Role::Public,
         );
@@ -243,7 +245,7 @@ impl GlobalServerContext {
             presence_marked: crate::user_status::presence_marked(),
             presence_upkeep: crate::presence_upkeep::PresenceUpkeep::start(
                 connection_pool.clone(),
-                valkey.clone(),
+                ephemeral.clone(),
                 presence_feed.clone(),
                 crate::user_status::listing_times(&config.presence),
             ),
@@ -264,7 +266,7 @@ impl GlobalServerContext {
                 Role::PrivateWorker => crate::event_feed::EventFeed::idle(),
             },
             bus,
-            valkey,
+            ephemeral,
             media_store,
             rate_limiter: Arc::new(rate_limiter),
             federation_client,

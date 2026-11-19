@@ -159,7 +159,7 @@ impl PresenceFeed {
     /// event stream connections.
     pub fn start(
         bus: aspen_bus::Bus,
-        valkey: fred::clients::Client,
+        ephemeral: aspen_ephemeral::Ephemeral,
         pool: Pool,
         route: bool,
     ) -> Self {
@@ -179,7 +179,7 @@ impl PresenceFeed {
         let listed = Arc::new(Notify::new());
         tokio::spawn(route_presence(
             bus,
-            valkey,
+            ephemeral,
             pool,
             expiries.clone(),
             registered,
@@ -724,12 +724,12 @@ impl Router {
 /// Reads the presence of `users`, how long what makes it has left, and which viewers may learn
 /// it.
 async fn read(
-    valkey: &fred::clients::Client,
+    ephemeral: &aspen_ephemeral::Ephemeral,
     pool: &Pool,
     users: Vec<UserId>,
     viewer_pairs: Vec<(UserId, UserId)>,
 ) -> crate::Result<Read> {
-    let (statuses, expiries) = raw_statuses_with_expiries(valkey, users).await?;
+    let (statuses, expiries) = raw_statuses_with_expiries(ephemeral, users).await?;
     let mut visible = HashSet::new();
     if !viewer_pairs.is_empty() {
         let mut conn = pool.get().await?;
@@ -786,7 +786,7 @@ fn register(router: &mut Router, registration: Option<Registration>) -> bool {
 /// (`expiries`), so the hint when it runs out is made wherever the user is watched.
 async fn route_presence(
     bus: aspen_bus::Bus,
-    valkey: fred::clients::Client,
+    ephemeral: aspen_ephemeral::Ephemeral,
     pool: Pool,
     expiries: mpsc::Sender<(UserId, Expiry, Instant)>,
     mut registrations: mpsc::UnboundedReceiver<Registration>,
@@ -877,10 +877,10 @@ async fn route_presence(
                     .into_iter()
                     .collect();
                 let (known, decided) = router.decisions.split(router.viewer_pairs(&pairs));
-                let (valkey, pool) = (valkey.clone(), pool.clone());
+                let (ephemeral, pool) = (ephemeral.clone(), pool.clone());
                 reading = Some(tokio::spawn(async move {
                     let began = Instant::now();
-                    let read = read(&valkey, &pool, users, decided.clone()).await;
+                    let read = read(&ephemeral, &pool, users, decided.clone()).await;
                     Reading { pairs, known, decided, began, read }
                 }));
             }
