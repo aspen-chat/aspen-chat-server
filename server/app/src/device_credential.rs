@@ -12,7 +12,7 @@
 //! Challenges and credentials are both kept by no one: each is a signed token
 //! (`app::signed_token`) under the deployment's device key (`server_secret::DEVICES`), so every
 //! API server checks them without asking another. Only a challenge's use is remembered, in
-//! Valkey, until it expires.
+//! PostgreSQL (`app::used_once`), until it expires, so no restart makes a solution earn twice.
 
 use crate::CHACHA_RNG;
 use crate::context::GlobalServerContext;
@@ -22,7 +22,6 @@ use aspen_limits::puzzle;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeDelta, Utc};
-use fred::interfaces::KeysInterface;
 use rand::RngExt;
 
 /// How long a credential lasts. One presented with less than half of it left is answered with a
@@ -43,8 +42,6 @@ const RANDOM_BYTES: usize = 16;
 /// What each kind of token is signed as, so a challenge can never be presented as a credential.
 const CHALLENGE_CONTEXT: &[u8] = b"aspen device challenge\0";
 const CREDENTIAL_CONTEXT: &[u8] = b"aspen device credential\0";
-/// Valkey's record of a redeemed challenge, keyed by the challenge's random part.
-const USED_PREFIX: &str = "device-challenge";
 
 /// A device, as its credential names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,7 +126,8 @@ pub fn challenge(key: &HmacKey, difficulty: u8, now: DateTime<Utc>) -> Challenge
 /// A challenge whose solution checked out, not yet marked used.
 #[derive(Debug)]
 struct Solved {
-    used_key: String,
+    /// The challenge's random part, which its redemption is remembered by.
+    random: Vec<u8>,
     expires_at: DateTime<Utc>,
 }
 
@@ -152,10 +150,7 @@ fn check_solution(
         return Err(Refusal::Unsolved { bits });
     }
     Ok(Solved {
-        used_key: format!(
-            "{USED_PREFIX}:{}",
-            data_encoding::HEXLOWER.encode(&body[10..])
-        ),
+        random: body[10..].to_vec(),
         expires_at,
     })
 }
@@ -172,19 +167,15 @@ pub async fn redeem(
         Ok(solved) => solved,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    let first: Option<String> = state
-        .valkey
-        .set(
-            solved.used_key,
-            1,
-            Some(fred::types::Expiration::PX(
-                (solved.expires_at - now).num_milliseconds().max(1),
-            )),
-            Some(fred::types::SetOptions::NX),
-            false,
-        )
-        .await?;
-    if first.is_none() {
+    let mut conn = state.connection_pool.get().await?;
+    let first = crate::used_once::claim(
+        conn.as_mut(),
+        crate::used_once::Purpose::DeviceChallenge,
+        &[&solved.random],
+        (solved.expires_at - now).num_seconds() + 1,
+    )
+    .await?;
+    if !first {
         return Ok(Err(Refusal::Used));
     }
     Ok(Ok(issue(&state.device_key, DeviceId(random_bytes()), now)))

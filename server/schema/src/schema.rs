@@ -34,6 +34,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    attempt_count (user, kind) {
+        user -> Uuid,
+        kind -> Text,
+        count -> Int4,
+        until -> Timestamptz,
+    }
+}
+
+diesel::table! {
     benchmark_community (run, community) {
         run -> Text,
         community -> Uuid,
@@ -892,6 +901,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    used_once (purpose, key) {
+        purpose -> Text,
+        key -> Bytea,
+        until -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user (id) {
         id -> Uuid,
         name -> Text,
@@ -1068,6 +1085,7 @@ diesel::table! {
 
 diesel::joinable!(attachment -> message (removed_from));
 diesel::joinable!(attachment -> user (uploader));
+diesel::joinable!(attempt_count -> user (user));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
@@ -1194,6 +1212,7 @@ diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
+    attempt_count,
     benchmark_community,
     benchmark_run,
     benchmark_user,
@@ -1265,6 +1284,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     thread_follow,
     totp_secret,
     upload_usage,
+    used_once,
     user,
     user_annotation,
     user_block,

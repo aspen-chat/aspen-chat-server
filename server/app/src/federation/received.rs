@@ -198,22 +198,23 @@ pub async fn receive<T: Statement>(
         ));
     }
     // Used once: the id is remembered until the statement could no longer be accepted anyway.
-    let remembered: Option<String> = state
-        .valkey
-        .set(
-            format!("federation:statement:{}:{from}:{}", T::TYPE, claims.id()),
-            1,
-            Some(fred::types::Expiration::EX(
-                expires_at
-                    .saturating_sub(now)
-                    .saturating_add(CLOCK_SKEW.num_seconds())
-                    .max(1),
-            )),
-            Some(fred::types::SetOptions::NX),
-            false,
+    let remembered = {
+        let mut conn = state.connection_pool.get().await?;
+        crate::used_once::claim(
+            conn.as_mut(),
+            crate::used_once::Purpose::FederationStatement,
+            &[
+                T::TYPE.as_bytes(),
+                from.as_str().as_bytes(),
+                claims.id().as_bytes(),
+            ],
+            expires_at
+                .saturating_sub(now)
+                .saturating_add(CLOCK_SKEW.num_seconds()),
         )
-        .await?;
-    if remembered.is_none() {
+        .await?
+    };
+    if !remembered {
         return Err(invalid(
             Some(&from),
             t!("statementReused", domain = from.as_str()),

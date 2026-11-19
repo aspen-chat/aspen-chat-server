@@ -27,7 +27,8 @@ SHA-256 digests only). Each is 50 random bits.
 ## Attempt limits
 
 Wrong authenticator codes and wrong passwords given to prove who someone is count per user in
-Valkey. This covers finishing a sign-in, re-verifying, and the old password when changing it.
+PostgreSQL (`attempt_count`), so no restart of a server or of Valkey lifts them. This covers
+finishing a sign-in, re-verifying, and the old password when changing it.
 
 | Window          | Wrong attempts allowed | Then                                                            |
 | --------------- | ---------------------- | --------------------------------------------------------------- |
@@ -38,7 +39,8 @@ A refusal is `tooManyAttempts`.
 
 How counting works (`two_factor::limited`):
 
-1. Each attempt is counted before it is checked, in one script that also sets each window's expiry.
+1. Each attempt is counted before it is checked, in one statement that counts both windows and
+   starts each that has ended (`attempt_count::add`), on the database's clock.
 2. A right attempt clears the quarter hour's count and is not counted in the day's.
 3. The day's count keeps its wrong attempts.
 4. So attempts sent all at once are checked no more than ten times.

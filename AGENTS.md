@@ -1381,6 +1381,11 @@ when reviewing.
     that exists, a field present and null), never the absence of a log phrase or of an error.
     Confirm the setup did what the scenario needs before judging the outcome, and refuse an input
     the check does not know (a scenario name, a status) rather than pass on it.
+14. **What correctness or security needs kept lives in PostgreSQL.** Valkey is never durable: it
+    restarts, fails over, and is emptied, so it holds only what may vanish, counters that may reset
+    and records whose loss means a retry. A record that keeps something from being used twice, or a
+    count whose loss hands a guesser a fresh allowance, is a row (`app::used_once`,
+    `app::attempt_count`), with an index on when it ends and a sweep.
 
 ## Comments document the current code, not its history
 

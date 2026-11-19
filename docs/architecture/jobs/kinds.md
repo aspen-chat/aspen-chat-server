@@ -115,7 +115,11 @@ Hourly, a thousand of each a step (`jobs::upkeep::sweep_expired`), deletes:
 
 - community bans past their `until`,
 - plugins' notices past a week (`plugin::notice::KEPT`),
-- voice failure reports older than `failure_window_seconds`, and
+- voice failure reports older than `failure_window_seconds`,
+- claims of what may be used only once past their `until` (`used_once`; see
+  [Sign-in and security](../sign-in-and-security/index.md#what-is-used-only-once)),
+- counts of attempts whose window has ended (`attempt_count`; see
+  [Second factors](../sign-in-and-security/second-factors.md)), and
 - steps of the database's latency older than their range reaches (see
   [Database latency](../administration/dashboard.md#database-latency)).
 

@@ -30,7 +30,7 @@ be.
 | Difficulty          | `[rate_limits] device_puzzle_bits`, 20 by default (about a million hashes), at most 28                               |
 | Challenge lifetime  | Five minutes (`CHALLENGE_LIFETIME`)                                                                                  |
 | Credential lifetime | Ninety days (`LIFETIME`)                                                                                             |
-| Uses of a challenge | One credential. Its use is remembered in Valkey (`device-challenge:*`) until it expires.                             |
+| Uses of a challenge | One credential. Its use is remembered in PostgreSQL (`used_once`) until it expires.                                  |
 | Refusals            | `400` `deviceChallengeInvalid`, whose `detail` says why: not this deployment's, expired, already used, or not solved |
 
 - **Stateless tokens:** a challenge and a credential are each their content and an HMAC-SHA-256

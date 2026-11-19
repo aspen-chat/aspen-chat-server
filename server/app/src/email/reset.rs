@@ -20,7 +20,8 @@
 //! foreign users, and the system account cannot. What `start` shows confirms that the username
 //! exists, which registration does already; the address stays hidden behind its mask. Each step
 //! is rate limited by address and per reset, starting one by everyone together too, and one
-//! account is mailed at most [`MAX_SENT`] codes an hour, however many resets ask.
+//! account is mailed at most [`MAX_SENT`] codes an hour, however many resets ask, counted in
+//! PostgreSQL (`app::attempt_count`) so that no restart lifts the cap.
 
 use super::outbox::{self, Mail};
 use crate::UserId;
@@ -219,21 +220,19 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
     attempt(state, id, "address").await?;
     // Read before the address is compared, so whether the account has been mailed its fill
     // decides the answer and the address does not.
-    let sent_key = format!("email:reset-sent:{}", reset.user.0);
-    let sent: Option<i64> = state.valkey.get(&sent_key).await?;
-    if sent.unwrap_or(0) >= MAX_SENT {
+    use crate::attempt_count::{self, Kind};
+    if attempt_count::read(conn.as_mut(), reset.user, Kind::ResetCodesSent).await? >= MAX_SENT {
         return Err(crate::Error::TooManyAttempts);
     }
     if !super::same_address(address, &on_file) {
         return Ok(());
     }
-    let sent: i64 = state.valkey.incr(&sent_key).await?;
-    if sent == 1 {
-        let _: bool = state
-            .valkey
-            .expire(&sent_key, SENT_WINDOW_SECONDS, None)
-            .await?;
-    }
+    let [sent] = attempt_count::add(
+        conn.as_mut(),
+        reset.user,
+        [(Kind::ResetCodesSent, SENT_WINDOW_SECONDS)],
+    )
+    .await?;
     if sent > MAX_SENT {
         // Another reset took the last one between the read and now.
         return Ok(());

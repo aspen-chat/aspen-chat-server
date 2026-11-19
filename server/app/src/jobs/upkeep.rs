@@ -118,6 +118,12 @@ pub async fn sweep_expired(state: &GlobalServerContext, _job: &Claimed) -> crate
             "DELETE FROM voice_server_failure WHERE ctid IN (SELECT ctid FROM voice_server_failure \
              WHERE reported_at < now() - make_interval(secs => {window}) LIMIT $1)"
         ),
+        "DELETE FROM used_once WHERE (purpose, key) IN (SELECT purpose, key FROM used_once \
+         WHERE until < now() LIMIT $1)"
+            .to_owned(),
+        "DELETE FROM attempt_count WHERE (\"user\", kind) IN (SELECT \"user\", kind \
+         FROM attempt_count WHERE until < now() LIMIT $1)"
+            .to_owned(),
     ]
     .into_iter()
     .chain(latency)
