@@ -16,7 +16,7 @@ use voice_protocol::control::{
 
 #[derive(Clone)]
 pub struct Reporter {
-    client: async_nats::Client,
+    bus: aspen_bus::Bus,
     reports: Reports,
     /// Told each time the connection to NATS comes back after being lost.
     reconnected: Arc<Notify>,
@@ -88,23 +88,24 @@ impl Reporter {
             });
         let client = async_nats::connect_with_options(&config.nats_url, options).await?;
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
+        let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(client));
         let (reports, mut waiting) = Reports::new();
-        let stream = async_nats::jetstream::new(client.clone());
+        let stream = bus.clone();
         tokio::spawn(async move {
             while let Some(report) = waiting.recv().await {
                 publish(&stream, &report.subject(server), &report).await;
             }
         });
         Ok(Self {
-            client,
+            bus,
             reports,
             reconnected,
         })
     }
 
-    /// The NATS connection, for anything else this server follows there.
-    pub fn client(&self) -> async_nats::Client {
-        self.client.clone()
+    /// The bus, for anything else this server follows there.
+    pub fn bus(&self) -> aspen_bus::Bus {
+        self.bus.clone()
     }
 
     /// Where this server's reports are sent from, for the rooms.
@@ -153,7 +154,7 @@ impl Reporter {
         handle: impl Fn(VoiceCommand) + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
         use futures_util::StreamExt;
-        let mut commands = self.client.subscribe(command_subject(server)).await?;
+        let mut commands = self.bus.subscribe(command_subject(server)).await?;
         tokio::spawn(async move {
             while let Some(message) = commands.next().await {
                 match serde_json::from_slice::<VoiceCommand>(&message.payload) {
@@ -169,7 +170,7 @@ impl Reporter {
 
 /// Publishes one report to the stream. Its place in the stream is fixed once it is sent, so the
 /// stream's acknowledgement is awaited apart, keeping the next report from waiting on it.
-async fn publish(stream: &async_nats::jetstream::Context, subject: &str, report: &VoiceReport) {
+async fn publish(bus: &aspen_bus::Bus, subject: &str, report: &VoiceReport) {
     let payload = match serde_json::to_vec(report) {
         Ok(payload) => payload,
         Err(e) => {
@@ -177,7 +178,10 @@ async fn publish(stream: &async_nats::jetstream::Context, subject: &str, report:
             return;
         }
     };
-    match stream.publish(subject.to_string(), payload.into()).await {
+    match bus
+        .publish_to_stream(subject, aspen_bus::Headers::new(), payload.into())
+        .await
+    {
         Ok(acknowledgement) => {
             tokio::spawn(async move {
                 if let Err(e) = acknowledgement.await {

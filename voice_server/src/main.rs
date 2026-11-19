@@ -121,8 +121,8 @@ async fn main() -> anyhow::Result<()> {
     let reporter = reporter::Reporter::connect(&config, config.nats_auth()?)
         .await
         .context("failed to connect to NATS")?;
-    aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
-    let token_keys = token_keys::TokenKeys::start(reporter.client(), config.id);
+    aspen_limits::suspension::watch(reporter.bus(), limits.suspension().clone(), "voice");
+    let token_keys = token_keys::TokenKeys::start(reporter.bus(), config.id);
     let media_addresses = config.rtc.media_addresses()?;
     let ports = config.rtc.media_ports(config.media_threads)?;
     // A media thread that stops takes its calls' media with it and would leave their rooms

@@ -129,8 +129,8 @@ impl GlobalServerContext {
             .map_err(|message| crate::Error::Config(config::ConfigError::Message(message)))?;
         let client = config.connect_nats().await?;
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
-        aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
         let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(client));
+        aspen_limits::suspension::watch(bus.clone(), rate_limiter.suspension().clone(), "api");
         let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
         // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
         // `[valkey.tls]` without one.

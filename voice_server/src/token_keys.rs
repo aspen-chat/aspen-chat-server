@@ -25,7 +25,7 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 const MIN_FETCH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct TokenKeys {
-    client: async_nats::Client,
+    bus: aspen_bus::Bus,
     /// This server's id, as `voice_server.toml` gives it.
     server: Uuid,
     /// Notified when the first answer says `server` is not registered.
@@ -38,9 +38,9 @@ pub struct TokenKeys {
 
 impl TokenKeys {
     /// Starts asking for the key until the API servers answer.
-    pub fn start(client: async_nats::Client, server: Uuid) -> Arc<Self> {
+    pub fn start(bus: aspen_bus::Bus, server: Uuid) -> Arc<Self> {
         let keys = Arc::new(Self {
-            client,
+            bus,
             server,
             unregistered: tokio::sync::Notify::new(),
             known: Mutex::default(),
@@ -106,7 +106,7 @@ impl TokenKeys {
         .expect("a token key request encodes");
         let answer = tokio::time::timeout(
             ANSWER_TIMEOUT,
-            self.client.request(TOKEN_KEY_SUBJECT, request.into()),
+            self.bus.request(TOKEN_KEY_SUBJECT, request.into()),
         )
         .await;
         let message = match answer {

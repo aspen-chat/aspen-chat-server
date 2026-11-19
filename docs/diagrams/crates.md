@@ -88,13 +88,14 @@ flowchart TB
     config_values["aspen_config_values<br/>lists and tables in settings"]
     bench_protocol["aspen_bench_protocol<br/>seeding and suspension messages"]
 
-    chat --> app & voice_protocol & limits & metrics & sockets & bench_protocol
+    chat --> app & voice_protocol & limits & bus & metrics & sockets & bench_protocol
     app --> database & voice_protocol & tls & bus & config_values & bench_protocol
-    voice_server --> voice_protocol & voice_media & limits & metrics & sockets & tls & config_values
+    voice_server --> voice_protocol & voice_media & limits & bus & metrics & sockets & tls & config_values
     migrate --> database & search_text
-    bench --> voice_protocol & voice_media & limits & metrics & bench_protocol
+    bench --> voice_protocol & voice_media & limits & bus & metrics & bench_protocol
     voice_media --> voice_protocol & sockets & str0m
     voice_protocol --> limits
+    limits --> bus
     database --> metrics
 ```
 

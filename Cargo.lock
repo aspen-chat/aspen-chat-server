@@ -312,6 +312,7 @@ dependencies = [
  "aspen_api",
  "aspen_app",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_limits",
  "aspen_metrics",
  "aspen_schema",
@@ -499,6 +500,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_limits",
  "aspen_metrics",
  "async-nats",
@@ -599,7 +601,7 @@ dependencies = [
 name = "aspen_limits"
 version = "0.1.0"
 dependencies = [
- "async-nats",
+ "aspen_bus",
  "bytes",
  "futures-util",
  "ipnet",
@@ -7731,6 +7733,7 @@ name = "voice_server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aspen_bus",
  "aspen_config_values",
  "aspen_limits",
  "aspen_metrics",
