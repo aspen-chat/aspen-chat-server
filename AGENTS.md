@@ -807,10 +807,11 @@ The server is split into three layers, each a crate of its own:
   `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/schema.rs` from
   `server/schema/`.
 
-`server/src/` is the `aspen-chat-server` binary itself: `main.rs`, the listener's connection limits
-(`connections`), and the operator subcommands (`operator`). Beneath `app` are crates that need
-nothing of it, each re-exported from the `app` module that uses it, so a path through `app` names it
-wherever it lives:
+`server/src/` is the `aspen-chat-server` package: its process (`main.rs`: the allocator, command
+line, logging, and runtime) and a library the process runs and other processes can share, the
+listener (`serve`, with its connection limits in `connections`) and the operator subcommands
+(`run_command`, `operator`). Beneath `app` are crates that need nothing of it, each re-exported from
+the `app` module that uses it, so a path through `app` names it wherever it lives:
 
 - `aspen_wire` (`server/wire/`): what the server and its clients exchange, the IDs, and the SQL
   trait macros (`wire_name_traits!` and the rest).
