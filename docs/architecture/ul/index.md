@@ -83,6 +83,21 @@ With TLS on, `redirect_port` (80, or 0 for none) answers plain HTTP with a perma
 same path at `public_url`, or at `media_url` for a request naming its host (`redirect.rs`); the
 redirect is to the deployment's own address whatever the `Host` says.
 
+## PostgreSQL's major versions
+
+The cluster lives in `postgres/<major>/`, by the major version the runtime's own
+`postgres --version` gives, so a binary packed with another PostgreSQL
+(`scripts/package_ul.py --postgres-version`) carries its version with it. A runtime finding only an
+older cluster upgrades it (`postgres.rs`): it starts and stops the old cluster with the previous
+runtime's binaries, which `runtime/current` kept for this, so a cluster that was not shut down
+cleanly is recovered first; makes a new cluster under `postgres/<major>.partial/`; runs
+`pg_upgrade --copy` into it, which leaves the old cluster as it was, its log in
+`logs/pg_upgrade-<old>-to-<new>/`; writes `postgres/<major>.upgraded-from`, naming the old cluster;
+and renames the new one into place. The first start of the new cluster that succeeds removes the old
+cluster and the marker, whichever run that is. A cluster newer than the runtime is refused, as is an
+older one whose runtime is gone. The settings UL starts PostgreSQL with follow its major version
+(`io_workers` up to 18, `io_min_workers` and `io_max_workers` from 19).
+
 ## Sizes
 
 What the deployment may use is `memory_mib`, or the machine's memory, or its cgroup's when less. It

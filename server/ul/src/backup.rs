@@ -207,7 +207,7 @@ pub async fn backup(
         created_at: now(),
         public_url: config.public_url.clone(),
         aspen_ul_version: env!("CARGO_PKG_VERSION").to_string(),
-        postgres_major: postgres::MAJOR.to_string(),
+        postgres_major: database.major().to_string(),
         schema,
         files,
     };
@@ -276,12 +276,12 @@ pub async fn restore(runtime: &Path, data: &Path, from: &Path) -> Result<()> {
             manifest.aspen_ul_version
         );
     }
-    if manifest.postgres_major.parse::<u32>().ok() > postgres::MAJOR.parse::<u32>().ok() {
+    let major = postgres::major_of(&runtime.join("pgsql").join("bin"))?;
+    if manifest.postgres_major.parse::<u32>().ok() > Some(major) {
         bail!(
-            "this backup's database is from PostgreSQL {}, newer than this aspen-ul's {}; \
+            "this backup's database is from PostgreSQL {}, newer than this aspen-ul's {major}; \
              restore it with an aspen-ul as new as the one that made it ({})",
             manifest.postgres_major,
-            postgres::MAJOR,
             manifest.aspen_ul_version
         );
     }

@@ -33,8 +33,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import baseline_build as baseline  # noqa: E402
 
+# The PostgreSQL a release bundles. A runtime of a newer major upgrades the cluster an older one
+# made (server/ul/src/postgres.rs).
 POSTGRES_VERSION = "18.7"
-SOURCE_URL = f"https://ftp.postgresql.org/pub/source/v{POSTGRES_VERSION}/postgresql-{POSTGRES_VERSION}.tar.bz2"
 # The extensions the migrations create.
 EXTENSIONS = ["pg_trgm", "btree_gin"]
 # What running, dumping, restoring, and pg_upgrade need (pg_upgrade checks for each of these).
@@ -57,13 +58,14 @@ def run(command, log, **kwargs) -> None:
     subprocess.run([str(c) for c in command], check=True, stdout=log, stderr=subprocess.STDOUT, **kwargs)
 
 
-def postgres_source() -> Path:
-    archive = UL / "src" / f"postgresql-{POSTGRES_VERSION}.tar.bz2"
+def postgres_source(version: str) -> Path:
+    url = f"https://ftp.postgresql.org/pub/source/v{version}/postgresql-{version}.tar.bz2"
+    archive = UL / "src" / f"postgresql-{version}.tar.bz2"
     archive.parent.mkdir(parents=True, exist_ok=True)
     if not archive.exists():
-        say(f"fetching {SOURCE_URL}")
-        urllib.request.urlretrieve(SOURCE_URL, archive)
-    with urllib.request.urlopen(f"{SOURCE_URL}.sha256") as answer:
+        say(f"fetching {url}")
+        urllib.request.urlretrieve(url, archive)
+    with urllib.request.urlopen(f"{url}.sha256") as answer:
         expected = answer.read().decode().split()[0]
     actual = hashlib.sha256(archive.read_bytes()).hexdigest()
     if actual != expected:
@@ -108,10 +110,10 @@ def check_postgres(prefix: Path, paths: baseline.Paths) -> None:
                 baseline.fail(f"{path} needs glibc {major}.{minor}")
 
 
-def build_postgres(arch: str, jobs: int) -> Path:
-    """The pruned installation for `arch`, built if it is not yet."""
+def build_postgres(arch: str, version: str, jobs: int) -> Path:
+    """The pruned installation of `version` for `arch`, built if it is not yet."""
     paths = baseline.Paths(arch, "bookworm")
-    root = UL / arch / f"postgresql-{POSTGRES_VERSION}"
+    root = UL / arch / f"postgresql-{version}"
     prefix = root / "pgsql"
     done = root / ".built"
     if done.exists():
@@ -120,17 +122,17 @@ def build_postgres(arch: str, jobs: int) -> Path:
     # A cross build installs time zone data with the build machine's zic.
     native_zic = None
     if arch != "x86_64":
-        build_postgres("x86_64", jobs)
-        native_zic = UL / "x86_64" / f"postgresql-{POSTGRES_VERSION}" / "build" / "src/timezone/zic"
-    say(f"building PostgreSQL {POSTGRES_VERSION} for {arch}")
+        build_postgres("x86_64", version, jobs)
+        native_zic = UL / "x86_64" / f"postgresql-{version}" / "build" / "src/timezone/zic"
+    say(f"building PostgreSQL {version} for {arch}")
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     deps = root / "deps"
     static_zlib(paths, deps)
-    with tarfile.open(postgres_source()) as tar:
+    with tarfile.open(postgres_source(version)) as tar:
         tar.extractall(root, filter="tar")
     tree = root / "build"
-    (root / f"postgresql-{POSTGRES_VERSION}").rename(tree)
+    (root / f"postgresql-{version}").rename(tree)
     triple = paths.arch.triple
     configure = [
         "./configure", f"--prefix={prefix}", f"--host={triple}", "--build=x86_64-linux-gnu",
@@ -221,11 +223,14 @@ def main() -> None:
     parser.add_argument("--web-client", type=Path, default=WEB_CLIENT, help=f"the built web client ({WEB_CLIENT})")
     parser.add_argument("--out", type=Path, help="where to write it (target/ul/<arch>/aspen-ul)")
     parser.add_argument("-j", "--jobs", type=int, default=8, help="parallel jobs for make and cargo")
+    parser.add_argument(
+        "--postgres-version", default=POSTGRES_VERSION, help=f"the PostgreSQL to bundle ({POSTGRES_VERSION})"
+    )
     args = parser.parse_args()
     for tool in ("make", "patchelf", "zstd"):
         if shutil.which(tool) is None:
             baseline.fail(f"missing tool: {tool}")
-    postgres = build_postgres(args.arch, args.jobs)
+    postgres = build_postgres(args.arch, args.postgres_version, args.jobs)
     binary = args.binary
     if binary is None:
         paths = baseline.Paths(args.arch, "bookworm")
