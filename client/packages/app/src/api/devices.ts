@@ -1,4 +1,5 @@
 import {
+  PRIMARY_ACCOUNT,
   type ClockOffsetStore,
   type DeviceCredentialStore,
   type PuzzleSolver,
@@ -9,15 +10,28 @@ import {
 } from "@aspen/protocol";
 import type { PuzzleTask } from "./devicePuzzle.worker";
 
+function deviceKey(baseUrl: string, account: string): string {
+  const key = `aspen.device.${new URL(baseUrl).host}`;
+  return account === PRIMARY_ACCOUNT ? key : `${key}.${account}`;
+}
+
 /**
- * Where the device credential for the deployment at `baseUrl` is kept: one key per deployment,
- * so changing the server never presents one server's credential to another.
+ * Where `account`'s device credential for the deployment at `baseUrl` is kept: one key per
+ * deployment, so changing the server never presents one server's credential to another, and per
+ * account, so that signing in does not tell a deployment two accounts share this device.
  */
-export function deviceStore(baseUrl: string): DeviceCredentialStore {
-  return new WebStorageDeviceCredentialStore(
-    window.localStorage,
-    `aspen.device.${new URL(baseUrl).host}`,
-  );
+export function deviceStore(
+  baseUrl: string,
+  account: string = PRIMARY_ACCOUNT,
+): DeviceCredentialStore {
+  return new WebStorageDeviceCredentialStore(window.localStorage, deviceKey(baseUrl, account));
+}
+
+/** Forgets an account's device credential once the account is gone from this install. */
+export function forgetDeviceCredential(baseUrl: string, account: string): void {
+  if (account !== PRIMARY_ACCOUNT) {
+    window.localStorage.removeItem(deviceKey(baseUrl, account));
+  }
 }
 
 /**

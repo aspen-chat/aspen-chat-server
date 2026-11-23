@@ -1,15 +1,19 @@
 import type { AspenSync, Topic } from "@aspen/protocol";
 import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "react";
 import type { AspenClient } from "@aspen/protocol";
+import { useAccount } from "./accounts";
 import { HomeClientContext } from "./context";
 import { useForeignDeployments } from "./deploymentsContext";
 import { HomeSyncContext } from "./syncContext";
 
-/** One deployment the user is signed in to: `domain` is `null` for their home. */
+/** One deployment an account is signed in to: `domain` is `null` for the account's home. */
 export interface Source {
+  readonly accountId: string;
   readonly domain: string | null;
   readonly client: AspenClient;
   readonly sync: AspenSync;
+  readonly homeClient: AspenClient;
+  readonly homeSync: AspenSync;
 }
 
 /** The user's home and every other deployment they are signed in to, home first. */
@@ -17,18 +21,20 @@ export function useSources(): readonly Source[] {
   const home = useContext(HomeSyncContext);
   const homeClient = useContext(HomeClientContext);
   const foreign = useForeignDeployments();
+  const accountId = useAccount().id;
   return useMemo(() => {
-    const sources: Source[] =
-      home === null || homeClient === null
-        ? []
-        : [{ domain: null, client: homeClient, sync: home }];
+    if (home === null || homeClient === null) {
+      return [];
+    }
+    const of = { accountId, homeClient, homeSync: home };
+    const sources: Source[] = [{ ...of, domain: null, client: homeClient, sync: home }];
     for (const entry of foreign) {
       if (entry.status === "ready" && entry.sync !== null) {
-        sources.push({ domain: entry.domain, client: entry.client, sync: entry.sync });
+        sources.push({ ...of, domain: entry.domain, client: entry.client, sync: entry.sync });
       }
     }
     return sources;
-  }, [home, homeClient, foreign]);
+  }, [accountId, home, homeClient, foreign]);
 }
 
 /**
@@ -39,7 +45,15 @@ export function useEverywhere<T>(
   topics: readonly Topic[],
   read: (sources: readonly Source[]) => T,
 ): T {
-  const sources = useSources();
+  return useAcross(useSources(), topics, read);
+}
+
+/** As `useEverywhere`, over the sources given. */
+export function useAcross<T>(
+  sources: readonly Source[],
+  topics: readonly Topic[],
+  read: (sources: readonly Source[]) => T,
+): T {
   const version = useRef(0);
   const topicKey = topics.join("\u0000");
   const subscribe = useCallback(

@@ -77,10 +77,10 @@ public final class PushHandler {
                     show(subscription, account, channel, pointer.getString("message"));
                     break;
                 case "read":
-                    takeDown(channel, pointer.getString("message"), true);
+                    takeDown(subscription, channel, pointer.getString("message"), true);
                     break;
                 case "deleted":
-                    takeDown(channel, pointer.getString("message"), false);
+                    takeDown(subscription, channel, pointer.getString("message"), false);
                     break;
                 case "notice":
                     showNotice(subscription, account, channel, pointer.getString("notice"));
@@ -129,6 +129,8 @@ public final class PushHandler {
             }
         }
         post(
+            subscription,
+            account.getString("userId"),
             origin,
             channel,
             messageId,
@@ -150,6 +152,8 @@ public final class PushHandler {
             return;
         }
         post(
+            subscription,
+            account.getString("userId"),
             origin,
             channel,
             noticeId,
@@ -163,10 +167,14 @@ public final class PushHandler {
     }
 
     /**
-     * Posts a notification tagged {@code channel}/{@code id} that opens {@code message} in
-     * {@code opens} (or the channel, for none) when tapped.
+     * Posts a notification tagged with its account's {@code subscription}, {@code channel}, and
+     * {@code id} that opens {@code message} in {@code opens} (or the channel, for none) when
+     * tapped, as {@code userId}. Accounts on one deployment share channels and messages, and each
+     * has its own notification of them, which only its own reading takes down.
      */
     private void post(
+        String subscription,
+        String userId,
         String origin,
         String channel,
         String id,
@@ -197,6 +205,7 @@ public final class PushHandler {
         // (spec/push.md, The app).
         open.putExtra("google.message_id", id);
         open.putExtra("origin", origin);
+        open.putExtra("userId", userId);
         open.putExtra("channel", opens);
         open.putExtra("message", message);
         open.putExtra("community", community);
@@ -206,7 +215,14 @@ public final class PushHandler {
         // data names the notification, and a tap opens what its own notification showed. The
         // intent names the activity, so the address is never resolved, and the app opens only
         // addresses of its own link scheme.
-        open.setData(new Uri.Builder().scheme("aspen-push").authority(channel).appendPath(id).build());
+        open.setData(
+            new Uri.Builder()
+                .scheme("aspen-push")
+                .authority(channel)
+                .appendPath(subscription)
+                .appendPath(id)
+                .build()
+        );
         PendingIntent tap = PendingIntent.getActivity(
             context,
             id.hashCode(),
@@ -220,21 +236,21 @@ public final class PushHandler {
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
-            .setGroup(channel)
+            .setGroup(subscription + "/" + channel)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap);
-        manager.notify(tagOf(channel, id), 0, builder.build());
+        manager.notify(tagOf(subscription, channel, id), 0, builder.build());
     }
 
     /**
-     * Takes down what was shown for {@code channel}: everything up to {@code message} when it was
+     * Takes down what was shown to {@code subscription}'s account for {@code channel}: everything up to {@code message} when it was
      * read, or that one message when it was deleted.
      */
-    private void takeDown(String channel, String message, boolean upTo) {
+    private void takeDown(String subscription, String channel, String message, boolean upTo) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
-        String prefix = channel + "/";
+        String prefix = subscription + "/" + channel + "/";
         for (StatusBarNotification shown : manager.getActiveNotifications()) {
             String tag = shown.getTag();
             if (tag == null || !tag.startsWith(prefix)) {
@@ -305,8 +321,8 @@ public final class PushHandler {
         return null;
     }
 
-    private static String tagOf(String channel, String message) {
-        return channel + "/" + message;
+    private static String tagOf(String subscription, String channel, String message) {
+        return subscription + "/" + channel + "/" + message;
     }
 
     /**

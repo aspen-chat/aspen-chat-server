@@ -9,6 +9,8 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
+import { useAccountsHub } from "@/api/accounts";
+import { useCallSource } from "@/api/calls";
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { isDm, type CameraFailure, type Channel } from "@aspen/protocol";
@@ -283,6 +285,8 @@ function CallPlaceLink({
   children: ReactNode;
 }) {
   const domain = useDomain();
+  const accounts = useAccountsHub();
+  const callSource = useCallSource();
   const className = "flex min-w-0 flex-col";
   if (channel === undefined) {
     return <span className={className}>{children}</span>;
@@ -290,6 +294,11 @@ function CallPlaceLink({
   return (
     <Link
       {...channelLink({ domain, community: channel.community ?? null }, channel.id)}
+      onClick={() => {
+        if (callSource !== null) {
+          accounts.bringToFront(callSource.accountId);
+        }
+      }}
       className={
         className +
         " rounded-md outline-none hover:[&>span:last-child]:underline focus-visible:ring-2 focus-visible:ring-accent/50"

@@ -63,7 +63,7 @@ enum UploadStore {
     /// signed for no team. It is named because an item given no group goes into the first of
     /// the app's `keychain-access-groups`, which is the one it shares with the notification
     /// service extension (`PushStateStore`), and the extension has no use for these.
-    private static var accessGroup: String? {
+    static var accessGroup: String? {
         guard let prefix = Bundle.main.object(forInfoDictionaryKey: "AspenAppIdentifierPrefix") as? String,
               !prefix.isEmpty,
               let bundle = Bundle.main.bundleIdentifier

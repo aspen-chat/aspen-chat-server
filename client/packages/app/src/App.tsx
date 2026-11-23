@@ -3,17 +3,27 @@ import { useState } from "react";
 import { AspenProvider } from "@/api/AspenProvider";
 import { useOpenAppLinks } from "@/api/appLinks";
 import { defaultServerUrl, detectShell, rememberServerUrl } from "@/config";
+import { SavedSignInsGate } from "@/features/auth/SavedSignInsGate";
 import { ServerForm } from "@/features/auth/ServerForm";
 import { ServerChoiceContext } from "@/features/auth/serverChoice";
 import { Toasts } from "@/features/layout/Toasts";
 import { router } from "@/router";
+
+/** The app, once the sign-ins saved on this device can be read. */
+export function App() {
+  return (
+    <SavedSignInsGate>
+      <ChosenServer />
+    </SavedSignInsGate>
+  );
+}
 
 /**
  * Chooses the server (`defaultServerUrl`, or the user's answer to `ServerForm` in a shell with
  * none), then hands the page to the router. Everything the router renders lives
  * inside `<AspenProvider>`, so the client for the chosen server is available to every route.
  */
-export function App() {
+function ChosenServer() {
   const [serverUrl, setServerUrl] = useState<string | null>(() => defaultServerUrl());
   const [choosingServer, setChoosingServer] = useState(false);
   const [offeredServer, setOfferedServer] = useState<string | null>(null);

@@ -2,8 +2,18 @@ import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-route
 import { Announcer } from "@/features/layout/Announcer";
 import { useFollowMessageTextSize } from "@/features/layout/messageTextSize";
 import { useFollowMotionSpeed } from "@/features/layout/motion";
-import { useState } from "react";
-import { useAspenClient, useSession } from "@/api/context";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  AccountContext,
+  useAccount,
+  useAccounts,
+  useAccountsHub,
+  useAllSources,
+  type AccountEntry,
+} from "@/api/accounts";
+import { AspenClientContext, HomeClientContext, useAspenClient, useSession } from "@/api/context";
+import { useEndSignIns } from "@/api/deploymentsContext";
+import { useSources } from "@/api/everywhere";
 import { useFollowSpeakerphone } from "@/api/audioRoute";
 import { useOneCallAtATime } from "@/api/calls";
 import { ShareBlocksAcrossDeployments } from "@/api/identity";
@@ -20,7 +30,8 @@ import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
 import { ProviderReturn } from "@/features/auth/ProviderReturn";
 import { RegisterForm } from "@/features/auth/RegisterForm";
-import { useServerChoice } from "@/features/auth/serverChoice";
+import { ServerChoiceContext, useServerChoice } from "@/features/auth/serverChoice";
+import { AccountSwitcher } from "@/features/accounts/AccountSwitcher";
 import { NewRelease } from "@/features/layout/NewRelease";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
@@ -32,23 +43,104 @@ import { format } from "@/i18n/messages";
 import { IncomingCalls } from "@/features/voice/IncomingCall";
 
 /**
- * Signed out: the sign-in or create-account screen, leaving the URL alone so a shared link
- * opens once the user is in. Signed in to an account that still owes the server a second
- * factor: the screen for adding one; or a verified email address: the screen for verifying it. Signed in: the community rail beside whatever the route
- * shows, all fed by one `SyncProvider`.
+ * Every account this install holds, each under its own scope so that those behind the one in front
+ * stay connected, and what the device does once however many there are.
  */
 export function RootLayout() {
+  const accounts = useAccountsHub();
+  const { entries, front } = useAccounts();
+  const { href } = useLocation();
+  useEffect(() => {
+    accounts.noteRoute(href);
+  }, [accounts, href]);
+  return (
+    <>
+      <OnceOnThisDevice />
+      {entries.map((entry) => (
+        <AccountScope key={entry.account.id} entry={entry} several={entries.length > 1}>
+          <AccountView front={entry.account.id === front} several={entries.length > 1} />
+        </AccountScope>
+      ))}
+    </>
+  );
+}
+
+/** One call at a time, the phone's wakings, and ringing, across every account. */
+function OnceOnThisDevice() {
+  useOneCallAtATime();
+  useFollowSpeakerphone();
+  return useAllSources().length === 0 ? null : (
+    <>
+      <WakeThisPhone />
+      <IncomingCalls />
+    </>
+  );
+}
+
+function AccountScope({
+  entry,
+  several,
+  children,
+}: {
+  entry: AccountEntry;
+  several: boolean;
+  children: ReactNode;
+}) {
+  const { account, client } = entry;
+  const inherited = useContext(ServerChoiceContext);
+  const choice = useMemo(
+    () =>
+      several || inherited === null
+        ? { serverUrl: account.serverUrl, changeServer: null, switchServer: null }
+        : inherited,
+    [several, inherited, account.serverUrl],
+  );
+  return (
+    <AccountContext.Provider value={account}>
+      <ServerChoiceContext.Provider value={choice}>
+        <HomeClientContext.Provider value={client}>
+          <AspenClientContext.Provider value={client}>{children}</AspenClientContext.Provider>
+        </HomeClientContext.Provider>
+      </ServerChoiceContext.Provider>
+    </AccountContext.Provider>
+  );
+}
+
+/**
+ * One account. In front and signed out: the sign-in or create-account screen, leaving the URL
+ * alone so a shared link opens once the user is in. In front and signed in to an account that
+ * still owes the server a second factor: the screen for adding one; or a verified email address:
+ * the screen for verifying it. Signed in: its sync, and in front the app beside the community
+ * rail. An account behind the front one that cannot run shows nothing until it is switched to.
+ */
+function AccountView({ front, several }: { front: boolean; several: boolean }) {
   const session = useSession();
-  if (session === null) {
-    return <SignedOut />;
+  if (
+    session !== null &&
+    session.twoFactorEnrollmentRequired !== true &&
+    session.emailVerificationRequired !== true
+  ) {
+    return <SignedIn front={front} />;
   }
-  if (session.twoFactorEnrollmentRequired === true) {
-    return <EnrollmentScreen />;
+  if (!front) {
+    return null;
   }
-  if (session.emailVerificationRequired === true) {
-    return <VerificationScreen />;
-  }
-  return <SignedIn />;
+  return (
+    <>
+      {several && (
+        <div className="fixed end-3 top-3 z-10 flex">
+          <AccountSwitcher />
+        </div>
+      )}
+      {session === null ? (
+        <SignedOut />
+      ) : session.twoFactorEnrollmentRequired === true ? (
+        <EnrollmentScreen />
+      ) : (
+        <VerificationScreen />
+      )}
+    </>
+  );
 }
 
 /**
@@ -147,26 +239,50 @@ function FollowMessageTextSize() {
   return null;
 }
 
+/** Tells the rest of the app this account's deployments, and how to sign it out. */
+function PublishAccount() {
+  const accounts = useAccountsHub();
+  const { id } = useAccount();
+  const sources = useSources();
+  const signOut = useEndSignIns(sources);
+  useEffect(() => {
+    accounts.publish(id, { sources, signOut });
+  }, [accounts, id, sources, signOut]);
+  useEffect(
+    () => () => {
+      accounts.publish(id, null);
+    },
+    [accounts, id],
+  );
+  return null;
+}
+
+/** What runs for a signed-in account whether or not it is shown, and the app when it is. */
+function SignedIn({ front }: { front: boolean }) {
+  const client = useAspenClient();
+  return (
+    <SyncProvider client={client} attended={front}>
+      <PublishAccount />
+      <ShareBlocksAcrossDeployments />
+      <NotifyOnMessages />
+      <PlaySounds />
+      {front && <ShownAccount />}
+    </SyncProvider>
+  );
+}
+
 /**
  * The signed-in app: the community rail beside the route. On a narrow screen a conversation
  * (a channel, a DM, a thread) takes the whole width, and the rail shows with the lists the
  * back links lead to.
  */
-function SignedIn() {
-  const client = useAspenClient();
+function ShownAccount() {
   const { channelId } = useParams({ strict: false });
   return (
-    <SyncProvider client={client}>
-      <OneCall />
-      <ShareBlocksAcrossDeployments />
-      <WakeThisPhone />
-      <NotifyOnMessages />
-      <PlaySounds />
-      <IncomingCalls />
+    <>
       <FollowLanguagePreference />
       <FollowMotionSpeed />
       <FollowMessageTextSize />
-      <FollowSpeakerphone />
       <Announcer />
       <div className="flex h-full flex-col">
         <SyncBanner />
@@ -180,17 +296,6 @@ function SignedIn() {
           <Outlet />
         </div>
       </div>
-    </SyncProvider>
+    </>
   );
-}
-
-/** Keeps the user in one call across every deployment they use. */
-function FollowSpeakerphone() {
-  useFollowSpeakerphone();
-  return null;
-}
-
-function OneCall() {
-  useOneCallAtATime();
-  return null;
 }

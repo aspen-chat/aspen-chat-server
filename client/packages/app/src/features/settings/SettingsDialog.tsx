@@ -13,6 +13,7 @@ import { GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { useSignOut } from "@/api/deploymentsContext";
 import { AboutDialog } from "@/features/about/AboutDialog";
+import { AccountsSection } from "@/features/accounts/AccountsSection";
 import { OtherServersSection } from "@/features/deployments/OtherServersSection";
 import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import {
@@ -50,7 +51,7 @@ import { ZoomSlider } from "@/features/settings/ZoomSlider";
 
 /**
  * The user's preferences: first the account's sign-in and security settings and its email
- * address; then the microphone and speaker voice chat uses and the speaker for notification
+ * address; whether this install holds several accounts, and which; then the microphone and speaker voice chat uses and the speaker for notification
  * sounds, kept with this install; whether this install notifies with the system and a sound; the
  * language, kept with the account; the appearance: the theme, palette, contrast, zoom, and whether
  * names take their roles' colours, kept with this install, and the message text size, line
@@ -85,6 +86,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                     <SecurityDialog />
                     <EmailDialog />
                   </section>
+                  <AccountsSection />
                   <AudioSection />
                   <NotificationsSection />
                   <LanguageSection />

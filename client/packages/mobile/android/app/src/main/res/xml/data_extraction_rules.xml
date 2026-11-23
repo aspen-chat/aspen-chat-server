@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Nothing of the app's leaves the phone, by cloud backup or by moving to a new device: its
-     storage holds the web view's sessions on each deployment and the push store's keys
-     (`PushStore`), which would sign whoever restores them in as the user. Android 12 and later
+     storage holds what is sealed under a Keystore key that stays behind (`SecretStore`), and
+     the web view's other data on each deployment. Android 12 and later
      read these rules even with android:allowBackup="false", which on its own stops only cloud
      backup there; earlier versions honour allowBackup alone. -->
 <data-extraction-rules>

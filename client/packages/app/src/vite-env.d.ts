@@ -107,6 +107,15 @@ interface AspenDesktopBridge {
     choose(drawn: boolean): Promise<void>;
     relaunch(): void;
   };
+  /** The saved sign-ins, kept encrypted (`packages/desktop/src/main/secrets.ts`). */
+  readonly secrets: {
+    read(): Promise<
+      | { status: "ok"; contents: string | null }
+      | { status: "unavailable" }
+      | { status: "unreadable" }
+    >;
+    write(contents: string): Promise<boolean>;
+  };
   /** Chromium's notices (`packages/desktop/src/main/chromiumNotices.ts`); whether they opened. */
   readonly chromiumNotices: {
     open(): Promise<boolean>;

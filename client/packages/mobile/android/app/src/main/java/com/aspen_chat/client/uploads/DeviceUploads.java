@@ -1,13 +1,12 @@
 package com.aspen_chat.client.uploads;
 
 import android.content.Context;
-import android.content.SharedPreferences;
+import com.aspen_chat.client.secrets.SecretStore;
 import java.io.File;
 
 /**
  * The process's one {@link Uploads}: its files under the app's own files directory and its
- * records, which hold session and refresh tokens, in private preferences, where only this app
- * can read either.
+ * records, which hold session and refresh tokens, sealed by {@link SecretStore}.
  */
 final class DeviceUploads {
 
@@ -22,20 +21,20 @@ final class DeviceUploads {
     static synchronized Uploads of(Context context) {
         if (uploads == null) {
             Context app = context.getApplicationContext();
-            SharedPreferences preferences = app.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+            SecretStore store = new SecretStore(app, FILE);
             uploads = new Uploads(
                 new File(app.getFilesDir(), DIRECTORY),
                 new Uploads.Persistence() {
                     @Override
                     public String load() {
-                        return preferences.getString(KEY, null);
+                        return store.load(KEY);
                     }
 
-                    // `commit`, not `apply`: an upload whose record is not on disk when the
+                    // Written before returning: an upload whose record is not on disk when the
                     // process dies is never sent again.
                     @Override
                     public void save(String state) {
-                        preferences.edit().putString(KEY, state).commit();
+                        store.write(KEY, state);
                     }
                 },
                 System.currentTimeMillis()

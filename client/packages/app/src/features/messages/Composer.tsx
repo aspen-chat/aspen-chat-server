@@ -1,3 +1,4 @@
+import { ActingAs } from "@/features/accounts/ActingAs";
 import {
   ApiProblemError,
   type Attachment,
@@ -1414,6 +1415,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               {placeholder}
             </span>
           )}
+          <ActingAs />
         </TextField>
         <Tooltip text={m.emoji.insert}>
           <Button

@@ -22,11 +22,13 @@ import {
   ToggleButton,
   ToggleButtonGroup,
 } from "react-aria-components";
-import { useAspenClient } from "@/api/context";
+import { useAspenClient, useHomeClient } from "@/api/context";
 import { toggleChipClass } from "@/features/invites/dialog";
 import { SourceScope } from "@/api/deployments";
 import { ScopeDomainContext } from "@/api/deploymentsContext";
+import { useAccount } from "@/api/accounts";
 import { useSources, type Source } from "@/api/everywhere";
+import { HomeSyncContext } from "@/api/syncContext";
 import { useCommunity, useSync, useUser } from "@/api/hooks";
 import {
   fieldClass,
@@ -147,7 +149,13 @@ function SearchPanel({
   const domain = useContext(ScopeDomainContext);
   const sources = useSources();
   const community = useCommunity(communityId ?? "");
-  const here: Source = useMemo(() => ({ domain, client, sync }), [domain, client, sync]);
+  const accountId = useAccount().id;
+  const homeClient = useHomeClient();
+  const homeSync = useContext(HomeSyncContext) ?? sync;
+  const here: Source = useMemo(
+    () => ({ accountId, domain, client, sync, homeClient, homeSync }),
+    [accountId, domain, client, sync, homeClient, homeSync],
+  );
   const [text, setText] = useState("");
   const [scope, setScope] = useState<Scope>(communityId === null ? "channel" : "community");
   const [has, setHas] = useState<ReadonlySet<MessageHolding>>(new Set());

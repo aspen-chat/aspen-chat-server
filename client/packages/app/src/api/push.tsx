@@ -2,7 +2,8 @@ import { RelayClient, stopPush, syncPush } from "@aspen/protocol";
 import type { PushNotificationsPlugin } from "@capacitor/push-notifications";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { useSources, type Source } from "./everywhere";
+import { useAccountsHub, useAllSources } from "./accounts";
+import type { Source } from "./everywhere";
 import { detectShell } from "@/config";
 import { channelLink, messageLink, threadLink } from "@/features/messages/links";
 import { PushPrompt } from "@/features/notifications/PushPrompt";
@@ -18,13 +19,15 @@ import {
 /**
  * On the mobile app: asks whether to be woken, and only on Accept asks the system to notify;
  * registers the phone with its platform and relay, keeps a subscription with every deployment the
- * user is signed in to as they come and go, and opens a tapped notification's message. Declined,
+ * person's accounts are signed in to as they come and go, and opens a tapped notification's
+ * message under the account it was for. Declined,
  * or turned off in Settings, the phone is registered nowhere until it is turned on there.
  * Elsewhere, nothing: the desktop and web apps are told of everything over their open event
  * streams.
  */
 export function WakeThisPhone() {
-  const sources = useSources();
+  const sources = useAllSources();
+  const accounts = useAccountsHub();
   const navigate = useNavigate();
   const token = useRef<string | null>(null);
   const syncing = useRef<Promise<void>>(Promise.resolve());
@@ -82,10 +85,15 @@ export function WakeThisPhone() {
         "pushNotificationActionPerformed",
         ({ notification }) => {
           const target = notification.data as Partial<NotificationTarget> | undefined;
-          const source = latest.current.find((s) => s.client.baseUrl === target?.origin);
+          const here = latest.current.filter((s) => s.client.baseUrl === target?.origin);
+          const source =
+            here.find((s) => s.client.session?.userId === target?.userId) ??
+            here.find((s) => accounts.isFront(s.accountId)) ??
+            here[0];
           if (source === undefined || target?.channel == null) {
             return;
           }
+          accounts.bringToFront(source.accountId);
           const home = { domain: source.domain, community: target.community ?? null };
           void navigate(
             target.parentChannel != null
@@ -125,7 +133,7 @@ export function WakeThisPhone() {
         remove();
       }
     };
-  }, [navigate]);
+  }, [navigate, accounts]);
 
   // The person's answer, as it stands and whenever Settings changes it.
   useEffect(() => {

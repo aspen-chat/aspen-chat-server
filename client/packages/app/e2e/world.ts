@@ -135,7 +135,12 @@ export async function signInToWorld(
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   // Signed in once the session is kept, which is a moment after the button: a test that
   // reloads the page before then lands on the sign-in screen, on a busy machine especially.
-  await page.waitForFunction(() => localStorage.getItem("aspen.session") !== null);
+  // The mobile apps' stand-in keeps it with its native side (`inTheApp`).
+  await page.waitForFunction(
+    () =>
+      localStorage.getItem("aspen.session") !== null ||
+      String((window as unknown as { savedSignIns?: unknown }).savedSignIns).includes("session"),
+  );
   return publish;
 }
 

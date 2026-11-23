@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { useSources, type Source } from "./everywhere";
+import { useAllSources } from "./accounts";
+import type { Source } from "./everywhere";
 
 /** Whether a source's call is under way, or ended in a way the user still has to be told. */
 function holdsCall(source: Source): boolean {
@@ -8,11 +9,11 @@ function holdsCall(source: Source): boolean {
 }
 
 /**
- * The deployment whose call the user is in, or was just dropped from; `null` when none. A user
- * is in one call at a time, wherever it is (`useOneCallAtATime`).
+ * The deployment whose call the user is in, or was just dropped from, under any account; `null`
+ * when none. A person is in one call at a time, wherever it is (`useOneCallAtATime`).
  */
 export function useCallSource(): Source | null {
-  const sources = useSources();
+  const sources = useAllSources();
   const version = useRef(0);
   const subscribe = useCallback(
     (listener: () => void) => {
@@ -35,11 +36,11 @@ export function useCallSource(): Source | null {
 }
 
 /**
- * Keeps the user in one call across every deployment: joining a call on one leaves any call
- * on another.
+ * Keeps the person in one call across every deployment of every account: joining a call on one
+ * leaves any call on another.
  */
 export function useOneCallAtATime(): void {
-  const sources = useSources();
+  const sources = useAllSources();
   const active = useRef(new Set<Source>());
   useEffect(() => {
     const notice = (source: Source) => {

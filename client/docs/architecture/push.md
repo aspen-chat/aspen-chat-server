@@ -78,7 +78,8 @@ answer it gave), the platform refused to register, and each deployment's failing
 - `syncPush` also decrypts a push (RFC 8291), as the native code must.
 - `AspenPush` says which platform, app, and relay the build is.
 - A build without that plugin simply has no push.
-- Signing out forgets every account.
+- Signing an account out forgets it and the deployments it signed in to from there; others stay.
+- A tapped notification names the account it was for (`userId`), which comes to the front.
 - Tapping a notification opens its message. A notice about no message opens its channel.
 - The notification code on both phones reads only what it knows the meaning of: a `PushState` whose
   `version` is 1 and a pointer whose `v` is 1, as the app's own code does (`pushBridge.ts`,
@@ -90,7 +91,8 @@ The project is `packages/mobile/android`.
 
 ### Parts
 
-- `AspenPushPlugin` holds the state in the app's private storage.
+- `AspenPushPlugin` holds the state sealed under an Android Keystore key (`PushStore`,
+  `SecretStore`).
 - `AspenMessagingService` takes the place of the push plugin's FCM service; the manifest removes
   that one. It hands that service anything that is not a relay push.
 
@@ -101,17 +103,18 @@ The project is `packages/mobile/android`.
 1. decrypts (`WebPush`);
 2. fetches with the account's session, refreshing it on `401`, asking for the phone's languages
    (`Accept-Language`);
-3. posts the notification, tagged `channel/message`, so `read` and `deleted` take it down. Its text
-   is the one the deployment wrote out (`included.notificationTexts`), shown as given; from a
-   deployment of a version that writes none, `readable` and `recorded` make it. Text holding a
-   spoiler's marker is not shown (`SpoilerMarkers`; see The phones' own wording).
+3. posts the notification, tagged `subscription/channel/message`, so `read` and `deleted` take down
+   that account's alone. Its text is the one the deployment wrote out
+   (`included.notificationTexts`), shown as given; from a deployment of a version that writes none,
+   `readable` and `recorded` make it. Text holding a spoiler's marker is not shown
+   (`SpoilerMarkers`; see The phones' own wording).
 
 A `notice` pointer:
 
 - is fetched from `GET /users/@me/plugin-notices/{notice}`;
 - is shown with the plugin's name and what it says;
-- is tagged `channel/notice`. Notice ids are UUIDv7 too, so reading the channel takes down the
-  notices before it;
+- is tagged `subscription/channel/notice`. Notice ids are UUIDv7 too, so reading the channel takes
+  down the notices before it;
 - opens its message, or its channel when it is about none.
 
 ### Build requirements

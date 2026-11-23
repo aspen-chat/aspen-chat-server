@@ -6,7 +6,8 @@ import { ringing } from "./ringing";
 import { closeRingNotifications, postRingNotification } from "./ringNotifications";
 import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
-import { useEverywhere, type Source } from "@/api/everywhere";
+import { useAccountsHub, useAllSources } from "@/api/accounts";
+import { useAcross, type Source } from "@/api/everywhere";
 import { useChannel, useMute, useUser } from "@/api/hooks";
 import { HomeSyncContext } from "@/api/syncContext";
 import { detectShell } from "@/config";
@@ -43,10 +44,12 @@ interface Ringing {
  * a deployment that does not know it is kept quiet here.
  */
 export function IncomingCalls() {
-  const rings = useEverywhere<readonly Ringing[]>(["rings", "presence"], (sources) =>
-    sources.find((source) => source.domain === null)?.sync.store.doNotDisturb() === true
-      ? []
-      : sources.flatMap((source) => source.sync.store.myRings().map((ring) => ({ ring, source }))),
+  const rings = useAcross<readonly Ringing[]>(useAllSources(), ["rings", "presence"], (sources) =>
+    sources.flatMap((source) =>
+      source.homeSync.store.doNotDisturb()
+        ? []
+        : source.sync.store.myRings().map((ring) => ({ ring, source })),
+    ),
   );
   const now = useNow(500, rings.length > 0);
   const current = rings.find(({ ring, source }) => ringing(ring, source.sync.clock, now));
@@ -66,7 +69,7 @@ export function IncomingCalls() {
 }
 
 function ringKey({ ring, source }: Ringing): string {
-  return `ring/${source.domain ?? ""}/${ring.session}`;
+  return `ring/${source.accountId}/${source.domain ?? ""}/${ring.session}`;
 }
 
 /**
@@ -87,6 +90,7 @@ function IncomingCall({
 }) {
   const m = useMessages();
   const home = useContext(HomeSyncContext);
+  const accounts = useAccountsHub();
   const navigate = useNavigate();
   const channel = useChannel(ring.channel);
   const caller = useUser(ring.caller);
@@ -137,6 +141,7 @@ function IncomingCall({
   };
   const accept = () => {
     setAnswered(true);
+    accounts.bringToFront(source.accountId);
     void navigate(channelLink({ domain: source.domain, community: null }, ring.channel));
     void source.sync.voice.join(ring.channel).catch(() => undefined);
   };

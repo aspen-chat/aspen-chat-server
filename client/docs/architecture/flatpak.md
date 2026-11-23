@@ -71,6 +71,7 @@ electron-builder made.
 | `--device=all`                                             | The camera, for which Flatpak has no narrower permission, and the GPU.                                                                               |
 | `--filesystem=xdg-run/pipewire-0`                          | The capture helper, which lists the applications playing sound and takes one's through PipeWire. Without it the helper reports no application audio. |
 | `--talk-name=org.freedesktop.Notifications`                | Notifications.                                                                                                                                       |
+| `--talk-name=org.freedesktop.secrets`                      | The keyring that holds the key saved sign-ins are encrypted with.                                                                                    |
 
 The app has no access to the user's files. Choosing a file to attach, and saving one, go through the
 desktop's file chooser portal.

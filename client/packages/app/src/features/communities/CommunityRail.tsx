@@ -1,3 +1,4 @@
+import { AccountSwitcher } from "@/features/accounts/AccountSwitcher";
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useReorderGlide } from "@/features/layout/motion";
 import {
@@ -434,6 +435,7 @@ export function CommunityRail() {
           <AdminLink inAdmin={inAdmin} />
         </>
       )}
+      <AccountSwitcher />
     </nav>
   );
 }
