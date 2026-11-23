@@ -63,7 +63,7 @@ flowchart LR
 
 ## Every binary
 
-Four binaries come out of the workspace. The crates they share are the protocol between the API
+Five binaries come out of the workspace. The crates they share are the protocol between the API
 server and the voice server, and the plumbing every server needs.
 
 ```mermaid
@@ -73,6 +73,7 @@ flowchart TB
         voice_server["voice_server<br/>rooms, signalling, STUN and TURN"]
         migrate["aspen-migrate<br/>migrations and their registry"]
         bench["aspen-bench<br/>(crate aspen_bench): load generator"]
+        ul["aspen-ul<br/>a deployment in one program"]
     end
 
     app["aspen_app<br/>(and everything beneath it)"]
@@ -90,6 +91,7 @@ flowchart TB
     bench_protocol["aspen_bench_protocol<br/>seeding and suspension messages"]
 
     chat --> app & voice_protocol & limits & bus & metrics & sockets & bench_protocol
+    ul --> chat & voice_server & migrate & app & bus & sockets
     app --> database & voice_protocol & tls & bus & config_values & bench_protocol
     voice_server --> voice_protocol & voice_media & limits & bus & metrics & sockets & tls & config_values
     migrate --> database & search_text

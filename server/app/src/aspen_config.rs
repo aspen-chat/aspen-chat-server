@@ -1182,15 +1182,13 @@ fn environment() -> config::Environment {
         .separator("__")
 }
 
-/// The config written in `texts`, TOML each, the later taking precedence, with no `aspen.toml`
-/// and no environment, for a process that writes its server's configuration itself (`aspen-ul`).
-/// It is checked as `load_config` checks it.
-pub fn load_config_text(texts: &[&str]) -> Result<AspenConfig, config::ConfigError> {
-    let mut builder = config::Config::builder();
-    for text in texts {
-        builder = builder.add_source(config::File::from_str(text, config::FileFormat::Toml));
-    }
-    finish(builder.build()?)
+/// The config `sources` give, the later taking precedence, with no `aspen.toml` and no
+/// environment, for a process that writes its server's configuration itself (`aspen-ul`). It is
+/// checked as `load_config` checks it.
+pub fn load_config_sources(
+    sources: Vec<Box<dyn config::Source + Send + Sync>>,
+) -> Result<AspenConfig, config::ConfigError> {
+    finish(config::Config::builder().add_source(sources).build()?)
 }
 
 fn load_from(

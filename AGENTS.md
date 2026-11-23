@@ -813,8 +813,10 @@ The server is split into three layers, each a crate of its own:
 `server/src/` is the `aspen-chat-server` package: its process (`main.rs`: the allocator, command
 line, logging, and runtime) and a library the process runs and other processes can share, the
 listener (`serve`, with its connection limits in `connections`) and the operator subcommands
-(`run_command`, `operator`). Beneath `app` are crates that need nothing of it, each re-exported from
-the `app` module that uses it, so a path through `app` names it wherever it lives:
+(`run_command`, `operator`). `server/ul/` is `aspen-ul`, a deployment in one program, which runs
+that library, the API, and the voice server inside one process (see Ultra Lite). Beneath `app` are
+crates that need nothing of it, each re-exported from the `app` module that uses it, so a path
+through `app` names it wherever it lives:
 
 - `aspen_wire` (`server/wire/`): what the server and its clients exchange, the IDs, and the SQL
   trait macros (`wire_name_traits!` and the rest).
@@ -955,6 +957,8 @@ a NATS stream or subject, or a client package updates them in the same commit.
   queue without expiring, and failed ones kept for their author
 - `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides,
   ranking, bans, large communities, and member search
+- `docs/architecture/ul/index.md` — Ultra Lite (`aspen-ul`): a whole deployment in one program, its
+  bundled PostgreSQL, the in-process bus, store, and voice server, and its data directory
 - `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`,
   its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's
   community's

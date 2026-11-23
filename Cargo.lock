@@ -373,6 +373,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspen-ul"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aspen-chat-server",
+ "aspen-migrate",
+ "aspen_api",
+ "aspen_app",
+ "aspen_bus",
+ "aspen_ephemeral",
+ "aspen_sockets",
+ "axum",
+ "clap",
+ "config",
+ "ctrlc",
+ "diesel",
+ "diesel-async",
+ "libc",
+ "serde",
+ "tikv-jemallocator",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-panic",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "voice_protocol",
+ "voice_server",
+]
+
+[[package]]
 name = "aspen_api"
 version = "0.1.0"
 dependencies = [
