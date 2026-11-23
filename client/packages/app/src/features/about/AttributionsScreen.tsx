@@ -188,6 +188,17 @@ function PackageRow({ item, texts }: { item: AttributedPackage; texts: readonly 
             {m.about.website}
           </a>
         )}
+        {item.sources?.map((source) => (
+          <a
+            key={source.url}
+            href={source.url}
+            target="_blank"
+            rel="noreferrer"
+            className={linkButtonClass + " text-sm"}
+          >
+            {format(m.about.sourceArchive, { file: source.file })}
+          </a>
+        ))}
       </div>
       {item.chromium === true && <ChromiumNotices />}
       {item.texts.length > 0 && (

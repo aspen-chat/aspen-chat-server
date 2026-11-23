@@ -25,19 +25,22 @@ The Linux builds never update themselves.
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------- |
 | `.deb` and `.rpm`      | Installing one adds Aspen's signed APT or DNF repository, as Chrome's packages do, unless `/etc/default/aspen` says not to; the operating system's updates then carry new ones. | a `beta` suite    | `.deb` only, with no repository |
 | `aspen-bin` on the AUR | The AUR helper, from a package Aspen maintains.                                                                                                                                 | `aspen-beta-bin`  | no                              |
-| Flatpak                | `flatpak update`, from Aspen's own GPG-signed repository, added with a `.flatpakrepo` file.                                                                                     | the `beta` branch | the package (`flatpak.md`)      |
+| Flatpak                | `flatpak update`, from Aspen's own GPG-signed repository, added with a `.flatpakrepo` file or installed with a `.flatpakref`.                                                   | the `beta` branch | all of it, x86_64 only          |
 | `.tar.gz`              | It does not; a person downloads the next one.                                                                                                                                   | a beta archive    | no                              |
 
-The Flatpak's runtime comes from Flathub; Aspen itself is not published there.
+The Flatpak's runtime comes from Flathub; Aspen itself is not published there. Its repository keeps
+each branch's 10 newest commits, so `flatpak update --commit=` can go back to any of them
+(`client/docs/architecture/desktop-updates.md`).
 
 ### Windows
 
-| Build                 | How it updates                                              | Beta               | Built                         |
-| --------------------- | ----------------------------------------------------------- | ------------------ | ----------------------------- |
-| Signed NSIS installer | [Aspen's updater](#aspens-updater), from Aspen's own site.  | the `beta` feed    | the installer and its signing |
-| winget                | `winget upgrade`; the listing points at the same installer. | a separate listing | no                            |
+| Build                 | How it updates                                              | Beta               | Built               |
+| --------------------- | ----------------------------------------------------------- | ------------------ | ------------------- |
+| Signed NSIS installer | [Aspen's updater](#aspens-updater), from Aspen's own site.  | the `beta` feed    | all of it, x64 only |
+| winget                | `winget upgrade`; the listing points at the same installer. | a separate listing | no                  |
 
-An MSI is made only if businesses ask for one.
+An MSI is made only if businesses ask for one. Releasing it, the downloads site, and its updater are
+in `client/docs/architecture/desktop-updates.md`.
 
 ### macOS
 
@@ -82,18 +85,20 @@ Aspen publishes (`latest.yml` and `beta.yml`, and their mac counterparts).
 - Settings chooses stable or beta, and can turn updating off.
 - Administrators can turn it off for everyone on a machine: `HKLM\Software\Policies\Aspen` on
   Windows, and a configuration profile for `com.aspen-chat.client` on macOS. The installer takes a
-  flag that does the same.
-- A feed carries a staged rollout percentage, so a release reaches everyone over days rather than at
-  once.
+  flag that does the same (`/DISABLEUPDATES` on Windows).
 - A check sends only what the request itself shows: the address it comes from and the version
   asking.
+
+Built on Windows: all of it. Staged rollout, a percentage in each feed so a release reaches everyone
+over days, is not built and may come later.
 
 ## Hosting
 
 Installers, update feeds, `releases.json`, and the APT, DNF, Flatpak, and F-Droid repositories are
-static files in Cloudflare R2, on Bitcrafters' domain behind its CDN. GitHub Releases mirrors the
-installers. Feeds carry no blockmaps: R2 charges nothing for what it serves, so differential
-downloads save nobody money.
+static files in Cloudflare R2, at `downloads.aspen-chat.com` behind its CDN (the bucket
+`aspen-downloads`). GitHub Releases mirrors the installers. The source of the copyleft libraries an
+installer ships is kept there beside it (`sources/`). Feeds carry no blockmaps: R2 charges nothing
+for what it serves, so differential downloads save nobody money.
 
 Publishing writes files that never change (installers, packages, repository objects) first and the
 metadata that names them (feeds, repository indexes) last, so nobody is pointed at a file not there
@@ -104,18 +109,18 @@ yet, and one publish runs at a time.
 | What                               | Key                                                                          |
 | ---------------------------------- | ---------------------------------------------------------------------------- |
 | APT, DNF, and Flatpak repositories | Bitcrafters' GPG key, kept offline; CI signs with a subkey given as a secret |
-| Windows installer                  | Azure Trusted Signing (`electron-builder.signed.yml`)                        |
+| Windows installer                  | Azure Trusted Signing (`electron-builder.signed.mjs`, `signing.json`)        |
 | macOS dmg and App Store builds     | Apple Developer ID and distribution certificates (`apple-builds.md`)         |
 | Android                            | Play app signing for Play; Aspen's own key for F-Droid                       |
 | Server images                      | cosign                                                                       |
 
-The Windows and Apple builds are signed today by Jacob Kiesel as an individual (publisher
-`Jacob Kiesel`, Apple team `L2GS25U79G`), and move to Bitcrafters:
+The Windows build is signed by BitCrafters LLC from its first release. An installed copy takes
+updates only from the publishers `signing.json` lists, so moving to another publisher takes one
+release that lists both, signed by the old, before any signed by the new.
 
-- **Windows**: `publisherName` takes a list. One release naming both publishers, signed by the old,
-  lets every installed copy accept the next, signed by Bitcrafters.
-- **macOS**: a new Apple team changes the Team ID, and an installed app cannot update to one signed
-  by another team; people would reinstall once. Moving before the first public dmg avoids that.
+The Apple builds are signed today by Jacob Kiesel as an individual (Apple team `L2GS25U79G`), and
+move to Bitcrafters. A new Apple team changes the Team ID, and an installed app cannot update to one
+signed by another team; people would reinstall once. Moving before the first public dmg avoids that.
 
 The libobs files shipped on Windows are the OBS Project's own signed releases and are never
 re-signed (`scripts/check-libobs.mjs`).
@@ -172,12 +177,15 @@ deployment and account for the stores' reviewers, and calls that keep running in
 - The `.deb`, the Flatpak (`client/docs/architecture/flatpak.md`), the Windows installer and its
   signing, and the macOS dmgs with their signing and notarization, all built in CI. electron-builder
   also builds an AppImage, which is not published.
+- Releasing the Windows installer from a `client-v` tag to R2, with its update feeds,
+  `releases.json`, the source archives, and a GitHub Release, and the Windows app's updater
+  (`client/docs/architecture/desktop-updates.md`).
+- Releasing the Flatpak from the same tag to Aspen's signed Flatpak repository on R2, with its
+  `.flatpakrepo` and `.flatpakref` files and a signed bundle that updates from the repository.
 - The server images, published to GHCR on every push to `main` and every tag (`images.yml`).
 - Android `versionCode` from the CI run number (`android-builds.md`).
-- The site (`site/`): a landing page linking to the download page (`site/downloads/`), to the
-  operator guide on GitHub, and to the repository, assembled with the app's icon and font by
-  `scripts/build_site.py` into `target/site/`. The download links are placeholders, and it is not
-  hosted anywhere.
+- The site, kept in a repository of its own, whose download page can read `releases.json`.
 
-Nothing is published to R2, no repository or feed exists, the desktop app has no updater, the
-dashboard has no update notice, and Android has neither flavour nor release signing.
+Only the Windows installer and the Flatpak are published to R2. No APT, DNF, or F-Droid repository
+exists, the macOS app has no updater, the dashboard has no update notice, and Android has neither
+flavour nor release signing.

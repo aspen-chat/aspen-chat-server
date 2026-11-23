@@ -1043,6 +1043,7 @@
     "license": "License",
     "licenseUndeclared": "See its license text",
     "website": "Website",
+    "sourceArchive": "Source: {file}",
     "showLicense": "License text",
     "standardText": "This package publishes no license file, so this is its license's standard wording.",
     "bundledIn": "As shipped in {release}",
@@ -2751,6 +2752,28 @@
   "newRelease": {
     "ready": "A new version of Aspen is ready.",
     "reload": "Reload"
+  },
+  "updates": {
+    "title": "Updates",
+    "follow": "Update to",
+    "hint": "Aspen downloads new versions in the background and installs them when you quit it.",
+    "choices": {
+      "stable": "Releases",
+      "beta": "Betas and releases",
+      "off": "Nothing"
+    },
+    "choiceHints": {
+      "stable": "Versions that have finished testing.",
+      "beta": "Each version before it is released, to try it early. Tell us what goes wrong.",
+      "off": "Aspen never contacts its update server. Download new versions from aspen-chat.com yourself."
+    },
+    "lockedAdministrator": "Your administrator has turned off updates on this computer. Ask them about installing new versions.",
+    "lockedInstaller": "Updates were turned off when Aspen was installed. To turn them on, install Aspen again without /DISABLEUPDATES.",
+    "checking": "Checking for updates…",
+    "downloading": "Downloading an update…",
+    "ready": "Aspen {version} is ready. It installs when you quit Aspen.",
+    "failed": "Aspen could not check for updates. It tries again in a few hours.",
+    "restart": "Restart now"
   },
   "contextMenu": {
     "link": "Link",

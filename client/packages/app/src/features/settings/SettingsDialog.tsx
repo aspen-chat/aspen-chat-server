@@ -48,6 +48,7 @@ import { MessageSpacingSlider } from "@/features/settings/MessageSpacingSlider";
 import { AccessibilitySection } from "@/features/settings/AccessibilitySection";
 import { TitleBarCheckbox } from "@/features/settings/TitleBarCheckbox";
 import { ZoomSlider } from "@/features/settings/ZoomSlider";
+import { UpdatesSection } from "@/features/updates/UpdatesSection";
 
 /**
  * The user's preferences: first the account's sign-in and security settings and its email
@@ -58,7 +59,8 @@ import { ZoomSlider } from "@/features/settings/ZoomSlider";
  * spacing, and animation speed, kept with the account; whether emoticons typed become emoji, kept
  * with the account; whether new messages are read out, and the fonts text and code are drawn in,
  * kept with this install; whether others see the user typing, kept with the account; the people
- * the user has blocked; developer mode, with the user's bots; and, beneath them, the way out of
+ * the user has blocked; the other deployments this install reaches; which releases the desktop
+ * app updates to, where it updates itself; developer mode, with the user's bots; and, beneath them, the way out of
  * the account and the button that opens About Aspen. The small planes follow Audio and video so
  * they fill the first column beneath it rather than leave it short. Sections for account-wide preferences slot in beside them.
  */
@@ -108,6 +110,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   <PrivacySection />
                   <BlockedUsersSection />
                   <OtherServersSection />
+                  <UpdatesSection />
                   <DeveloperSection />
                 </PlaneColumns>
                 <div className="flex items-center justify-between gap-2">

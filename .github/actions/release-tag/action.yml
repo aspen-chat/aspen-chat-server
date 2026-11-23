@@ -1,0 +1,17 @@
+# What every publishing job checks first: that the tag it runs for is on `main` and names the
+# version every client package carries (`client/packages/desktop/src/release/version.ts`). Sets
+# `VERSION`, the tag's version, for the steps after it. Needs a checkout with `main`'s history
+# (`fetch-depth: 0`) and Node.js.
+name: Release tag
+description: Checks the client-v tag is on main and names the packages' version; sets VERSION.
+runs:
+  using: composite
+  steps:
+    - name: The tag is on main and names the packages' version
+      shell: bash
+      working-directory: client/packages/desktop
+      run: |
+        git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+          || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+        node src/release/version.ts check "$GITHUB_REF_NAME"
+        echo "VERSION=${GITHUB_REF_NAME#client-v}" >> "$GITHUB_ENV"

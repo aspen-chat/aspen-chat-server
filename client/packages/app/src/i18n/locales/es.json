@@ -1007,6 +1007,7 @@
     "license": "Licencia",
     "licenseUndeclared": "Ver el texto de su licencia",
     "website": "Sitio web",
+    "sourceArchive": "Código fuente: {file}",
     "showLicense": "Texto de la licencia",
     "standardText": "Este paquete no publica un archivo de licencia, así que este es el texto estándar de su licencia.",
     "bundledIn": "Como se incluye en {release}",
@@ -2715,6 +2716,28 @@
   "newRelease": {
     "ready": "Hay una nueva versión de Aspen lista.",
     "reload": "Recargar"
+  },
+  "updates": {
+    "title": "Actualizaciones",
+    "follow": "Actualizar a",
+    "hint": "Aspen descarga las versiones nuevas en segundo plano y las instala cuando lo cierras.",
+    "choices": {
+      "stable": "Versiones",
+      "beta": "Betas y versiones",
+      "off": "Nada"
+    },
+    "choiceHints": {
+      "stable": "Versiones que ya terminaron sus pruebas.",
+      "beta": "Cada versión antes de que salga, para probarla antes. Cuéntanos qué falla.",
+      "off": "Aspen nunca se comunica con su servidor de actualizaciones. Descarga tú mismo las versiones nuevas de aspen-chat.com."
+    },
+    "lockedAdministrator": "Tu administrador desactivó las actualizaciones en esta computadora. Pregúntale cómo instalar las versiones nuevas.",
+    "lockedInstaller": "Las actualizaciones se desactivaron al instalar Aspen. Para activarlas, vuelve a instalar Aspen sin /DISABLEUPDATES.",
+    "checking": "Buscando actualizaciones…",
+    "downloading": "Descargando una actualización…",
+    "ready": "Aspen {version} está listo. Se instala cuando cierras Aspen.",
+    "failed": "Aspen no pudo buscar actualizaciones. Lo vuelve a intentar en unas horas.",
+    "restart": "Reiniciar ahora"
   },
   "contextMenu": {
     "link": "Enlace",

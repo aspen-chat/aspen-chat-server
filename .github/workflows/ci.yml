@@ -21,12 +21,17 @@
 # The ARM binaries are built against Debian 12 (bookworm, glibc 2.36), so they run on
 # Raspberry Pi OS Bookworm and newer, and with jemalloc built for 64 KiB pages, which also
 # serves the 16 KiB-page kernel a Raspberry Pi 5 boots by default.
+#
+# A tag `client-v<version>` on a commit of `main` runs all of it too, and once the client's checks
+# pass publishes the signed Windows installer that run built, to the downloads site and as a
+# GitHub Release (`publish-windows`; `client/docs/architecture/desktop-updates.md`).
 
 name: CI
 
 on:
   push:
     branches: [main]
+    tags: ["client-v*"]
   pull_request:
   workflow_dispatch:
 
@@ -312,7 +317,8 @@ jobs:
   desktop-windows:
     name: Desktop (Windows) — installer with libobs
     needs: servers
-    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'windows-signing' || '' }}
+    # Signed for `main` and release tags alone, which the `windows-signing` environment admits.
+    environment: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/client-v'))) && 'windows-signing' || '' }}
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -341,25 +347,29 @@ jobs:
         with:
           workspaces: client/packages/desktop/native/capture
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # A release tag must name the version the packages carry; told before an hour of building.
+      - if: startsWith(github.ref, 'refs/tags/client-v')
+        working-directory: client/packages/desktop
+        run: node src/release/version.ts check "$env:GITHUB_REF_NAME"
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       # The OBS Project's own signed release files, pinned by checksum (`scripts/fetch-libobs.mjs`).
       - run: pnpm --filter @aspen/desktop fetch:libobs
-      - if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+      - if: "!(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/client-v')))"
         run: pnpm --filter @aspen/desktop package
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/client-v'))
         run: pnpm --filter @aspen/desktop package:signed
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       - name: Check that our files carry our signature, and the OBS Project's theirs
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/client-v'))
         shell: pwsh
         working-directory: client/packages/desktop/release
         run: |
-          # The start of the certificate's subject (`publisherName` in electron-builder.signed.yml).
-          $publisher = 'CN=Jacob Kiesel,'
+          # The start of the certificate's subject: the signer `signing.json` names.
+          $publisher = "CN=$((Get-Content ../signing.json -Raw | ConvertFrom-Json).windows.signer),"
           $ours = @(Get-ChildItem *.exe) + @(Get-Item win-unpacked/Aspen.exe, win-unpacked/resources/aspen-capture.exe)
           foreach ($file in $ours) {
             $signature = Get-AuthenticodeSignature $file
@@ -384,6 +394,55 @@ jobs:
         with:
           name: desktop-windows
           path: client/packages/desktop/release/*.exe
+
+  # A release: the signed installer `desktop-windows` built, once the client's checks pass, from a
+  # tag on `main` naming the packages' version. The files that never change go first (the
+  # installer and the source archives `sources.json` names), then the GitHub Release, and
+  # the update feed and `releases.json`, which point at them, last (`src/release/publishWindows.ts`).
+  # The `r2-publishing` environment, which only `client-v*` tags may use, holds the bucket's
+  # endpoint (`R2_ENDPOINT`) and a token for that bucket alone (`R2_ACCESS_KEY_ID`,
+  # `R2_SECRET_ACCESS_KEY`). One publish runs at a time, since each reads what the last wrote.
+  publish-windows:
+    name: Publish (Windows) — installer, sources, and update feed
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/client-v')
+    needs: [desktop-windows, client, client-browser]
+    environment: r2-publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: publish-client
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: client/packages/desktop
+    env:
+      ASPEN_DOWNLOADS_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Every branch's history, to tell whether the tag is on `main`.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: ./.github/actions/release-tag
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-windows
+          path: client/packages/desktop/release
+      - name: Upload the installer and the source archives
+        run: node src/release/publishWindows.ts upload --installer "release/Aspen-Setup-$VERSION.exe"
+      - uses: ./.github/actions/github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          file: client/packages/desktop/release/Aspen-Setup-${{ env.VERSION }}.exe
+      - name: Point the update feed and releases.json at it
+        run: node src/release/publishWindows.ts announce --installer "release/Aspen-Setup-$VERSION.exe"
 
   # The capture helper's macOS code (ScreenCaptureKit, CoreMedia), and on a pull request
   # unsigned dmgs for Apple Silicon and Intel; `main` signs and notarizes them in
@@ -720,6 +779,12 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub \
             org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+      # The base app's commit `sources.json` pins, whose libraries the package carries and the
+      # attributions list; `scripts/flatpak.mjs` refuses a build made on another.
+      - name: The pinned base app
+        run: |
+          commit="$(node -p 'JSON.parse(require("fs").readFileSync("packages/desktop/sources.json", "utf8")).flatpak.version')"
+          flatpak update --user --noninteractive --commit="$commit" org.electronjs.Electron2.BaseApp//25.08
       - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -742,6 +807,74 @@ jobs:
         with:
           name: desktop-flatpak
           path: client/packages/desktop/release/flatpak/*.flatpak
+
+  # A release's Flatpak: the bundle `desktop-flatpak` built, committed to Aspen's Flatpak
+  # repository on R2, signed, on the branch of each track it heads, once the client's checks pass,
+  # from a tag on `main` naming the packages' version (`src/release/publishFlatpak.ts`). The
+  # repository's new objects and the signed bundle go first, then the GitHub Release, and the
+  # repository's refs and summary, its `.flatpakrepo` and `.flatpakref` files, and `releases.json`
+  # last. The `r2-publishing` environment holds the bucket's endpoint and token, as for Windows,
+  # and the repository's signing subkey alone, armoured and with no passphrase
+  # (`FLATPAK_GPG_KEY`); its public key is `flatpak/aspen-packages.asc`. It runs in turn with the
+  # Windows job, since both write `releases.json`.
+  publish-flatpak:
+    name: Publish (Linux) — Flatpak repository and bundle
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/client-v')
+    needs: [desktop-flatpak, client, client-browser]
+    environment: r2-publishing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      group: publish-client
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: client/packages/desktop
+    env:
+      ASPEN_DOWNLOADS_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      ASPEN_FLATPAK_GPG_HOMEDIR: ${{ runner.temp }}/gnupg
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Every branch's history, to tell whether the tag is on `main`.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: ./.github/actions/release-tag
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak ostree
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-flatpak
+          path: client/packages/desktop/release/flatpak
+      - name: The repository's signing key
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          mkdir -m 700 "$ASPEN_FLATPAK_GPG_HOMEDIR"
+          printf '%s\n' "$FLATPAK_GPG_KEY" | gpg --homedir "$ASPEN_FLATPAK_GPG_HOMEDIR" --batch --import
+          key="$(gpg --homedir "$ASPEN_FLATPAK_GPG_HOMEDIR" --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')"
+          echo "ASPEN_FLATPAK_GPG_KEY=$key" >> "$GITHUB_ENV"
+      - name: Commit it to the repository, and upload its objects, the bundle, and the sources
+        run: |
+          node src/release/publishFlatpak.ts upload --bundle "release/flatpak/Aspen-$VERSION.flatpak" \
+            --work "$RUNNER_TEMP/flatpak" --timestamp "$(git log -1 --format=%cI)"
+      - uses: ./.github/actions/github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          file: ${{ runner.temp }}/flatpak/Aspen-${{ env.VERSION }}.flatpak
+      - name: Point the repository, its install files, and releases.json at it
+        run: |
+          node src/release/publishFlatpak.ts announce --bundle "release/flatpak/Aspen-$VERSION.flatpak" \
+            --work "$RUNNER_TEMP/flatpak" --timestamp "$(git log -1 --format=%cI)"
 
   android:
     name: Android — build, unit, and device tests, and the APK

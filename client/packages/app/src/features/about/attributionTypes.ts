@@ -45,8 +45,19 @@ export interface AttributedPackage {
    * none of its own.
    */
   readonly standardText: boolean;
+  /**
+   * Where the source of what ships is published, which its copyleft license obliges Aspen to
+   * offer: archives the downloads site mirrors, for libraries shipped from OBS Studio's release.
+   */
+  readonly sources?: readonly SourceArchive[];
   /** Chromium's notices, which ship beside the desktop app (`LICENSES.chromium.html`). */
   readonly chromium?: true;
+}
+
+/** An archive of a library's source, as the downloads site publishes it. */
+export interface SourceArchive {
+  readonly file: string;
+  readonly url: string;
 }
 
 export interface LicenseFile {

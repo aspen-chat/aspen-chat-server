@@ -11,7 +11,7 @@ Apple accepts them, and the iOS app for the App Store, which can be sent to Test
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | The jobs                                      | `desktop-macos`, `desktop-macos-signed`, `ios`, and `ios-testflight` in `.github/workflows/ci.yml` |
 | Stapling the notarized dmgs                   | `.github/workflows/notarized-dmg.yml`                                                              |
-| Signing the dmg                               | `mac` in `packages/desktop/electron-builder.signed.yml`                                            |
+| Signing the dmg                               | `mac` in `packages/desktop/electron-builder.signed.mjs`                                            |
 | Archiving, signing, and uploading the iOS app | `packages/mobile/ios/scripts/app_store.py`                                                         |
 
 ## The jobs

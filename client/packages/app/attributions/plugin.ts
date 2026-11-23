@@ -10,6 +10,7 @@ import type {
   BuildInfo,
   ComponentId,
   LicenseFile,
+  SourceArchive,
 } from "../src/features/about/attributionTypes";
 import { NATIVE_LIBRARIES, PACKAGE_TEXTS, type NativeLibrary } from "./native";
 
@@ -124,6 +125,8 @@ interface Found {
   given?: readonly string[];
   /** Standard texts `native.ts` gives it beside its own. */
   spdx?: readonly string[];
+  /** Where the source of what ships is published. */
+  sources?: readonly SourceArchive[];
   chromium?: true;
 }
 
@@ -156,7 +159,9 @@ function collect(strict: boolean): Attributions {
           DESKTOP_PLATFORMS,
         ),
       ),
-      ...attempt("libraries shipped from OBS Studio", () => obsLibraries()),
+      ...attempt("libraries shipped from OBS Studio, Electron, and the Flatpak's base app", () =>
+        nativeLibraries(),
+      ),
     ],
     mobile: attempt("npm packages of the phone apps", () =>
       npmPackages(join(client, "packages", "mobile")),
@@ -265,6 +270,7 @@ function attribute(p: Found, texts: TextTable): AttributedPackage {
     texts: files,
     standardText,
     ...(p.bundledIn === undefined ? {} : { bundledIn: p.bundledIn }),
+    ...(p.sources === undefined ? {} : { sources: p.sources }),
     ...(p.chromium === undefined ? {} : { chromium: true }),
   };
 }
@@ -536,7 +542,12 @@ function cargoPackages(
     });
 }
 
-function native(library: NativeLibrary, version: string | null, bundledIn?: string): Found {
+function native(
+  library: NativeLibrary,
+  version: string | null,
+  bundledIn?: string,
+  sources?: readonly SourceArchive[],
+): Found {
   return {
     name: library.name,
     version,
@@ -547,24 +558,104 @@ function native(library: NativeLibrary, version: string | null, bundledIn?: stri
     depth: 0,
     given: library.texts,
     ...(library.spdx === undefined ? {} : { spdx: library.spdx }),
+    ...(sources === undefined ? {} : { sources }),
   };
 }
 
-/** What the Windows desktop app ships from OBS Studio's release, at the version it fetches. */
-function obsLibraries(): Found[] {
+/**
+ * What the desktop app ships that no package manager records: from OBS Studio's release, at the
+ * version `fetch-libobs.mjs` fetches, from Electron's, at the version installed, and from the
+ * Flatpak's base app, at the commit `sources.json` pins (which `flatpak.mjs` checks the build was
+ * made on). Each source
+ * archive a library names must be listed in `packages/desktop/sources.json`, every one listed
+ * named by a library, and each group of that list be of the version shipped.
+ */
+function nativeLibraries(): Found[] {
   const script = readFileSync(
     join(client, "packages", "desktop", "scripts", "fetch-libobs.mjs"),
     "utf8",
   );
-  const fetched = /^const OBS_VERSION = "([^"]+)";$/m.exec(script)?.[1];
-  return NATIVE_LIBRARIES.map((library) => {
-    if (library.version.obs !== fetched) {
+  const obs = /^const OBS_VERSION = "([^"]+)";$/m.exec(script)?.[1];
+  const electronDir = resolvePackage("electron", join(client, "packages", "desktop"));
+  if (electronDir === null) {
+    throw new Error("electron is not installed");
+  }
+  const electron = (
+    JSON.parse(readFileSync(join(electronDir, "package.json"), "utf8")) as { version: string }
+  ).version;
+  const { archives, versions } = shippedSources();
+  if (versions.obs !== obs || versions.electron !== electron) {
+    throw new Error(
+      `packages/desktop/sources.json lists the sources of OBS Studio ${String(versions.obs)} and Electron ${String(versions.electron)}, but OBS Studio ${String(obs)} and Electron ${electron} ship; read what the new release is built from and list its sources`,
+    );
+  }
+  const named = new Set<string>();
+  const found = NATIVE_LIBRARIES.map((library) => {
+    const { version } = library;
+    const [listed, shipped] =
+      "obs" in version
+        ? [version.obs, obs]
+        : "electron" in version
+          ? [version.electron, electron]
+          : [version.flatpak, versions.flatpak];
+    if (listed !== shipped) {
       throw new Error(
-        `fetch-libobs.mjs fetches OBS Studio ${String(fetched)}, but attributions/native.ts lists ${library.name} from ${library.version.obs}; check what that release ships and update it`,
+        `attributions/native.ts lists ${library.name} from ${listed}, but ${String(shipped)} ships; check what that release carries and update it`,
       );
     }
-    return library.version.bundled
-      ? native(library, null, `OBS Studio ${library.version.obs}`)
-      : native(library, library.version.obs);
+    const sources = library.sources?.map((file) => {
+      const archive = archives.get(file);
+      if (archive === undefined) {
+        throw new Error(
+          `attributions/native.ts names ${file} as ${library.name}'s source, which packages/desktop/sources.json does not list`,
+        );
+      }
+      named.add(file);
+      return archive;
+    });
+    if ("electron" in version) {
+      return native(library, null, `Electron ${electron}`, sources);
+    }
+    if ("flatpak" in version) {
+      return native(library, version.own, undefined, sources);
+    }
+    return version.bundled
+      ? native(library, null, `OBS Studio ${version.obs}`, sources)
+      : native(library, version.obs, undefined, sources);
   });
+  const unnamed = [...archives.keys()].filter((file) => !named.has(file));
+  if (unnamed.length > 0) {
+    throw new Error(
+      `packages/desktop/sources.json lists ${unnamed.join(", ")}, which no library in attributions/native.ts names as its source`,
+    );
+  }
+  return found;
+}
+
+/**
+ * The source archives the downloads site mirrors (`packages/desktop/sources.json`), each by its
+ * file and the address it is published at there (`packages/desktop/downloads.json`), and the
+ * version each group is of: OBS Studio's, Electron's, and the Flatpak base app's commit.
+ */
+function shippedSources(): {
+  archives: Map<string, SourceArchive>;
+  versions: Record<string, string>;
+} {
+  const desktop = join(client, "packages", "desktop");
+  const downloads = JSON.parse(readFileSync(join(desktop, "downloads.json"), "utf8")) as {
+    url: string;
+  };
+  const groups = JSON.parse(readFileSync(join(desktop, "sources.json"), "utf8")) as Record<
+    string,
+    { version: string; archives: { file: string }[] }
+  >;
+  const archives = new Map<string, SourceArchive>();
+  const versions: Record<string, string> = {};
+  for (const [group, { version, archives: list }] of Object.entries(groups)) {
+    versions[group] = version;
+    for (const { file } of list) {
+      archives.set(file, { file, url: `${downloads.url}/sources/${encodeURIComponent(file)}` });
+    }
+  }
+  return { archives, versions };
 }

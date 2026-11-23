@@ -127,10 +127,29 @@ Identical texts are kept once.
 ### What no package manager records
 
 `attributions/native.ts` lists these: the libraries shipped from OBS Studio, tied to `OBS_VERSION`
-in `fetch-libobs.mjs`, so the build stops when that moves.
+in `fetch-libobs.mjs`, so the build stops when that moves, the FFmpeg Electron ships beside
+Chromium, tied to the Electron installed, and the libraries the Flatpak carries from its base app,
+tied to the base app's commit `sources.json` pins (`flatpak.md`). Among them are the libraries built
+into OBS Studio's own files: those obs-deps' scripts at the release's tag build each DLL with
+(FFmpeg's `--enable-lib…` options, libdatachannel's submodules, Mbed TLS for SRT, librist, and
+libdatachannel), and what OBS Studio's own source compiles in (libcaption, libvpl, Detours). On a
+new release, each is found again there and confirmed in the binaries: an encoder FFmpeg registers by
+the library's name (`libvpx-vp9`), or the library's strings.
 
 Their texts in `attributions/texts/` are taken from each project's source at that version. They are
 kept exactly as published (`.prettierignore`).
+
+Each copyleft one names its source too (`sources`): the archives in `packages/desktop/sources.json`,
+which the publish job mirrors on the downloads site beside the installer (`desktop-updates.md`),
+shown as links on its row. For OBS Studio's files they are OBS Studio's own source, obs-deps' at the
+tag that release was built with (its build scripts and patches), and each library's at the revision
+obs-deps pins; for the FFmpeg Electron ships, Chromium's FFmpeg at the revision Chromium pins and
+Electron's source; and for the libraries of the Flatpak's base app, each one's release and the base
+app's own repository and Flathub's shared modules, which hold their patches and build steps. The
+build stops when `native.ts` names an archive the list lacks, the list holds one no library names,
+or the list is of another Electron than the one installed; `fetch-libobs.mjs` stops when it is of
+another OBS Studio release than it fetches, and `flatpak.mjs` when the Flatpak was built on another
+base app than the pinned one.
 
 ### When the list cannot be complete
 
@@ -149,7 +168,6 @@ CI's client and Android jobs install the pinned Rust toolchain for this.
 
 - The Maven artifacts of the Android app (AndroidX and Firebase Messaging), which Gradle resolves
   and the web build cannot see.
-- The libraries OBS Studio's own DLLs link statically.
 
 ## Build info
 

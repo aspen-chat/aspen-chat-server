@@ -1,0 +1,122 @@
+{
+  "obs": {
+    "version": "32.2.2",
+    "archives": [
+      {
+        "file": "OBS-Studio-32.2.2-Sources.tar.gz",
+        "url": "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Sources.tar.gz",
+        "sha256": "ec81fb66b03e75ddb3076b576f62679c39262e0e9960cef3e17a40dc5d68e6b4"
+      },
+      {
+        "file": "obs-deps-2026-07-15.tar.gz",
+        "url": "https://github.com/obsproject/obs-deps/archive/refs/tags/2026-07-15.tar.gz",
+        "sha256": "88a2d9c818b1d8cc9502908aff4e632640d1eefb75e11f401ad596acd8bf3626"
+      },
+      {
+        "file": "ffmpeg-38b88335f99e76ed89ff3c93f877fdefce736c13.tar.gz",
+        "url": "https://github.com/FFmpeg/FFmpeg/archive/38b88335f99e76ed89ff3c93f877fdefce736c13.tar.gz",
+        "sha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6"
+      },
+      {
+        "file": "x264-eaa68fad9e5d201d42fde51665f2d137ae96baf0.tar.gz",
+        "url": "https://github.com/mirror/x264/archive/eaa68fad9e5d201d42fde51665f2d137ae96baf0.tar.gz",
+        "sha256": "580f07f08af23768074e5346bdf32c77b68b4d4e614f4998ea869b02fc29714d"
+      },
+      {
+        "file": "lame-3.100.tar.gz",
+        "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+        "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+      },
+      {
+        "file": "libdatachannel-4e4f4892dccb2a57fe3a490d0c9d958de4244e74.tar.gz",
+        "url": "https://github.com/paullouisageneau/libdatachannel/archive/4e4f4892dccb2a57fe3a490d0c9d958de4244e74.tar.gz",
+        "sha256": "d342ead4181b0c51d4a709f6441dfb2dc6fb9846231c753c6614da22bba40c54"
+      },
+      {
+        "file": "libjuice-5948a4162d37bc213d6051b67ee2876ccc5a99a6.tar.gz",
+        "url": "https://github.com/paullouisageneau/libjuice/archive/5948a4162d37bc213d6051b67ee2876ccc5a99a6.tar.gz",
+        "sha256": "5703c044e0b28f16c791a35025281ae04e89e1d8f874e5eddb85641024e7e4ed"
+      },
+      {
+        "file": "srt-1.5.2.zip",
+        "url": "https://github.com/Haivision/srt/archive/refs/tags/v1.5.2.zip",
+        "sha256": "2686f75533bd53ec917dab6129186b124b4d105eadaa6a84e83719ac3b5ae6bd"
+      }
+    ]
+  },
+  "electron": {
+    "version": "44.9.1",
+    "archives": [
+      {
+        "file": "electron-44.9.1.tar.gz",
+        "url": "https://github.com/electron/electron/archive/refs/tags/v44.9.1.tar.gz",
+        "sha256": "ce2f596fd3702186a5cca0192088fb9ddc14a926c2a4d37664b1caea56a36dcd"
+      },
+      {
+        "file": "chromium-ffmpeg-2b68d2babae73714846961fb0ee47e3b3d2e39a9.tar.gz",
+        "git": "https://chromium.googlesource.com/chromium/third_party/ffmpeg",
+        "commit": "2b68d2babae73714846961fb0ee47e3b3d2e39a9"
+      }
+    ]
+  },
+  "flatpak": {
+    "version": "cd83a25d32aef701b5cb2f546350598fdd08540f0f884717f6f4baa476d292f1",
+    "archives": [
+      {
+        "file": "org.electronjs.Electron2.BaseApp-11eef849032145d068097de17c67211154f6526c.tar.gz",
+        "url": "https://github.com/flathub/org.electronjs.Electron2.BaseApp/archive/11eef849032145d068097de17c67211154f6526c.tar.gz",
+        "sha256": "0ac7e65a0eec8fd6ec01063f5061fbd14c9540399dda3627f133b994fe199a55"
+      },
+      {
+        "file": "flathub-shared-modules-41d0ece01788b2655aa93c1d7440cd63a3d358ba.tar.gz",
+        "url": "https://github.com/flathub/shared-modules/archive/41d0ece01788b2655aa93c1d7440cd63a3d358ba.tar.gz",
+        "sha256": "890bbd5ff570d373f7d20f15090a64f6d58312dc1726ecca0756c6dd9fbcc7a3"
+      },
+      {
+        "file": "dbus-glib-0.114.tar.gz",
+        "url": "https://dbus.freedesktop.org/releases/dbus-glib/dbus-glib-0.114.tar.gz",
+        "sha256": "c09c5c085b2a0e391b8ee7d783a1d63fe444e96717cc1814d61b5e8fc2827a7c"
+      },
+      {
+        "file": "libappindicator-12.10.0.tar.gz",
+        "url": "https://launchpad.net/libappindicator/12.10/12.10.0/+download/libappindicator-12.10.0.tar.gz",
+        "sha256": "d5907c1f98084acf28fd19593cb70672caa0ca1cf82d747ba6f4830d4cc3b49f"
+      },
+      {
+        "file": "libdbusmenu-16.04.0.tar.gz",
+        "url": "https://launchpad.net/libdbusmenu/16.04/16.04.0/+download/libdbusmenu-16.04.0.tar.gz",
+        "sha256": "b9cc4a2acd74509435892823607d966d424bd9ad5d0b00938f27240a1bfa878a"
+      },
+      {
+        "file": "libindicator-12.10.1.tar.gz",
+        "url": "https://launchpad.net/libindicator/12.10/12.10.1/+download/libindicator-12.10.1.tar.gz",
+        "sha256": "b2d2e44c10313d5c9cd60db455d520f80b36dc39562df079a3f29495e8f9447f"
+      },
+      {
+        "file": "libsecret-0.21.7.tar.xz",
+        "url": "https://download.gnome.org/sources/libsecret/0.21/libsecret-0.21.7.tar.xz",
+        "sha256": "6b452e4750590a2b5617adc40026f28d2f4903de15f1250e1d1c40bfd68ed55e"
+      },
+      {
+        "file": "libunity_7.1.4+19.04.20190319.orig.tar.gz",
+        "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/libunity/7.1.4+19.04.20190319-0ubuntu1/libunity_7.1.4+19.04.20190319.orig.tar.gz",
+        "sha256": "56ecb380d74bf74caba193d9e8ad6b0c85ccf9eeb461bc9731c2b8636e1f1492"
+      },
+      {
+        "file": "dee-1.2.7.tar.gz",
+        "url": "https://launchpad.net/dee/1.0/1.2.7/+download/dee-1.2.7.tar.gz",
+        "sha256": "1bf0336ce684aa0f48d6eae2469628c1a9b43695a77443bc31a5790aa673bf8a"
+      },
+      {
+        "file": "libgnome-keyring-3.12.0.tar.xz",
+        "url": "https://download.gnome.org/sources/libgnome-keyring/3.12/libgnome-keyring-3.12.0.tar.xz",
+        "sha256": "c4c178fbb05f72acc484d22ddb0568f7532c409b0a13e06513ff54b91e947783"
+      },
+      {
+        "file": "speech-dispatcher-0.12.1.tar.gz",
+        "url": "https://github.com/brailcom/speechd/releases/download/0.12.1/speech-dispatcher-0.12.1.tar.gz",
+        "sha256": "b14a5238d287d2dcce4dd42bbd66ca65fa228e7e683708267f7b34036f7ba4b4"
+      }
+    ]
+  }
+}

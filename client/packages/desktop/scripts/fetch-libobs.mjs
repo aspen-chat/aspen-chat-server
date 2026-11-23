@@ -30,6 +30,20 @@ const OBS_VERSION = "32.2.2";
 const RELEASE_URL = `https://github.com/obsproject/obs-studio/releases/download/${OBS_VERSION}/OBS-Studio-${OBS_VERSION}-Windows-x64.zip`;
 const RELEASE_SHA256 = "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1";
 const SOURCE_URL = `https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_VERSION}.zip`;
+
+// What the GPL and the MPL oblige whoever ships these files to offer: the source of OBS Studio
+// and of the copyleft libraries its release is built with, which `sources.json` names under `obs`
+// and the publish job mirrors beside the installer (`src/release/storage.ts`). That list is of one
+// release's dependencies, read from its obs-deps tag, so a new release cannot be fetched until it
+// is read again for the new one.
+const sourcesFor = JSON.parse(readFileSync(join(import.meta.dirname, "..", "sources.json"), "utf8"))
+  .obs.version;
+if (sourcesFor !== OBS_VERSION) {
+  throw new Error(
+    `sources.json lists the sources of OBS Studio ${sourcesFor}, but this fetches ${OBS_VERSION}: read the new release's obs-deps tag (its CMakePresets.json names it) for the copyleft libraries it builds, and list their sources at the versions it pins`,
+  );
+}
+
 /**
  * The modules the helper loads that Windows has (`MODULES` in its `obs/startup.rs`).
  * `check-libobs.mjs` fails a package lacking one the helper names there, so a module added to

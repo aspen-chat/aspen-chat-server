@@ -476,22 +476,25 @@ it is the way it is.
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`,
-`cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format,
-lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`,
-`plugins/calendar`, and `plugins/blackjack`, each a workspace of its own), whose copies of
-`views/bridge.js` must be the same; the debug servers, built once in a job of their own (`servers`),
-which writes the API, event, and signalling schemas the client, Android, Windows, macOS, iOS, and
-Flatpak jobs wait for, and which every job that runs those servers unpacks
-(`.github/actions/debug-servers`) rather than building them again; the client's format
-(`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a desktop and
-a phone) split across six runners; the Android app's build, its unit tests, and its device tests on
-an emulator, the debug APK kept as an artifact (`client/docs/architecture/android-builds.md`); the
-desktop app's Flatpak, built with `package:flatpak`, installed, and its capture helper asked what it
-can capture inside the sandbox; on macOS, the capture helper's lints and tests, the iOS app built
-for the simulator with the extension's Web Push check, and on a pull request an unsigned dmg, while
-`main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
-for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
+`.github/workflows/ci.yml` runs on every push to `main`, every pull request, and every `client-v*`
+tag, from which it also publishes the signed Windows installer and its update feed
+(`publish-windows`) and the Flatpak to Aspen's Flatpak repository (`publish-flatpak`;
+`client/docs/architecture/desktop-updates.md`): `cargo fmt --check`, `cargo clippy -- -D warnings`,
+and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for
+`wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, `plugins/calendar`, and
+`plugins/blackjack`, each a workspace of its own), whose copies of `views/bridge.js` must be the
+same; the debug servers, built once in a job of their own (`servers`), which writes the API, event,
+and signalling schemas the client, Android, Windows, macOS, iOS, and Flatpak jobs wait for, and
+which every job that runs those servers unpacks (`.github/actions/debug-servers`) rather than
+building them again; the client's format (`pnpm format:check`), typecheck, lint, and tests, with its
+browser tests on Chromium (a desktop and a phone) split across six runners; the Android app's build,
+its unit tests, and its device tests on an emulator, the debug APK kept as an artifact
+(`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
+`package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox;
+on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the
+extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs,
+sent to Apple's notary service without waiting, and an App Store build for TestFlight from the
+`apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
 debug servers; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list
 of the public media prefixes against the server's, `media_store::PublicPrefix`), and
