@@ -1,5 +1,6 @@
 //! [`Bus::Nats`](crate::Bus::Nats): the bus as NATS JetStream.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_nats::jetstream::{self, AckKind, ErrorCode, consumer, kv, stream};
@@ -15,9 +16,11 @@ use crate::{
 
 /// A NATS connection and its JetStream context.
 #[derive(Clone)]
-pub struct Nats {
+pub struct Nats(pub(crate) Arc<Connection>);
+
+pub(crate) struct Connection {
     client: async_nats::Client,
-    jetstream: jetstream::Context,
+    pub(crate) jetstream: jetstream::Context,
 }
 
 fn failed(doing: &'static str) -> impl FnOnce(BoxError) -> Error {
@@ -37,22 +40,24 @@ const ORDERED_EXPIRES: Duration = Duration::from_secs(5);
 impl Nats {
     pub fn new(client: async_nats::Client) -> Self {
         let jetstream = jetstream::new(client.clone());
-        Self { client, jetstream }
+        Self(Arc::new(Connection { client, jetstream }))
     }
 
     pub(crate) fn connected(&self) -> bool {
-        self.client.connection_state() == async_nats::connection::State::Connected
+        self.0.client.connection_state() == async_nats::connection::State::Connected
     }
 
     pub(crate) async fn publish(&self, subject: String, payload: Bytes) -> Result<()> {
-        self.client
+        self.0
+            .client
             .publish(subject, payload)
             .await
             .map_err(|e| failed("publishing")(boxed(e)))
     }
 
     pub(crate) async fn flush(&self) -> Result<()> {
-        self.client
+        self.0
+            .client
             .flush()
             .await
             .map_err(|e| failed("flushing")(boxed(e)))
@@ -64,15 +69,16 @@ impl Nats {
         group: Option<String>,
     ) -> Result<Subscriber> {
         let subscriber = match group {
-            Some(group) => self.client.queue_subscribe(subject, group).await,
-            None => self.client.subscribe(subject).await,
+            Some(group) => self.0.client.queue_subscribe(subject, group).await,
+            None => self.0.client.subscribe(subject).await,
         }
         .map_err(|e| failed("subscribing")(boxed(e)))?;
         Ok(Subscriber(Box::pin(subscriber.map(message))))
     }
 
     pub(crate) async fn request(&self, subject: String, payload: Bytes) -> Result<Message> {
-        self.client
+        self.0
+            .client
             .request(subject, payload)
             .await
             .map(message)
@@ -86,6 +92,7 @@ impl Nats {
         payload: Bytes,
     ) -> Result<PublishAck> {
         let ack = self
+            .0
             .jetstream
             .publish_with_headers(subject, header_map(&headers), payload)
             .await
@@ -99,6 +106,7 @@ impl Nats {
 
     pub(crate) async fn create_or_update_stream(&self, config: StreamConfig) -> Result<StreamInfo> {
         let info = self
+            .0
             .jetstream
             .create_or_update_stream(stream_config(&config))
             .await
@@ -114,7 +122,8 @@ impl Nats {
     }
 
     async fn stream(&self, name: &str) -> Result<jetstream::stream::Stream> {
-        self.jetstream
+        self.0
+            .jetstream
             .get_stream(name)
             .await
             .map_err(|e| match e.kind() {
@@ -218,7 +227,7 @@ impl Nats {
                     Ok(delivered) => match stream_message(&delivered) {
                         Some(message) => Some(message.map(|message| Delivery {
                             message,
-                            acker: Acker(delivered),
+                            acker: crate::Acker::Nats(Acker(Box::new(delivered))),
                         })),
                         // Never delivered again, so it cannot hold up a consumer that takes
                         // one message at a time.
@@ -250,6 +259,7 @@ impl Nats {
 
     pub(crate) async fn account_memory(&self) -> Result<AccountMemory> {
         let account = self
+            .0
             .jetstream
             .query_account()
             .await
@@ -265,15 +275,16 @@ impl Nats {
     }
 
     pub(crate) async fn bucket(&self, config: BucketConfig) -> Result<Bucket> {
-        if let Ok(store) = self.jetstream.get_key_value(&config.name).await {
-            return Ok(Bucket::Nats(store));
+        if let Ok(store) = self.0.jetstream.get_key_value(&config.name).await {
+            return Ok(Bucket::Nats(Box::new(store)));
         }
         let BucketConfig {
             name,
             description,
             max_age,
         } = config;
-        self.jetstream
+        self.0
+            .jetstream
             .create_key_value(kv::Config {
                 bucket: name,
                 description,
@@ -282,13 +293,13 @@ impl Nats {
                 ..Default::default()
             })
             .await
-            .map(Bucket::Nats)
+            .map(|store| Bucket::Nats(Box::new(store)))
             .map_err(|e| failed("opening a bucket")(boxed(e)))
     }
 }
 
 /// Says what became of a delivered message.
-pub(crate) struct Acker(jetstream::Message);
+pub(crate) struct Acker(Box<jetstream::Message>);
 
 impl Acker {
     pub(crate) async fn ack(&self) -> Result<()> {

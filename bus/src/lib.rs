@@ -1,11 +1,13 @@
 //! The message bus Aspen's servers share: subjects to publish to and subscribe on, streams that
 //! keep what is published to them for their consumers, and key-value buckets. Each server reaches
 //! it through a [`Bus`], whose types are Aspen's own, so what a server does with the bus does not
-//! depend on what carries it. [`Bus::Nats`] is NATS JetStream.
+//! depend on what carries it. [`Bus::Nats`] is NATS JetStream; [`Bus::Memory`] keeps it all inside
+//! one process.
 //!
 //! Subjects are dot-separated tokens; a filter's `*` matches one token and a final `>` one or
 //! more, as in NATS.
 
+mod memory;
 mod nats;
 
 use std::future::{Future, IntoFuture};
@@ -16,12 +18,15 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::Stream;
 
+pub use memory::{Memory, MemoryBucket};
 pub use nats::Nats;
 
 /// A connection to the message bus. Cheap to clone; every clone shares the connection.
 #[derive(Clone)]
 pub enum Bus {
     Nats(Nats),
+    /// The bus inside this process, for a deployment that is one server.
+    Memory(Memory),
 }
 
 /// What went wrong on the bus.
@@ -229,23 +234,37 @@ pub struct DurableConfig {
 /// A message delivered by a durable consumer, which says what became of it.
 pub struct Delivery {
     pub message: StreamMessage,
-    acker: nats::Acker,
+    acker: Acker,
+}
+
+enum Acker {
+    Nats(nats::Acker),
+    Memory(memory::Acker),
 }
 
 impl Delivery {
     /// Done with: it is not delivered again.
     pub async fn ack(&self) -> Result<()> {
-        self.acker.ack().await
+        match &self.acker {
+            Acker::Nats(acker) => acker.ack().await,
+            Acker::Memory(acker) => acker.ack().await,
+        }
     }
 
     /// Not done with: delivered again after `delay`, or at once.
     pub async fn nak(&self, delay: Option<Duration>) -> Result<()> {
-        self.acker.nak(delay).await
+        match &self.acker {
+            Acker::Nats(acker) => acker.nak(delay).await,
+            Acker::Memory(acker) => acker.nak(delay).await,
+        }
     }
 
     /// Still being worked on: its `ack_wait` starts again.
     pub async fn progress(&self) -> Result<()> {
-        self.acker.progress().await
+        match &self.acker {
+            Acker::Nats(acker) => acker.progress().await,
+            Acker::Memory(acker) => acker.progress().await,
+        }
     }
 }
 
@@ -312,7 +331,8 @@ impl Stream for Watch {
 /// A key-value bucket, opened.
 #[derive(Clone)]
 pub enum Bucket {
-    Nats(async_nats::jetstream::kv::Store),
+    Nats(Box<async_nats::jetstream::kv::Store>),
+    Memory(std::sync::Arc<MemoryBucket>),
 }
 
 impl Bus {
@@ -320,6 +340,7 @@ impl Bus {
     pub fn connected(&self) -> bool {
         match self {
             Bus::Nats(nats) => nats.connected(),
+            Bus::Memory(memory) => memory.connected(),
         }
     }
 
@@ -327,6 +348,7 @@ impl Bus {
     pub async fn publish(&self, subject: impl Into<String>, payload: Bytes) -> Result<()> {
         match self {
             Bus::Nats(nats) => nats.publish(subject.into(), payload).await,
+            Bus::Memory(memory) => memory.publish(subject.into(), payload).await,
         }
     }
 
@@ -334,12 +356,14 @@ impl Bus {
     pub async fn flush(&self) -> Result<()> {
         match self {
             Bus::Nats(nats) => nats.flush().await,
+            Bus::Memory(memory) => memory.flush().await,
         }
     }
 
     pub async fn subscribe(&self, subject: impl Into<String>) -> Result<Subscriber> {
         match self {
             Bus::Nats(nats) => nats.subscribe(subject.into(), None).await,
+            Bus::Memory(memory) => memory.subscribe(subject.into(), None).await,
         }
     }
 
@@ -351,6 +375,7 @@ impl Bus {
     ) -> Result<Subscriber> {
         match self {
             Bus::Nats(nats) => nats.subscribe(subject.into(), Some(group.into())).await,
+            Bus::Memory(memory) => memory.subscribe(subject.into(), Some(group.into())).await,
         }
     }
 
@@ -358,6 +383,7 @@ impl Bus {
     pub async fn request(&self, subject: impl Into<String>, payload: Bytes) -> Result<Message> {
         match self {
             Bus::Nats(nats) => nats.request(subject.into(), payload).await,
+            Bus::Memory(memory) => memory.request(subject.into(), payload).await,
         }
     }
 
@@ -374,6 +400,11 @@ impl Bus {
                 nats.publish_to_stream(subject.into(), headers, payload)
                     .await
             }
+            Bus::Memory(memory) => {
+                memory
+                    .publish_to_stream(subject.into(), headers, payload)
+                    .await
+            }
         }
     }
 
@@ -381,6 +412,7 @@ impl Bus {
     pub async fn create_or_update_stream(&self, config: StreamConfig) -> Result<StreamInfo> {
         match self {
             Bus::Nats(nats) => nats.create_or_update_stream(config).await,
+            Bus::Memory(memory) => memory.create_or_update_stream(config).await,
         }
     }
 
@@ -388,6 +420,7 @@ impl Bus {
     pub async fn stream_info(&self, name: &str) -> Result<Option<StreamInfo>> {
         match self {
             Bus::Nats(nats) => nats.stream_info(name).await,
+            Bus::Memory(memory) => memory.stream_info(name).await,
         }
     }
 
@@ -395,6 +428,7 @@ impl Bus {
     pub async fn purge(&self, stream: &str, filter: impl Into<String>) -> Result<()> {
         match self {
             Bus::Nats(nats) => nats.purge(stream, filter.into()).await,
+            Bus::Memory(memory) => memory.purge(stream, filter.into()).await,
         }
     }
 
@@ -403,6 +437,7 @@ impl Bus {
     pub async fn ordered(&self, stream: &str, start: Start) -> Result<(Ordered, u64)> {
         match self {
             Bus::Nats(nats) => nats.ordered(stream, start).await,
+            Bus::Memory(memory) => memory.ordered(stream, start).await,
         }
     }
 
@@ -410,6 +445,7 @@ impl Bus {
     pub async fn durable(&self, stream: &str, config: DurableConfig) -> Result<Deliveries> {
         match self {
             Bus::Nats(nats) => nats.durable(stream, config).await,
+            Bus::Memory(memory) => memory.durable(stream, config).await,
         }
     }
 
@@ -417,6 +453,7 @@ impl Bus {
     pub async fn account_memory(&self) -> Result<AccountMemory> {
         match self {
             Bus::Nats(nats) => nats.account_memory().await,
+            Bus::Memory(memory) => memory.account_memory().await,
         }
     }
 
@@ -424,6 +461,7 @@ impl Bus {
     pub async fn bucket(&self, config: BucketConfig) -> Result<Bucket> {
         match self {
             Bus::Nats(nats) => nats.bucket(config).await,
+            Bus::Memory(memory) => memory.bucket(config).await,
         }
     }
 }
@@ -432,12 +470,14 @@ impl Bucket {
     pub async fn get(&self, key: &str) -> Result<Option<Bytes>> {
         match self {
             Bucket::Nats(store) => nats::get(store, key).await,
+            Bucket::Memory(bucket) => bucket.get(key),
         }
     }
 
     pub async fn put(&self, key: &str, value: Bytes) -> Result<()> {
         match self {
             Bucket::Nats(store) => nats::put(store, key, value).await,
+            Bucket::Memory(bucket) => bucket.put(key, value),
         }
     }
 
@@ -445,6 +485,7 @@ impl Bucket {
     pub async fn purge(&self, key: &str) -> Result<()> {
         match self {
             Bucket::Nats(store) => nats::purge(store, key).await,
+            Bucket::Memory(bucket) => bucket.purge(key),
         }
     }
 
@@ -452,12 +493,17 @@ impl Bucket {
     pub async fn keys(&self) -> Result<Vec<String>> {
         match self {
             Bucket::Nats(store) => nats::keys(store).await,
+            Bucket::Memory(bucket) => bucket.keys(),
         }
     }
 
     pub async fn watch(&self, key: &str) -> Result<Watch> {
         match self {
             Bucket::Nats(store) => nats::watch(store, key).await,
+            Bucket::Memory(bucket) => bucket.watch(key),
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -106,13 +106,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The second-factor failure limit's tests count attempts in a real Valkey, the one
-      # docker-compose.yaml runs.
-      - name: Valkey for the tests
+      # The short-lived store's tests run against a real Valkey, and the bus's against a real
+      # NATS as well as the one in memory, the ones docker-compose.yaml runs.
+      - name: Valkey and NATS for the tests
         run: |
-          docker compose up -d valkey
+          docker compose up -d valkey nats
           timeout 30 sh -c 'until docker compose exec -T valkey valkey-cli ping | grep -q PONG; do sleep 1; done'
+          timeout 30 bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; do sleep 1; done'
       - run: cargo test --locked --workspace
+        env:
+          ASPEN_BUS_TEST_NATS: nats://127.0.0.1:4222
+          ASPEN_BUS_TEST_NATS_TOKEN: aspen_test
 
   # The debug servers, built once for every job that runs them (`.github/actions/debug-servers`),
   # and the API, event, and signalling schemas they write, which the client's code generator
