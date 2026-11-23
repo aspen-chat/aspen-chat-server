@@ -694,7 +694,30 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
     if write_schema {
         schema::write_schemas_and_exit()?;
     }
-    let context = GlobalServerContext::new(&rate_limit::routes(), role).await?;
+    serve_context(
+        GlobalServerContext::new(&rate_limit::routes(), role).await?,
+        role,
+    )
+    .await
+}
+
+/// As [`start`], for a process that gives the server its configuration and backends itself
+/// (`aspen-ul`). The context is answered beside what serves it, for the work the process does
+/// with it.
+pub async fn start_with(
+    role: Role,
+    config: app::aspen_config::AspenConfig,
+    backends: app::context::Backends,
+) -> Result<(GlobalServerContext, Option<Serving>), app::Error> {
+    let context = GlobalServerContext::with(&rate_limit::routes(), role, config, backends).await?;
+    let serving = serve_context(context.clone(), role).await?;
+    Ok((context, serving))
+}
+
+async fn serve_context(
+    context: GlobalServerContext,
+    role: Role,
+) -> Result<Option<Serving>, app::Error> {
     if role == Role::Public {
         web_client::check(&context.config)?;
     }

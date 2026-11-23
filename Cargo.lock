@@ -318,6 +318,7 @@ dependencies = [
  "aspen_schema",
  "aspen_sockets",
  "aspen_wire",
+ "axum",
  "chrono",
  "clap",
  "console-subscriber",

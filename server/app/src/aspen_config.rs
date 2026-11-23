@@ -1182,16 +1182,32 @@ fn environment() -> config::Environment {
         .separator("__")
 }
 
+/// The config written in `texts`, TOML each, the later taking precedence, with no `aspen.toml`
+/// and no environment, for a process that writes its server's configuration itself (`aspen-ul`).
+/// It is checked as `load_config` checks it.
+pub fn load_config_text(texts: &[&str]) -> Result<AspenConfig, config::ConfigError> {
+    let mut builder = config::Config::builder();
+    for text in texts {
+        builder = builder.add_source(config::File::from_str(text, config::FileFormat::Toml));
+    }
+    finish(builder.build()?)
+}
+
 fn load_from(
     file: impl config::Source + Send + Sync + 'static,
     environment: config::Environment,
 ) -> Result<AspenConfig, config::ConfigError> {
-    let mut loaded = config::Config::builder()
-        // Sources added later take precedence.
-        .add_source(file)
-        .add_source(environment)
-        .build()?
-        .try_deserialize::<AspenConfig>()?;
+    finish(
+        config::Config::builder()
+            // Sources added later take precedence.
+            .add_source(file)
+            .add_source(environment)
+            .build()?,
+    )
+}
+
+fn finish(built: config::Config) -> Result<AspenConfig, config::ConfigError> {
+    let mut loaded = built.try_deserialize::<AspenConfig>()?;
     // Merged here rather than as one more config source, which would merge a limit given in
     // `aspen.toml` into the built-in one field by field.
     loaded.rate_limits =

@@ -274,6 +274,10 @@ pub async fn serve(
                         .extensions_mut()
                         .insert(api::rate_limit::PeerAddr(remote_addr));
                     request.extensions_mut().insert(place.clone());
+                    // What a router merged beside the API's reads its peer by, as axum serves it.
+                    request
+                        .extensions_mut()
+                        .insert(axum::extract::ConnectInfo(remote_addr));
                     let busy = activity.begin();
                     let response = service.clone().call(request);
                     async move {
