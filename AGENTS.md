@@ -25,7 +25,7 @@ explicit direction.
 - **Web framework:** Axum (with `utoipa-axum` for OpenAPI integration)
 - **Async runtime:** Tokio (multi-threaded)
 - **ORM:** Diesel with `diesel-async` and `deadpool` connection pooling
-- **Database:** PostgreSQL
+- **Database:** PostgreSQL 18 or later (see PostgreSQL version, below)
 - **Message broker:** NATS JetStream (via `async-nats`)
 - **Password hashing:** Argon2
 - **Passkeys:** `webauthn-rs`, which links the system OpenSSL
@@ -969,6 +969,36 @@ client applied while the request was in flight, and the client keeps what the st
 the request began (see What a client already holds stays in step). No sequence number, header, or
 timestamp on a response can tell which events it reflects; only the stream can, so the stream wins.
 
+### PostgreSQL version
+
+Aspen runs on PostgreSQL 18 or later. 18 is the first version with `uuidv7()`, which the migrations
+call (`m20260928_052552_community_roles`, `m20260928_065931_deployment_roles`), and every migration
+runs on every new deployment, so the minimum can never fall below it. Development and CI run the
+minimum itself (`postgres:18-alpine` in `docker-compose.yaml`), so a migration or query needing a
+newer version fails there rather than on an operator's database.
+
+The minimum is written wherever an operator is told it or a database is checked against it, and
+every one changes with it:
+
+- `MINIMUM_POSTGRES` in `deploy/box/aspen_box/database.py`, which `aspen-box up` and `doctor` check
+  a database kept elsewhere against, and the comment beside it saying why
+- the PostgreSQL row of `docs/operators/installing/1-services.md`, and `deploy/box/README.md`
+- the image of `docker-compose.yaml` and of `deploy/box/compose.yaml`, and `scripts/check_box.py`'s
+  `extpg` (the minimum) and `oldpg` (the version before it, which the check expects refused, by
+  name)
+- `deploy/aws/variables.tf`'s `database` description and `engine_version` default, which RDS runs
+  and the restore task's `postgres` image follows
+
+Raise it when code needs something a later version added: a function, a piece of syntax, an option
+of a statement, or planner behaviour a query relies on to stay bounded. PostgreSQL's documentation
+and release notes name the version that added each; look it up for anything the migrations and
+queries do not already use, rather than trusting that the development database has it. Propose
+raising it, too, once the minimum's support ends (PostgreSQL supports each major version for five
+years; 18's ends in November 2030). A higher minimum makes every operator upgrade their database
+before they can upgrade Aspen, so put it to the user with the feature and what would work on the
+current minimum instead, and raise it only on their decision. Then change every place above in the
+same commit, with the reason here and in the operator guide's row naming the feature that needs it.
+
 ## `message_gen` Procedural Macro
 
 `message_gen` is a procedural macro system which generates, for each record type Aspen handles, the
@@ -1042,6 +1072,8 @@ entity and its fields. From this single definition, the macro generates:
      for a scalar column in a GIN index) runs `CREATE EXTENSION IF NOT EXISTS` for it before its
      first use, whether or not another migration creates it too. No `down.sql` drops an extension. A
      new extension is named in the PostgreSQL row of `docs/operators/installing/1-services.md`.
+   - A migration or query that needs something a PostgreSQL newer than the minimum added raises the
+     minimum, as PostgreSQL version (under Architecture) says.
    - Apply it: `cargo run -p aspen-migrate -- up`.
    - Regenerate `server/schema/src/schema.rs`:
      `cd server/schema && diesel print-schema > src/schema.rs`.

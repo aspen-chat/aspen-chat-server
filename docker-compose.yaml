@@ -6,7 +6,9 @@
 # `ASPEN_DEV_BIND=0.0.0.0 docker-compose up -d`, and only on a network you trust.
 services:
   database:
-    image: postgres:alpine
+    # The oldest PostgreSQL Aspen supports, so a migration needing a newer one fails here (see
+    # PostgreSQL version in AGENTS.md).
+    image: postgres:18-alpine
     volumes:
       - db:/var/lib/postgresql
     restart: always
