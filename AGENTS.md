@@ -838,12 +838,14 @@ the `app` module that uses it, so a path through `app` names it wherever it live
 - `aspen_bus` (`bus/`): the message bus behind Aspen's own types (subjects, streams and their
   consumers, key-value buckets), which `GlobalServerContext::bus` and `app::events::Publishing` hand
   out, shared with the voice server, `aspen_limits`, and `aspen-bench`; NATS JetStream is
-  `aspen_bus::Bus::Nats`, and of their code only what connects names `async_nats`.
+  `aspen_bus::Bus::Nats`, and of their code only what connects names `async_nats`; `Bus::Memory`
+  holds the same in the process, for a deployment of one API server.
 - `aspen_ephemeral` (`server/ephemeral/`): the short-lived state every API server shares behind
   Aspen's own types (keys that expire, counters, sets, pipelines, and each Lua script as a method of
   its own: rate limit buckets, channel mana, attention, attempt counts, badges), which
   `GlobalServerContext::ephemeral` hands out; Valkey is `aspen_ephemeral::Ephemeral::Valkey`, and of
-  `app` only `context`, which builds the client, names `fred`.
+  `app` only `context`, which builds the client, names `fred`; `Ephemeral::Memory` holds the same in
+  the process, bounded in bytes, for a deployment of one API server.
 - `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview`
   (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link
   previews.

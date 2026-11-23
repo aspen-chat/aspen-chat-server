@@ -2,28 +2,44 @@
 //! and the few operations that read and write several of them at once (rate limit buckets,
 //! channel mana, attention, attempt counts, badges), each a method of its own. Each server reaches
 //! it through an [`Ephemeral`], whose types are Aspen's own, so what a server keeps there does not
-//! depend on what keeps it. [`Ephemeral::Valkey`] is Valkey (or Redis).
+//! depend on what keeps it. [`Ephemeral::Valkey`] is Valkey (or Redis), shared by every server;
+//! [`Ephemeral::Memory`] holds it in this process, for a deployment of one API server, answering
+//! as Valkey does.
 //!
 //! Everything here may be lost: a key is gone once it expires, and all of them when the store is
 //! restarted without persistence. What reads it treats a missing key as the state it starts from.
 
+mod memory;
 mod valkey;
+
+pub use memory::Memory;
 
 use std::marker::PhantomData;
 use std::time::Duration;
 
-/// A connection to the store. Cheap to clone; every clone shares the connection.
+use sealed::Sealed as _;
+
+/// A connection to the store, or for [`Ephemeral::Memory`] the store itself. Cheap to clone;
+/// every clone shares the connection, or the keys.
 #[derive(Clone)]
 pub enum Ephemeral {
     Valkey(fred::clients::Client),
+    Memory(Memory),
 }
 
-/// What went wrong reaching the store: it could not be reached or did not answer in time, it
-/// refused the command, or it answered with what the command cannot answer.
+/// What went wrong reaching the store.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// It could not be reached or did not answer in time, it refused the command, or it answered
+    /// with what the command cannot answer.
     #[error(transparent)]
     Failed(BoxError),
+    /// [`Ephemeral::Memory`] would pass the bytes it may hold, and evicting every key it may
+    /// evict would not make room, so it evicted none and wrote nothing.
+    #[error(
+        "the in-process ephemeral store would pass its {max_bytes} bytes, and evicting every key that expires would not make room"
+    )]
+    Full { max_bytes: usize },
 }
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -127,34 +143,31 @@ impl From<Vec<String>> for Keys {
 }
 
 mod sealed {
-    /// What the store's answers convert into; implemented only here.
-    pub trait Sealed: fred::types::FromValue {}
+    /// What the store's answers convert into; implemented only here, by `memory` for its own
+    /// answers.
+    pub trait Sealed: fred::types::FromValue {
+        fn from_answer(answer: crate::memory::Answer) -> crate::Result<Self>;
+    }
 }
 
 /// What a key's value reads as: its text, or the integer it holds (an error when it holds none).
 pub trait Stored: sealed::Sealed {}
 
-impl sealed::Sealed for String {}
 impl Stored for String {}
-impl sealed::Sealed for i64 {}
 impl Stored for i64 {}
-impl sealed::Sealed for u64 {}
 impl Stored for u64 {}
 
 /// What a [`Pipeline`] command answers.
 pub trait Reply: sealed::Sealed {}
 
-impl<V: Stored> sealed::Sealed for Option<V> {}
 impl<V: Stored> Reply for Option<V> {}
-impl sealed::Sealed for Ttl {}
 impl Reply for Ttl {}
-impl sealed::Sealed for Vec<String> {}
 impl Reply for Vec<String> {}
-impl sealed::Sealed for Vec<Option<String>> {}
 impl Reply for Vec<Option<String>> {}
 
 /// Commands sent together in one round trip and answered together, not atomically: each is
-/// carried out as it would be alone, and others' commands may come between them. Built with its
+/// carried out as it would be alone, and on Valkey others' commands may come between them
+/// ([`Ephemeral::Memory`] runs them in order under one lock). Built with its
 /// methods and sent with [`Ephemeral::run`]; a command whose answer is wanted hands back a
 /// [`Slot`] to take it from the [`Replies`] by.
 #[derive(Debug, Default)]
@@ -201,12 +214,21 @@ pub struct Slot<T> {
 }
 
 /// What a [`Pipeline`]'s commands answered, in their order.
-pub struct Replies(Vec<Option<fred::types::Value>>);
+pub struct Replies(Answers);
+
+/// Each backend's answers, as it gave them.
+enum Answers {
+    Valkey(Vec<Option<fred::types::Value>>),
+    Memory(Vec<Option<memory::Answer>>),
+}
 
 impl Replies {
     /// The answer at `slot`, converted to what its command answers. Taken once.
     pub fn take<T: Reply>(&mut self, slot: Slot<T>) -> Result<T> {
-        valkey::take(&mut self.0, slot.at)
+        match &mut self.0 {
+            Answers::Valkey(answers) => valkey::take(answers, slot.at),
+            Answers::Memory(answers) => memory::take(answers, slot.at),
+        }
     }
 }
 
@@ -400,12 +422,14 @@ impl Ephemeral {
     pub async fn ping(&self) -> Result<()> {
         match self {
             Ephemeral::Valkey(client) => valkey::ping(client).await,
+            Ephemeral::Memory(memory) => memory.ping(),
         }
     }
 
     pub async fn get<V: Stored>(&self, key: &str) -> Result<Option<V>> {
         match self {
             Ephemeral::Valkey(client) => valkey::get(client, key).await,
+            Ephemeral::Memory(memory) => Option::<V>::from_answer(memory.get(key)?),
         }
     }
 
@@ -413,6 +437,7 @@ impl Ephemeral {
     pub async fn getdel<V: Stored>(&self, key: &str) -> Result<Option<V>> {
         match self {
             Ephemeral::Valkey(client) => valkey::getdel(client, key).await,
+            Ephemeral::Memory(memory) => Option::<V>::from_answer(memory.getdel(key)?),
         }
     }
 
@@ -429,6 +454,7 @@ impl Ephemeral {
             Ephemeral::Valkey(client) => {
                 valkey::set(client, key, value.into(), expiry, condition).await
             }
+            Ephemeral::Memory(memory) => memory.set(key, value.into(), expiry, condition),
         }
     }
 
@@ -445,6 +471,12 @@ impl Ephemeral {
             Ephemeral::Valkey(client) => {
                 valkey::set_previous(client, key, value.into(), expiry, condition).await
             }
+            Ephemeral::Memory(memory) => Option::<V>::from_answer(memory.set_previous(
+                key,
+                value.into(),
+                expiry,
+                condition,
+            )?),
         }
     }
 
@@ -452,12 +484,14 @@ impl Ephemeral {
     pub async fn del(&self, keys: impl Into<Keys>) -> Result<i64> {
         match self {
             Ephemeral::Valkey(client) => valkey::del(client, keys.into().0).await,
+            Ephemeral::Memory(memory) => memory.del(keys.into().0),
         }
     }
 
     pub async fn exists(&self, key: &str) -> Result<bool> {
         match self {
             Ephemeral::Valkey(client) => valkey::exists(client, key).await,
+            Ephemeral::Memory(memory) => memory.exists(key),
         }
     }
 
@@ -466,6 +500,9 @@ impl Ephemeral {
     pub async fn incr<V: Stored>(&self, key: &str) -> Result<V> {
         match self {
             Ephemeral::Valkey(client) => valkey::incr(client, key).await,
+            Ephemeral::Memory(memory) => {
+                V::from_answer(memory::Answer::Integer(memory.incr_by(key, 1)?))
+            }
         }
     }
 
@@ -473,6 +510,7 @@ impl Ephemeral {
     pub async fn incr_by(&self, key: &str, by: i64) -> Result<i64> {
         match self {
             Ephemeral::Valkey(client) => valkey::incr_by(client, key, by).await,
+            Ephemeral::Memory(memory) => memory.incr_by(key, by),
         }
     }
 
@@ -480,6 +518,7 @@ impl Ephemeral {
     pub async fn expire(&self, key: &str, seconds: i64) -> Result<bool> {
         match self {
             Ephemeral::Valkey(client) => valkey::expire(client, key, seconds).await,
+            Ephemeral::Memory(memory) => memory.expire(key, seconds),
         }
     }
 
@@ -487,6 +526,7 @@ impl Ephemeral {
     pub async fn ttl(&self, key: &str) -> Result<Ttl> {
         match self {
             Ephemeral::Valkey(client) => valkey::ttl(client, key).await,
+            Ephemeral::Memory(memory) => memory.ttl(key),
         }
     }
 
@@ -494,6 +534,7 @@ impl Ephemeral {
     pub async fn pttl(&self, key: &str) -> Result<Ttl> {
         match self {
             Ephemeral::Valkey(client) => valkey::pttl(client, key).await,
+            Ephemeral::Memory(memory) => memory.pttl(key),
         }
     }
 
@@ -501,6 +542,7 @@ impl Ephemeral {
     pub async fn mget(&self, keys: Vec<String>) -> Result<Vec<Option<String>>> {
         match self {
             Ephemeral::Valkey(client) => valkey::mget(client, keys).await,
+            Ephemeral::Memory(memory) => memory.mget(keys),
         }
     }
 
@@ -508,6 +550,7 @@ impl Ephemeral {
     pub async fn sadd(&self, key: &str, members: Vec<String>) -> Result<i64> {
         match self {
             Ephemeral::Valkey(client) => valkey::sadd(client, key, members).await,
+            Ephemeral::Memory(memory) => memory.sadd(key, members),
         }
     }
 
@@ -515,6 +558,7 @@ impl Ephemeral {
     pub async fn smembers(&self, key: &str) -> Result<Vec<String>> {
         match self {
             Ephemeral::Valkey(client) => valkey::smembers(client, key).await,
+            Ephemeral::Memory(memory) => memory.smembers(key),
         }
     }
 
@@ -522,13 +566,19 @@ impl Ephemeral {
     pub async fn zrem(&self, key: &str, member: &str) -> Result<i64> {
         match self {
             Ephemeral::Valkey(client) => valkey::zrem(client, key, member).await,
+            Ephemeral::Memory(memory) => memory.zrem(key, member),
         }
     }
 
     /// Sends `pipeline`'s commands in one round trip. An error when any of them fails.
     pub async fn run(&self, pipeline: Pipeline) -> Result<Replies> {
         match self {
-            Ephemeral::Valkey(client) => valkey::run(client, pipeline.commands).await.map(Replies),
+            Ephemeral::Valkey(client) => valkey::run(client, pipeline.commands)
+                .await
+                .map(|answers| Replies(Answers::Valkey(answers))),
+            Ephemeral::Memory(memory) => memory
+                .run(pipeline.commands)
+                .map(|answers| Replies(Answers::Memory(answers))),
         }
     }
 
@@ -541,6 +591,7 @@ impl Ephemeral {
     pub async fn gcra_take(&self, key: &str, rate: GcraRate) -> Result<Option<Duration>> {
         match self {
             Ephemeral::Valkey(client) => valkey::gcra_take(client, key, rate).await,
+            Ephemeral::Memory(memory) => memory.gcra_take(key, rate),
         }
     }
 
@@ -549,6 +600,7 @@ impl Ephemeral {
     pub async fn gcra_peek(&self, key: &str, rate: GcraRate) -> Result<Option<Duration>> {
         match self {
             Ephemeral::Valkey(client) => valkey::gcra_peek(client, key, rate).await,
+            Ephemeral::Memory(memory) => memory.gcra_peek(key, rate),
         }
     }
 
@@ -560,6 +612,7 @@ impl Ephemeral {
     pub async fn gcra_refund(&self, key: &str, rate: GcraRate) -> Result<()> {
         match self {
             Ephemeral::Valkey(client) => valkey::gcra_refund(client, key, rate).await,
+            Ephemeral::Memory(memory) => memory.gcra_refund(key, rate),
         }
     }
 
@@ -570,6 +623,7 @@ impl Ephemeral {
     pub async fn count_attempt(&self, key: &str, window_seconds: i64) -> Result<i64> {
         match self {
             Ephemeral::Valkey(client) => valkey::count_attempt(client, key, window_seconds).await,
+            Ephemeral::Memory(memory) => memory.count_attempt(key, window_seconds),
         }
     }
 
@@ -580,6 +634,7 @@ impl Ephemeral {
     pub async fn attention_mark(&self, key: &str, member: &str, lasting: Duration) -> Result<()> {
         match self {
             Ephemeral::Valkey(client) => valkey::attention_mark(client, key, member, lasting).await,
+            Ephemeral::Memory(memory) => memory.attention_mark(key, member, lasting),
         }
     }
 
@@ -588,6 +643,7 @@ impl Ephemeral {
     pub async fn attention_ask(&self, keys: Vec<String>) -> Result<Vec<bool>> {
         match self {
             Ephemeral::Valkey(client) => valkey::attention_ask(client, keys).await,
+            Ephemeral::Memory(memory) => memory.attention_ask(keys),
         }
     }
 
@@ -596,6 +652,7 @@ impl Ephemeral {
     pub async fn badge_add(&self, key: &str) -> Result<Option<i64>> {
         match self {
             Ephemeral::Valkey(client) => valkey::badge_add(client, key).await,
+            Ephemeral::Memory(memory) => memory.badge_add(key),
         }
     }
 
@@ -621,6 +678,9 @@ impl Ephemeral {
         match self {
             Ephemeral::Valkey(client) => {
                 valkey::mana_pool(client, keys, rates, cost, spend, sender, sent_kept_ms).await
+            }
+            Ephemeral::Memory(memory) => {
+                memory.mana_pool(keys, rates, cost, spend, sender, sent_kept_ms)
             }
         }
     }
@@ -656,6 +716,7 @@ impl Ephemeral {
             Ephemeral::Valkey(client) => {
                 valkey::mana_allot(client, keys, rates, allot, sent_kept_ms, turns).await
             }
+            Ephemeral::Memory(memory) => memory.mana_allot(keys, rates, allot, sent_kept_ms, turns),
         }
     }
 
@@ -673,6 +734,7 @@ impl Ephemeral {
             Ephemeral::Valkey(client) => {
                 valkey::mana_top(client, cache, minutes, count, cached_for).await
             }
+            Ephemeral::Memory(memory) => memory.mana_top(cache, minutes, count, cached_for),
         }
     }
 }
