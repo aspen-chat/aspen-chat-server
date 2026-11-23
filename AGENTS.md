@@ -172,6 +172,9 @@ or what an operator must open, route, or back up updates it in the same commit.
      `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be
      reachable from every client and allow their origins (`public_url`'s, and the desktop and mobile
      apps') by CORS.
+   - `[media.directory]` — the files in a directory of this machine instead (`path`), for a
+     deployment of one API server, which serves them itself at `public_base_url`, an origin of their
+     own that is never `public_url`'s (`app::media_store::Directory`, `api::media`)
    - `[media] max_attachment_bytes` — the largest attachment anyone may upload (256 MiB by default),
      which upload URLs are signed for; files a browser could run are stored and served as
      `application/octet-stream` (`app::attachment::INLINE_TYPES`)

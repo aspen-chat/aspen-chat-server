@@ -110,3 +110,24 @@ check it.
 3. Each server deletes what is left under `uploads/` an hour after its URL expired.
 
 A lifecycle rule on your storage expiring `uploads/` after a day does no harm.
+
+## `[media.directory]`
+
+Keeps the files in a directory of this machine instead of S3, for a deployment that is one API
+server. That server serves them itself, at an address of their own. Given, `[media.s3]` is not read.
+
+| Setting                  | Default         |                                                                                                                                                                                        |
+| ------------------------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                   | none, required  | The directory the files are kept in. The server makes it, readable by its own user alone. Back it up with the database.                                                                |
+| `public_base_url`        | none, required  | Where the files are served, such as `https://media.example.org`: an origin alone, `https` unless it is this machine, and never `public_url`'s own. Point that name at this server too. |
+| `upload_url_ttl_seconds` | `900` (15 min.) | How long an upload URL may be used.                                                                                                                                                    |
+
+- The files are served at their own origin so that a file a browser opens cannot act as the web
+  client. The server refuses to start with `public_base_url` at `public_url`'s origin.
+- The server answers that name with the files alone: the public prefixes to anyone, uploads to the
+  URLs it signs, and the files kept as evidence to the URLs it gives reviewers. Every answer forbids
+  the browser to run what it holds.
+- Upload URLs are signed with a key the server holds in memory alone, so a restart ends the uploads
+  under way. Apps upload those files again.
+- An upload is not cut off by `[connections] request_seconds`, so a large file over a slow
+  connection completes. A connection with nothing happening on it still closes after `idle_seconds`.

@@ -37,6 +37,8 @@ from web_client import stand_in
 REPO = Path(__file__).resolve().parent.parent
 # The NATS docker-compose.yaml runs, which a stack runs one of its own of.
 NATS_IMAGE = "nats:2.11-alpine"
+# The Valkey docker-compose.yaml runs, unless `VALKEY_URL` names another, as the Rust tests read it.
+VALKEY_URL = os.environ.get("VALKEY_URL", "redis://127.0.0.1:6379")
 # The S3 credentials docker-compose.yaml gives SeaweedFS.
 S3_ACCESS_KEY = "GK484e56c38fb7e14b182bf47a"
 S3_SECRET_KEY = "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027"
@@ -95,9 +97,12 @@ def start_services() -> None:
     compose("up", "-d", "database", "valkey", "seaweedfs")
 
 
-def wait_for_services() -> None:
+def wait_for_services(media: str = "s3") -> None:
+    """Waits for the services a stack keeping its files in `media` needs: PostgreSQL, and
+    SeaweedFS unless the files are in a directory."""
     wait_for("PostgreSQL", lambda: compose("exec", "-T", "database", "pg_isready", "-U", "postgres", check=False).returncode == 0, 90)
-    wait_for("SeaweedFS's S3", lambda: http_status("http://127.0.0.1:8333/") in (200, 403, 404), 90)
+    if media == "s3":
+        wait_for("SeaweedFS's S3", lambda: http_status("http://127.0.0.1:8333/") in (200, 403, 404), 90)
 
 
 def clean_env() -> dict[str, str]:
@@ -195,10 +200,16 @@ class Stack:
     """A deployment of `bins` named `name`, on `ports`, with `settings` added to its aspen.toml."""
 
     def __init__(self, bins: Path, name: str, ports: Ports, settings: str = "",
-                 public_host: str = "127.0.0.1", web_client: Path | None = None):
+                 public_host: str = "127.0.0.1", web_client: Path | None = None,
+                 media: str = "s3"):
         """`public_host` is `public_url`'s host: `localhost` offers passkeys, at that domain,
         which an address does not. `web_client` is the directory served as the web client, a
-        stand-in when none is given."""
+        stand-in when none is given. `media` is where files are kept: `s3`, the SeaweedFS of
+        docker-compose.yaml, or `directory`, a directory of the stack's own that the chat server
+        serves at `media.localhost` on its port (`[media.directory]`)."""
+        if media not in ("s3", "directory"):
+            raise Failed(f"no media store {media!r}: s3 or directory")
+        self.media = media
         self.bins = bins
         self.name = name
         self.ports = ports
@@ -247,15 +258,9 @@ class Stack:
             f'database_url = "{self.database_url}"\n'
             f'nats_url = "nats://127.0.0.1:{p.nats}"\n'
             'nats_auth_token = "aspen_test"\n'
-            'valkey_url = "redis://127.0.0.1:6379"\n'
+            f'valkey_url = "{VALKEY_URL}"\n'
             f"{self.settings}"
-            "[media.s3]\n"
-            'endpoint = "http://127.0.0.1:8333"\n'
-            'region = "seaweed"\n'
-            'bucket = "aspen-media"\n'
-            f'access_key = "{S3_ACCESS_KEY}"\n'
-            f'secret_key = "{S3_SECRET_KEY}"\n'
-            'public_base_url = "http://127.0.0.1:8888/buckets/aspen-media"\n'
+            f"{self._media_settings()}"
             "[metrics]\n"
             f'listen_addr = "127.0.0.1:{p.api_metrics}"\n'
             "[web_client]\n"
@@ -278,6 +283,24 @@ class Stack:
                 "[metrics]\n"
                 f'listen_addr = "127.0.0.1:{p.voice_metrics}"\n'
             )
+
+    def _media_settings(self) -> str:
+        p = self.ports
+        if self.media == "directory":
+            return (
+                "[media.directory]\n"
+                f"path = {json.dumps(str(self.work / 'media'))}\n"
+                f'public_base_url = "http://media.localhost:{p.api}"\n'
+            )
+        return (
+            "[media.s3]\n"
+            'endpoint = "http://127.0.0.1:8333"\n'
+            'region = "seaweed"\n'
+            'bucket = "aspen-media"\n'
+            f'access_key = "{S3_ACCESS_KEY}"\n'
+            f'secret_key = "{S3_SECRET_KEY}"\n'
+            'public_base_url = "http://127.0.0.1:8888/buckets/aspen-media"\n'
+        )
 
     def _spawn(self, args: list[str], log_name: str) -> None:
         log = open(self.work / log_name, "w")

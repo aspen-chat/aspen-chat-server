@@ -51,6 +51,7 @@ pub mod link_preview;
 pub mod message;
 pub use aspen_wire::message_enum;
 pub mod identity_provider;
+pub mod media;
 pub mod metrics;
 pub mod notification_setting;
 pub mod passkey_page;
@@ -808,15 +809,23 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
     let config = context.config.clone();
     let request_deadline = Duration::from_secs(config.connections.request_seconds);
     let suspension = context.rate_limiter.suspension().clone();
+    let media_store = context.media_store.clone();
+    let web = axum::Router::from(router.with_state(context))
+        .fallback_service(files)
+        .layer(axum::middleware::from_fn_with_state(
+            request_deadline,
+            deadline::layer,
+        ))
+        .layer(axum::middleware::from_fn(app::locale::layer))
+        .layer(cors_layer());
+    // A store in a directory is served by this server too, at an origin of its own; an upload
+    // there may take longer than a request's deadline, so it sits outside it.
+    let router = match &*media_store {
+        app::media_store::MediaStore::Directory(store) => media::by_host(web, store)?,
+        app::media_store::MediaStore::S3(_) => web,
+    };
     Ok(Some(Serving {
-        router: axum::Router::from(router.with_state(context))
-            .fallback_service(files)
-            .layer(axum::middleware::from_fn_with_state(
-                request_deadline,
-                deadline::layer,
-            ))
-            .layer(axum::middleware::from_fn(app::locale::layer))
-            .layer(cors_layer()),
+        router,
         config,
         suspension,
     }))

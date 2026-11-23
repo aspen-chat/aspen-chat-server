@@ -4378,6 +4378,8 @@ def main() -> None:
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
     parser.add_argument("--only", help="the scenarios to run, comma separated by name; every one when absent")
+    parser.add_argument("--media", choices=["s3", "directory"], default="s3",
+                        help="where the deployment keeps files: S3 (SeaweedFS), or a directory it serves itself")
     parser.add_argument("--shard", type=shard, default=(1, 1), metavar="K/N",
                         help="run the K-th of N parts of the scenarios (every N-th from the K-th), for runs "
                              "on N machines at once; the whole when absent")
@@ -4391,12 +4393,13 @@ def main() -> None:
     if args.start_services:
         say("starting the database, Valkey, and SeaweedFS")
         start_services()
-    wait_for_services()
+    wait_for_services(args.media)
     dev_ca.authority()
     check = Checks()
     try:
         say("starting a database and a NATS of its own, the chat server, and the voice server")
-        with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS, public_host="localhost") as stack:
+        with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS, public_host="localhost",
+                   media=args.media) as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
             for index, scenario in enumerate(SCENARIOS):
                 if only is not None and scenario.__name__ not in only:

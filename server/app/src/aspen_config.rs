@@ -969,12 +969,77 @@ impl EmailConfig {
 #[serde(default)]
 pub struct MediaConfig {
     pub s3: MediaS3Config,
+    /// `[media.directory]`: the files in a directory of this machine instead of S3, for a
+    /// deployment that is one server. Given, `[media.s3]` is not read.
+    pub directory: Option<MediaDirectoryConfig>,
     pub previews: PreviewConfig,
     /// The largest attachment, in bytes, anyone may upload (256 MiB). Each upload URL is signed
     /// for the size its client declares, which may be no more, and confirming an upload that
     /// holds more deletes it.
     #[default = 268_435_456]
     pub max_attachment_bytes: u64,
+}
+
+/// A deployment's files in a directory of the one machine that serves them
+/// (`media_store::Directory`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaDirectoryConfig {
+    /// Where the files are kept. Back it up with the database.
+    pub path: std::path::PathBuf,
+    /// The origin the files are served at, by this server, such as `https://media.example.org`:
+    /// an origin of their own, never `public_url`'s, so a file a browser shows cannot act as the
+    /// web client.
+    pub public_base_url: String,
+    /// How long an upload URL may be used (`[media.s3] upload_url_ttl_seconds`'s fifteen
+    /// minutes when not given).
+    #[serde(default = "default_upload_url_ttl_seconds")]
+    pub upload_url_ttl_seconds: u64,
+}
+
+fn default_upload_url_ttl_seconds() -> u64 {
+    MediaS3Config::default().upload_url_ttl_seconds
+}
+
+impl MediaDirectoryConfig {
+    /// Refuses a `public_base_url` that is not an origin alone, is not https away from this
+    /// machine, or is `public_url`'s own origin.
+    fn check(&self, public_url: &str) -> Result<(), config::ConfigError> {
+        let given = &self.public_base_url;
+        let invalid = |why: &str| {
+            config::ConfigError::Message(format!(
+                "[media.directory] public_base_url {given:?} {why}"
+            ))
+        };
+        let parsed = url::Url::parse(given)
+            .map_err(|_| invalid("is not an address such as https://media.example.org"))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(invalid(
+                "must be an origin alone, such as https://media.example.org",
+            ));
+        }
+        if parsed.scheme() == "http" && !parsed.host().is_some_and(|host| is_loopback_host(&host)) {
+            return Err(invalid(
+                "is http at a host that is not this machine; use https",
+            ));
+        }
+        let web = url::Url::parse(public_url)
+            .map_err(|_| invalid("cannot be compared with public_url"))?;
+        if parsed.origin() == web.origin() {
+            return Err(invalid(
+                "is public_url's own origin: files are served at an origin of their own, so a \
+                 file a browser shows cannot act as the web client; give the files a host of \
+                 their own, such as media.<your domain>",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Object-storage configuration.
@@ -1134,8 +1199,13 @@ fn load_from(
     loaded.derive_from_public_url()?;
     loaded.check_nats()?;
     loaded.check_valkey()?;
-    loaded.media.s3.check_tls()?;
-    loaded.media.s3.check_credentials()?;
+    match &loaded.media.directory {
+        Some(directory) => directory.check(&loaded.public_url)?,
+        None => {
+            loaded.media.s3.check_tls()?;
+            loaded.media.s3.check_credentials()?;
+        }
+    }
     loaded.check_development_credentials()?;
     loaded.check_federation_development()?;
     loaded.connections.check(&loaded.search)?;
@@ -1855,5 +1925,43 @@ mod tests {
         assert!(federation("standing_interval_seconds = 60").is_ok());
         assert!(federation("domain = \"chat.example.org\"").is_err());
         assert!(federation("[users]\nemigration = \"open\"").is_err());
+    }
+
+    #[test]
+    fn files_in_a_directory_are_served_at_an_origin_of_their_own() {
+        let directory = |base: &str| MediaDirectoryConfig {
+            path: "/var/lib/aspen/media".into(),
+            public_base_url: base.to_string(),
+            upload_url_ttl_seconds: 900,
+        };
+        let web = "https://chat.example.org";
+        assert!(directory("https://media.example.org").check(web).is_ok());
+        assert!(
+            directory("https://media.example.org:8443")
+                .check(web)
+                .is_ok()
+        );
+        assert!(
+            directory("http://media.localhost:5174")
+                .check("http://localhost:5173")
+                .is_ok()
+        );
+        for refused in [
+            "https://chat.example.org",
+            "https://chat.example.org:443",
+            "http://media.example.org",
+            "https://media.example.org/files",
+            "https://media.example.org/?a=b",
+            "ftp://media.example.org",
+            "media.example.org",
+        ] {
+            assert!(directory(refused).check(web).is_err(), "{refused}");
+        }
+        // The same host at another port is another origin.
+        assert!(
+            directory("https://chat.example.org:8443")
+                .check(web)
+                .is_ok()
+        );
     }
 }

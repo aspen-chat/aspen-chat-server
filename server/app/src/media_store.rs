@@ -37,6 +37,8 @@
 //! place that templates those URLs so a misconfigured base or a stray
 //! trailing slash can't desync between callers.
 
+pub mod directory;
+
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
@@ -82,6 +84,15 @@ impl PublicPrefix {
     /// The key of the object `id` names under this prefix.
     pub fn key(self, id: uuid::Uuid) -> String {
         format!("{}/{id}", self.as_str())
+    }
+
+    /// The prefix whose name is `name`, as a key's first segment holds it.
+    pub fn named(name: &str) -> Option<Self> {
+        use strum::VariantArray;
+        Self::VARIANTS
+            .iter()
+            .copied()
+            .find(|prefix| prefix.as_str() == name)
     }
 }
 
@@ -639,11 +650,22 @@ impl S3 {
 pub enum MediaStore {
     /// An S3 API: `[media.s3]`.
     S3(S3),
+    /// A directory of this machine, served by this server: `[media.directory]`.
+    Directory(directory::Directory),
 }
 
 impl MediaStore {
     pub async fn new(config: &AspenConfig) -> crate::error::Result<Self> {
-        S3::from_s3(&config.media.s3).await.map(MediaStore::S3)
+        match &config.media.directory {
+            Some(directory) => directory::Directory::open(
+                &directory.path,
+                &directory.public_base_url,
+                StdDuration::from_secs(directory.upload_url_ttl_seconds),
+            )
+            .await
+            .map(MediaStore::Directory),
+            None => S3::from_s3(&config.media.s3).await.map(MediaStore::S3),
+        }
     }
 
     /// Server-side upload.
@@ -659,6 +681,7 @@ impl MediaStore {
     ) -> crate::error::Result<()> {
         match self {
             MediaStore::S3(store) => store.put_bytes(key, bytes, content_type).await,
+            MediaStore::Directory(store) => store.put_bytes(key, bytes, content_type).await,
         }
     }
 
@@ -676,6 +699,7 @@ impl MediaStore {
     ) -> crate::error::Result<PresignedUpload> {
         match self {
             MediaStore::S3(store) => store.presign_upload(key, content_type, length).await,
+            MediaStore::Directory(store) => store.presign_upload(key, content_type, length).await,
         }
     }
 
@@ -689,6 +713,7 @@ impl MediaStore {
     pub async fn head_object(&self, key: &str) -> crate::error::Result<Option<u64>> {
         match self {
             MediaStore::S3(store) => store.head_object(key).await,
+            MediaStore::Directory(store) => store.head_object(key).await,
         }
     }
 
@@ -702,6 +727,7 @@ impl MediaStore {
     ) -> crate::error::Result<Option<u64>> {
         match self {
             MediaStore::S3(store) => store.copy_object_to(key, limit, sink).await,
+            MediaStore::Directory(store) => store.copy_object_to(key, limit, sink).await,
         }
     }
 
@@ -722,6 +748,7 @@ impl MediaStore {
     ) -> crate::error::Result<Promotion> {
         match self {
             MediaStore::S3(store) => store.promote(key, max_bytes, served).await,
+            MediaStore::Directory(store) => store.promote(key, max_bytes, served).await,
         }
     }
 
@@ -730,6 +757,7 @@ impl MediaStore {
     pub fn staging_cutoff(&self) -> DateTime<Utc> {
         match self {
             MediaStore::S3(store) => store.staging_cutoff(),
+            MediaStore::Directory(store) => store.staging_cutoff(),
         }
     }
 
@@ -739,6 +767,7 @@ impl MediaStore {
     pub async fn sweep_uploads(&self, older_than: DateTime<Utc>) -> crate::error::Result<usize> {
         match self {
             MediaStore::S3(store) => store.sweep_uploads(older_than).await,
+            MediaStore::Directory(store) => store.sweep_uploads(older_than).await,
         }
     }
 
@@ -748,12 +777,14 @@ impl MediaStore {
     pub async fn get_bytes(&self, key: &str, limit: u64) -> crate::error::Result<Option<Vec<u8>>> {
         match self {
             MediaStore::S3(store) => store.get_bytes(key, limit).await,
+            MediaStore::Directory(store) => store.get_bytes(key, limit).await,
         }
     }
 
     pub async fn delete(&self, key: &str) -> crate::error::Result<()> {
         match self {
             MediaStore::S3(store) => store.delete(key).await,
+            MediaStore::Directory(store) => store.delete(key).await,
         }
     }
 
@@ -762,6 +793,7 @@ impl MediaStore {
     pub async fn delete_upload(&self, key: &str) -> crate::error::Result<()> {
         match self {
             MediaStore::S3(store) => store.delete_upload(key).await,
+            MediaStore::Directory(store) => store.delete_upload(key).await,
         }
     }
 
@@ -770,6 +802,7 @@ impl MediaStore {
     pub async fn move_object(&self, from: &str, to: &str) -> crate::error::Result<bool> {
         match self {
             MediaStore::S3(store) => store.move_object(from, to).await,
+            MediaStore::Directory(store) => store.move_object(from, to).await,
         }
     }
 
@@ -778,6 +811,7 @@ impl MediaStore {
     pub async fn presign_get(&self, key: &str, ttl: StdDuration) -> crate::error::Result<String> {
         match self {
             MediaStore::S3(store) => store.presign_get(key, ttl).await,
+            MediaStore::Directory(store) => store.presign_get(key, ttl).await,
         }
     }
 
@@ -789,6 +823,7 @@ impl MediaStore {
     pub fn public_url(&self, key: &str) -> String {
         match self {
             MediaStore::S3(store) => store.public_url(key),
+            MediaStore::Directory(store) => store.public_url(key),
         }
     }
 }

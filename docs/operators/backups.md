@@ -62,6 +62,10 @@ database holds only their names.
 Back the bucket up with your storage's own tools: replication, versioning, or copying it elsewhere
 with `rclone` or `aws s3 sync`.
 
+With `[media.directory]` they are files under its `path` instead: back that directory up beside the
+database, with the server stopped or from a snapshot of its file system, so each file and its record
+under `meta/` are copied together.
+
 **A restored database whose bucket was lost shows every picture and file as missing.** The people
 who posted them would have to post them again.
 
