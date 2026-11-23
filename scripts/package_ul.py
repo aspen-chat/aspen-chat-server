@@ -17,7 +17,8 @@ does). The binary is built by
 `baseline_build.py` unless `--binary` names one. The web client must already be built
 (`pnpm build` in `client/`).
 
-It needs what `baseline_build.py` needs, and `make`, `patchelf`, and `zstd`.
+It needs what `baseline_build.py` needs, `make` and `patchelf` to build PostgreSQL, and `zstd` to
+pack.
 """
 
 import argparse
@@ -54,6 +55,12 @@ UL = baseline.REPO / "target" / "ul"
 
 def say(message: str) -> None:
     print(f"package_ul: {message}", flush=True)
+
+
+def require(*tools: str) -> None:
+    for tool in tools:
+        if shutil.which(tool) is None:
+            baseline.fail(f"missing tool: {tool}")
 
 
 def run(command, log, **kwargs) -> None:
@@ -126,6 +133,7 @@ def build_postgres(arch: str, version: str, jobs: int) -> Path:
     done = root / ".built"
     if done.exists():
         return prefix
+    require("make", "patchelf")
     baseline.ensure_setup(paths)
     # A cross build installs time zone data with the build machine's zic.
     native_zic = None
@@ -197,6 +205,7 @@ def add_tree(tar: tarfile.TarFile, source: Path, name: str) -> None:
 def pack(binary: Path, postgres: Path, web_client: Path, out: Path) -> None:
     if not (web_client / "index.html").is_file():
         baseline.fail(f"{web_client} holds no built web client: run pnpm build in client/")
+    require("zstd")
     plain = io.BytesIO()
     with tarfile.open(fileobj=plain, mode="w", format=tarfile.PAX_FORMAT) as tar:
         add_tree(tar, postgres, "pgsql")
@@ -237,9 +246,6 @@ def main() -> None:
         "--postgres-version", default=POSTGRES_VERSION, help=f"the PostgreSQL to bundle ({POSTGRES_VERSION})"
     )
     args = parser.parse_args()
-    for tool in ("make", "patchelf", *([] if args.postgres_only else ["zstd"])):
-        if shutil.which(tool) is None:
-            baseline.fail(f"missing tool: {tool}")
     postgres = build_postgres(args.arch, args.postgres_version, args.jobs)
     if args.postgres_only:
         print(postgres)

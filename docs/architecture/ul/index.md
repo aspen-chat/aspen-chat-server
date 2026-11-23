@@ -231,5 +231,27 @@ stopped one left.
 ## Access and what clients hold
 
 Ultra Lite adds no route and no record: what each reads and is told is decided by the same code as
-in the full deployment, which `scripts/check_permissions.py` checks with `--media directory`. The
-files' origin is never `public_url`'s, so a file a browser opens cannot act as the web client.
+in the full deployment, which `scripts/check_permissions.py` checks against Ultra Lite itself with
+`--ul`, and against the full deployment keeping its files in a directory with `--media directory`.
+The files' origin is never `public_url`'s, so a file a browser opens cannot act as the web client.
+
+## Checks
+
+The checks of the full deployment run against Ultra Lite too, with `--ul` (`scripts/stack.py`'s
+`UlStack`): `check_permissions.py`, `check_mana.py`, `check_calls.py` (calls between browsers
+through the voice server within it), and `smoke_servers.py`. They run a debug build with
+`--runtime`, a directory linking the PostgreSQL `package_ul.py --postgres-only` built and the
+check's web client, and read the database with the bundled `psql` over the data directory's socket.
+What only the full deployment has is said and left out: the permissions check's scenario of Valkey
+losing presence keys, since the short-lived store here is the process's memory, which loses nothing
+while it runs, and `estimate-capacity`, a command of `voice_server`'s own. The smoke check instead
+removes the voice server's registration while it runs, which lists it in the fleet as unregistered
+as it would a voice server elsewhere, and starts Ultra Lite again, which registers it anew.
+
+`check_ul.py` checks a package as an operator runs it, following the operator guide on a Debian 12
+machine under systemd in a container: `install`, `init` with a certificate in files, the redirect
+and refusal of plain HTTP, a restart and a crash, a backup while it runs and its restore, an upgrade
+to a package carrying another runtime (the same binary, its web client holding one file more), and
+`export`. `check_ul_export.py` takes an export into a full deployment and compares the two. CI runs
+all of them, the package checks on runners of each architecture
+(`docs/development/distribution.md`).

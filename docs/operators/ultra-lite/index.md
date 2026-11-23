@@ -28,9 +28,18 @@ Optional: `ffmpeg` and `ffprobe`, from the system's packages, for still pictures
 
 ## Installing
 
-1. **Get `aspen-ul`** for the machine's architecture. Until releases are published, build it on an
-   x86-64 Linux machine with the repository: `scripts/package_ul.py --arch x86_64` (or
-   `--arch aarch64`) writes `target/ul/<arch>/aspen-ul`, one file holding everything.
+1. **Get `aspen-ul`** for the machine's architecture (`uname -m` says which): `aspen-ul-x86_64` or
+   `aspen-ul-aarch64` from a
+   [release of Aspen](https://github.com/aspen-chat/aspen-chat-server/releases), one file holding
+   everything, and `SHA256SUMS` beside it. Check it and name it `aspen-ul`:
+
+   ```
+   sha256sum --check --ignore-missing SHA256SUMS
+   mv aspen-ul-$(uname -m) aspen-ul && chmod +x aspen-ul
+   ```
+
+   Or build it on an x86-64 Linux machine with the repository: `scripts/package_ul.py --arch x86_64`
+   (or `--arch aarch64`) writes `target/ul/<arch>/aspen-ul`.
 
 2. **Install it**, as root:
 

@@ -7,9 +7,12 @@ attachment read back.
 
     scripts/check_ul_export.py --ul target/ul/x86_64/aspen-ul --bin target/debug
     scripts/check_ul_export.py --ul target/debug/aspen-ul --runtime DIR --bin target/debug
+    scripts/check_ul_export.py --ul target/debug/aspen-ul --ul-postgres DIR --bin target/debug
 
 `--ul` is aspen-ul: one scripts/package_ul.py made, or a build with `--runtime`, a directory
-holding the bundled PostgreSQL (`pgsql/`) and a web client (`web-client/`). `--bin` holds
+holding the bundled PostgreSQL (`pgsql/`) and a web client (`web-client/`), or with
+`--ul-postgres`, the installation `scripts/package_ul.py --postgres-only` built, which the check
+makes such a directory of with a stand-in web client. `--bin` holds
 aspen-chat-server and aspen-migrate. The full deployment's PostgreSQL, NATS, Valkey, and
 SeaweedFS (for S3) are containers of its own, on ports from `--ports` up, so a development stack
 keeps running beside it. Needs Python 3.10 and Docker.
@@ -242,6 +245,13 @@ class Check:
         for port in (self.port, *self.voice_ports, self.pg, self.nats, self.valkey, self.s3, self.master, self.volume, self.filer):
             free(port)
         self.work.mkdir(parents=True)
+        if self.opt.ul_postgres:
+            # A runtime of the PostgreSQL given and a stand-in web client, as `--runtime` takes it.
+            runtime = self.work / "runtime"
+            runtime.mkdir()
+            (runtime / "pgsql").symlink_to(self.opt.ul_postgres.resolve())
+            (runtime / "web-client").symlink_to(stand_in(self.work / "ul-web-client").resolve())
+            self.opt.runtime = runtime
         self.write_ul_config()
         server = self.spawn(self.ul(), "ul.log", self.work)
         client = Reached(self.base)
@@ -397,10 +407,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ul", type=Path, required=True)
     parser.add_argument("--runtime", type=Path)
+    parser.add_argument("--ul-postgres", type=Path,
+                        help="a PostgreSQL installation (scripts/package_ul.py --postgres-only) to run --ul with, "
+                             "with a stand-in web client, in place of --runtime")
     parser.add_argument("--bin", type=Path, required=True)
     parser.add_argument("--ports", type=int, default=19100, help="the first of the 27 ports it takes (19100)")
     parser.add_argument("--keep", action="store_true", help="keep the work directory, /var/tmp/aspen-ul-export-<pid>")
     opt = parser.parse_args()
+    if opt.runtime and opt.ul_postgres:
+        parser.error("give --runtime or --ul-postgres, not both")
     opt.bin = opt.bin.resolve()
     check = Check(opt)
     failed = True

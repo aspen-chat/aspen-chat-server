@@ -525,11 +525,19 @@ ones on an arm64 runner, each kept as an artifact; `scripts/check_permissions.py
 `scripts/check_nats_memory.py`, `scripts/check_mana.py`, and `scripts/check_calls.py` run against
 the debug servers, each on a runner of its own, the first split across three (`--shard`) and
 building and installing the example plugins, the last calling between Chromium and Firefox through
-Playwright. Lints, tests, and checks run on runners of their own, so a run takes about as long as
-its longest job, and Rust caches are saved from `main` alone: the repository's caches share 10 GB,
-and every pull request reads `main`'s. Every job runs the toolchain `rust-toolchain.toml` pins,
-which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever
-the repository is built. Clippy warnings fail the build.
+Playwright; Ultra Lite's debug build run through the permissions and calls checks too (`--ul`), and
+through `scripts/smoke_servers.py`, `scripts/check_mana.py`, and `scripts/check_ul_export.py` in a
+job of their own, with the bundled PostgreSQL built once (`ul-postgres`) and unpacked where
+`package_ul.py` builds it (`.github/actions/ul-postgres`); and Ultra Lite packaged for both
+architectures from the baseline builds and the built web client (`web-client`), each package run
+through `scripts/check_ul.py` on a runner of its architecture and kept as an artifact. A tag `v*`
+runs the whole workflow and then publishes the two packages and their `SHA256SUMS` as the tag's
+GitHub release (`release`). Lints, tests, and checks run on runners of their own, so a run takes
+about as long as its longest job, and Rust caches, and the bundled PostgreSQL's build, are saved
+from `main` alone: the repository's caches share 10 GB, and every pull request reads `main`'s. Every
+job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
+example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail
+the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or

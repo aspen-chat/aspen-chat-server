@@ -7,9 +7,12 @@
 # the Android and iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS,
 # and the App Store signed, the dmgs sent for notarization; two deployments federate and wake
 # a stand-in phone over real TLS; the box runs from images built here, and both AWS
-# configurations pass their plan tests; and the servers are built for 64-bit ARM two ways,
+# configurations pass their plan tests; the servers are built for 64-bit ARM two ways,
 # natively and with the cross-compile script, and each build is started against real services
-# on an ARM machine.
+# on an ARM machine; and Ultra Lite (`aspen-ul`) is checked as the full deployment is, its
+# permissions, calls, and channel mana, started, used, and left for the full deployment, and
+# packaged for x86-64 and 64-bit ARM, each package installed and run under systemd on a machine
+# of its architecture. A tag `v*` runs it all and then publishes those packages as its release.
 #
 # The work is spread across runners so the whole run takes about as long as its longest job: the
 # debug servers are built once (`servers`) and every job that runs them unpacks that build
@@ -27,6 +30,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # A release: everything below runs, and once it passes, Ultra Lite's packages are published
+    # with it (`release`).
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -137,7 +143,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate
+      - run: cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate -p aspen-ul
       - name: Write the API and signalling schemas
         run: |
           target/debug/aspen-chat-server --gen-openapi-schema
@@ -152,7 +158,7 @@ jobs:
       # Packed first, since an artifact keeps no file modes; already compressed, so the upload
       # does not compress it again.
       - name: Pack the servers
-        run: tar -C target/debug --zstd -cf servers-debug.tar.zst aspen-chat-server voice_server aspen-migrate
+        run: tar -C target/debug --zstd -cf servers-debug.tar.zst aspen-chat-server voice_server aspen-migrate aspen-ul
       - uses: actions/upload-artifact@v7
         with:
           name: servers-debug
@@ -160,26 +166,129 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  # The PostgreSQL Ultra Lite bundles, built from source against the baseline's sysroot for
+  # x86-64 (`scripts/package_ul.py --postgres-only`), which the checks run the debug aspen-ul with
+  # (`.github/actions/ul-postgres`) and its x86-64 package bundles. Built again only when the
+  # scripts that build it change, its build cached from `main`.
+  ul-postgres:
+    name: Ultra Lite — PostgreSQL (x86-64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: target/ul/x86_64
+          key: ul-postgres-x86_64-${{ hashFiles('scripts/package_ul.py', 'scripts/baseline_build.py') }}
+      - name: System packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm make patchelf
+      - name: Build
+        run: python3 scripts/package_ul.py --arch x86_64 --postgres-only
+      - uses: actions/cache/save@v6
+        if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: target/ul/x86_64
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # The installation and the mark saying it is built, at the paths package_ul.py looks for
+      # them, without the build tree.
+      - name: Pack
+        run: |
+          prefix=$(python3 scripts/package_ul.py --arch x86_64 --postgres-only)
+          prefix=${prefix#"$PWD/"}
+          tar --zstd -cf ul-postgres.tar.zst "$prefix" "$(dirname "$prefix")/.built"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ul-postgres
+          path: ul-postgres.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+  # The web client as a release serves it, which Ultra Lite's packages bundle.
+  web-client:
+    name: Web client — built
+    needs: servers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: client
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      # The code generator reads these from the repository root, and would otherwise run cargo.
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      # The Open Source Attributions list is made from `cargo metadata` when the app is built.
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-client
+          path: client/packages/app/dist
+          retention-days: 1
+
   # Every change to access tried against a deployment of its own, watching what each side of it
   # already has open: REST, event streams, calls, operator commands, attachments. Each part runs
-  # every third scenario on a deployment of its own.
+  # every third scenario on a deployment of its own, the full one and Ultra Lite.
   permissions:
-    name: Changes to access reach everything already open (${{ matrix.shard }}/3)
-    needs: servers
+    name: Changes to access reach everything already open (${{ matrix.deployment }}, ${{ matrix.shard }}/3)
+    needs: [servers, ul-postgres]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       # Every part runs to the end, so one failure does not hide another's.
       fail-fast: false
       matrix:
+        deployment: [full, ultra-lite]
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/debug-servers
+      - uses: ./.github/actions/ul-postgres
+        if: matrix.deployment == 'ultra-lite'
       # The plugin scenarios build the example plugins for `wasm32-wasip2`.
       - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
         run: rustup toolchain install
-      - run: python3 scripts/check_permissions.py --bin target/debug --start-services --shard ${{ matrix.shard }}/3
+      - run: >-
+          python3 scripts/check_permissions.py --bin target/debug --shard ${{ matrix.shard }}/3
+          ${{ matrix.deployment == 'ultra-lite' && '--ul' || '--start-services' }}
+
+  # Ultra Lite's debug build started and used, channel mana in it, and a deployment leaving it for
+  # the full one, whose services are containers of the check's own.
+  ultra-lite:
+    name: Ultra Lite — starts and serves, channel mana, and leaving it
+    needs: [servers, ul-postgres]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/debug-servers
+      - uses: ./.github/actions/ul-postgres
+      - name: Starts and serves
+        run: python3 scripts/smoke_servers.py --bin target/debug --ul
+      - name: Channel mana spends, queues, drains by rank, and tells viewers
+        run: python3 scripts/check_mana.py --bin target/debug --ul
+      - name: A deployment leaves it whole, into a full deployment
+        run: >-
+          python3 scripts/check_ul_export.py --ul target/debug/aspen-ul --bin target/debug
+          --ul-postgres "$(python3 scripts/package_ul.py --arch x86_64 --postgres-only)"
 
   nats-and-mana:
     name: NATS memory and channel mana
@@ -195,17 +304,23 @@ jobs:
         run: python3 scripts/check_mana.py --bin target/debug
 
   # Calls between Chromium and Chromium, and Chromium and Firefox, made by the client's own call
-  # code through the voice server.
+  # code through the voice server: the full deployment's, and the one within Ultra Lite.
   calls:
-    name: Calls between real browsers
-    needs: servers
+    name: Calls between real browsers (${{ matrix.deployment }})
+    needs: [servers, ul-postgres]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        deployment: [full, ultra-lite]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/debug-servers
+      - uses: ./.github/actions/ul-postgres
+        if: matrix.deployment == 'ultra-lite'
       # The code generator, which installing the client's dependencies runs, reads these from the
       # repository root, and would otherwise run cargo.
       - uses: actions/download-artifact@v8
@@ -230,7 +345,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends pulseaudio
           pulseaudio --start --exit-idle-time=-1
           pactl info
-      - run: python3 scripts/check_calls.py --bin target/debug --start-services
+      - run: >-
+          python3 scripts/check_calls.py --bin target/debug
+          ${{ matrix.deployment == 'ultra-lite' && '--ul' || '--start-services' }}
 
   client:
     name: Client — format, typecheck, lint, test
@@ -988,11 +1105,18 @@ jobs:
           for binary in aspen-chat-server voice_server aspen-migrate; do
             cp "$out/$binary" dist/
           done
+          # Packed with its runtime by `ul-aarch64`.
+          cp "$out/aspen-ul" aspen-ul-binary
           tar -C dist -czf aspen-aarch64-bookworm-cross.tar.gz .
       - uses: actions/upload-artifact@v7
         with:
           name: aspen-aarch64-bookworm-cross
           path: aspen-aarch64-bookworm-cross.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ul-binary-aarch64
+          path: aspen-ul-binary
+          retention-days: 1
 
   x86_64-baseline:
     name: x86-64 (Debian 12) — build against the baseline, start, and serve
@@ -1020,6 +1144,8 @@ jobs:
           for binary in aspen-chat-server voice_server aspen-migrate; do
             cp "$out/$binary" dist/
           done
+          # Packed with its runtime by `ul-x86_64`.
+          cp "$out/aspen-ul" aspen-ul-binary
           tar -C dist -czf aspen-x86_64-bookworm.tar.gz .
       - name: Start the services, then the servers, and use them
         run: python3 scripts/smoke_servers.py --bin dist --start-services
@@ -1027,6 +1153,11 @@ jobs:
         with:
           name: aspen-x86_64-bookworm
           path: aspen-x86_64-bookworm.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ul-binary-x86_64
+          path: aspen-ul-binary
+          retention-days: 1
 
   arm64-smoke:
     name: ARM64 — servers start and serve (${{ matrix.build }})
@@ -1046,3 +1177,123 @@ jobs:
         run: mkdir dist && tar -C dist -xzf "${{ matrix.build }}.tar.gz"
       - name: Start the services, then the servers, and use them
         run: python3 scripts/smoke_servers.py --bin dist --start-services
+
+  # Ultra Lite as it is released (`scripts/package_ul.py`): the baseline build of aspen-ul with
+  # the bundled PostgreSQL and the web client appended, installed and run as an operator runs it
+  # on a Debian 12 machine under systemd (`scripts/check_ul.py`), and kept as an artifact.
+  ul-x86_64:
+    name: Ultra Lite (x86-64) — packaged, installed, and run
+    needs: [x86_64-baseline, web-client, ul-postgres]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ul-postgres
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zstd
+      - uses: actions/download-artifact@v8
+        with:
+          name: ul-binary-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-client
+          path: web-client
+      - name: Package
+        run: |
+          chmod +x aspen-ul-binary
+          python3 scripts/package_ul.py --arch x86_64 --binary aspen-ul-binary --web-client web-client \
+            --out aspen-ul-x86_64
+      - name: Install it on Debian 12 under systemd and run it
+        run: python3 scripts/check_ul.py --ul aspen-ul-x86_64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aspen-ul-x86_64
+          path: aspen-ul-x86_64
+          compression-level: 0
+
+  # The 64-bit ARM package, its PostgreSQL cross-compiled here (with the x86-64 build's time zone
+  # compiler, so both are built), and checked on an ARM machine by `ul-aarch64-check`.
+  ul-aarch64:
+    name: Ultra Lite (64-bit ARM) — packaged
+    needs: [arm64-cross, web-client]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: target/ul
+          key: ul-postgres-aarch64-${{ hashFiles('scripts/package_ul.py', 'scripts/baseline_build.py') }}
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm make patchelf zstd
+      - uses: actions/download-artifact@v8
+        with:
+          name: ul-binary-aarch64
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-client
+          path: web-client
+      - name: Package
+        run: |
+          chmod +x aspen-ul-binary
+          python3 scripts/package_ul.py --arch aarch64 --binary aspen-ul-binary --web-client web-client \
+            --out aspen-ul-aarch64
+      - uses: actions/cache/save@v6
+        if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: target/ul
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aspen-ul-aarch64
+          path: aspen-ul-aarch64
+          compression-level: 0
+
+  ul-aarch64-check:
+    name: Ultra Lite (64-bit ARM) — installed and run
+    needs: ul-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zstd
+      - uses: actions/download-artifact@v8
+        with:
+          name: aspen-ul-aarch64
+      - name: Install it on Debian 12 under systemd and run it
+        run: |
+          chmod +x aspen-ul-aarch64
+          python3 scripts/check_ul.py --ul aspen-ul-aarch64
+
+  # A tag `v*` publishes Ultra Lite's two packages as its GitHub release, with their checksums,
+  # once every check of the servers has passed.
+  release:
+    name: Release — Ultra Lite's packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [rust-lint, rust-test, permissions, nats-and-mana, ultra-lite, calls, ul-x86_64, ul-aarch64-check, arm64-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aspen-ul-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: aspen-ul-aarch64
+      - run: sha256sum aspen-ul-x86_64 aspen-ul-aarch64 > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          aspen-ul-x86_64 aspen-ul-aarch64 SHA256SUMS
