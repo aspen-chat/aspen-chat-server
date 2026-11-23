@@ -3,7 +3,7 @@
 
     scripts/check_mana.py --bin target/debug
 
-It runs a deployment of `stack.Stack`'s whose pools hold 100 mana and recharge 10 a second, and
+It runs a deployment of `stack.py`'s (with `--ul`, Aspen Ultra Lite) whose pools hold 100 mana and recharge 10 a second, and
 checks that:
 
 - a message the pool can pay posts at once, and the next waits (`202`), behind anything waiting;
@@ -21,7 +21,7 @@ checks that:
 - a waiting message can be cancelled;
 - past 50 waiting rows, sending is refused with `channelBusy`.
 
-Needs what `stack.Stack` needs, and takes about six minutes: two the wait to be dropped, and two
+Needs what the deployment needs, and takes about six minutes: two the wait to be dropped, and two
 more the scheduled message's wait past that.
 """
 
@@ -36,7 +36,8 @@ import sys
 import time
 from pathlib import Path
 
-from stack import Failed, Ports, Stack, start_services, wait_for_services
+import stack as deployments
+from stack import Deployment, Failed, Ports
 
 PORTS = Ports(nats=14822, api=18800, voice=19801, api_metrics=19864, voice_metrics=19865, rtc_min=47300,
               rtc_max=47399, transfer=13878, relay_min=47400, relay_max=47499)
@@ -64,11 +65,11 @@ def until(what, probe, seconds):
 
 def logs(stack):
     for _, log in stack.processes:
-        if log.name == "api.log":
-            print("----- api.log -----\n" + "\n".join(log.read_text().splitlines()[-60:]), flush=True)
+        if log.name in ("api.log", "ul.log"):
+            print(f"----- {log.name} -----\n" + "\n".join(log.read_text().splitlines()[-60:]), flush=True)
 
 
-def run(stack: Stack) -> None:
+def run(stack: Deployment) -> None:
     suffix = str(os.getpid())
 
     def account(role):
@@ -298,14 +299,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check channel mana end to end.")
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
+    deployments.add_arguments(parser)
     args = parser.parse_args()
-    if shutil.which("docker") is None:
+    if not args.ul and shutil.which("docker") is None:
         sys.exit("channel mana: docker is required")
-    if args.start_services:
-        start_services()
     try:
-        wait_for_services()
-        with Stack(args.bin.resolve(), "mana", PORTS, SETTINGS) as stack:
+        deployments.prepare_services(args, args.start_services)
+        with deployments.deployment(args, "mana", PORTS, SETTINGS) as stack:
             try:
                 run(stack)
             except Exception:

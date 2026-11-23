@@ -486,6 +486,9 @@ async fn serve(
     backup::dump_before_migrating(data, database).await?;
     migrate(database).await?;
     let server_config = server_config(config, runtime, data, database, sizes)?;
+    // The API server serves the process's metrics, the voice server's among them, when
+    // `[server.metrics]` turns them on.
+    let metrics = server_config.metrics.enabled;
     let share = in_process_share(memory);
     let bus = aspen_bus::Memory::new(Some(share));
     let backends = aspen_app::context::Backends::InProcess {
@@ -520,6 +523,9 @@ async fn serve(
     let voice_url = format!("{}{VOICE_PATH}", config.public_url.trim_end_matches('/'));
     let voice_id = register_voice_server(&context, &voice_url, config.voice.capacity).await?;
     let voice = start_voice(config, voice_id, &bus).await?;
+    if metrics {
+        voice.spawn_metrics_samplers();
+    }
     serving.router = with_voice(serving.router, voice.router.clone());
 
     let tls = match &config.tls {

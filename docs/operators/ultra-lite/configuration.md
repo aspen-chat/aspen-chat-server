@@ -43,6 +43,10 @@ goes under `[server]`, as it would be written there: `[server.email]` for mail,
 itself are refused there: `public_url`, `database_url`, `database_pool_size`, NATS's, Valkey's,
 `[server.web_client]`, and `[server.media.directory]`.
 
+Metrics are off unless `[server.metrics]` turns them on (`enabled = true`, and `listen_addr`,
+`127.0.0.1:9464` by default): the one endpoint then holds the voice server's figures beside the API
+server's. Keep it off public interfaces, as [Metrics](../configuration/metrics.md#metrics) says.
+
 To keep uploaded files in S3-compatible object storage rather than on the machine, give
 [`[server.media.s3]`](../configuration/media.md). `media_url` and its name are then not used, and
 backups no longer hold the files. A deployment that already has files moves them there with

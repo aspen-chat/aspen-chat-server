@@ -319,8 +319,14 @@ or what an operator must open, route, or back up updates it in the same commit.
    bundled PostgreSQL (built from source against the same sysroot once per version, into
    `target/ul/<arch>/`; `--postgres-version` bundles another) and the built web client. `--binary`
    packs a binary already built, a debug one for development; it also needs `make`, `patchelf`, and
-   `zstd` (see Ultra Lite). `scripts/check_ul_export.py --ul BIN [--runtime DIR] --bin target/debug`
-   checks that a deployment leaves Ultra Lite whole, into a full deployment on services of its own.
+   `zstd` (see Ultra Lite). `--postgres-only` builds the PostgreSQL alone and prints where it is,
+   which a build of `aspen-ul` runs with `--runtime` (a directory holding it as `pgsql/` and a web
+   client as `web-client/`). `scripts/check_ul.py --ul target/ul/<arch>/aspen-ul` checks a package
+   as an operator runs it, on a Debian 12 machine under systemd in a container of its own: install,
+   init with a certificate, the plain HTTP redirect, restarts and a crash, backup and restore, an
+   upgrade to another runtime, and export.
+   `scripts/check_ul_export.py --ul BIN [--runtime DIR] --bin target/debug` checks that a deployment
+   leaves Ultra Lite whole, into a full deployment on services of its own.
 
 6. Run two deployments that federate, for developing federation:
 
@@ -367,7 +373,13 @@ or what an operator must open, route, or back up updates it in the same commit.
    drops the database. `scripts/stack.py` is the deployment both this and the next check run
    against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the
    standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name
-   so they find its running services.
+   so they find its running services. With `--ul`, this check, `check_permissions.py`,
+   `check_mana.py`, and `check_calls.py` run against Ultra Lite instead (`stack.UlStack`):
+   `aspen-ul` from `--bin`, run with the PostgreSQL `scripts/package_ul.py --postgres-only` built
+   for this machine (`--ul-postgres` names another), keeping its files in its data directory, and
+   needing no service. A check of what only one kind of deployment has says so and checks nothing
+   there (the permissions check's Valkey losing presence keys, the smoke check's
+   `estimate-capacity`).
 
    Check that changes to access reach everything already open:
 

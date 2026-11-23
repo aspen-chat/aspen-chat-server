@@ -3,7 +3,8 @@
 
     scripts/check_permissions.py --bin target/debug
 
-Every change to who may see or do what is tried against a deployment of its own (`stack.Stack`),
+Every change to who may see or do what is tried against a deployment of its own (`stack.Stack`,
+or with `--ul` `stack.UlStack`, Aspen Ultra Lite),
 watching each place someone on either side of the change could notice it: REST reads, an open
 event stream, a call in progress on the voice server, the operator commands, and attachments.
 `AGENTS.md`'s revocation checklist names what each feature must answer; this is where the
@@ -11,9 +12,9 @@ answers are checked. Add a scenario here with each feature that grants or shows 
 
 Needs Python 3.10 and nothing beyond its standard library but the `openssl` command, which the
 stand-in identity provider signs with and the development authority issues its certificate with
-(`oidc_provider_stand_in`, `dev_ca`), and `docker compose` with the
-database, valkey, and seaweedfs services up (`--start-services` starts them) and the NATS image
-the stack runs its own of.
+(`oidc_provider_stand_in`, `dev_ca`), and what the deployment needs: for the full one,
+`docker compose` with the database, valkey, and seaweedfs services up (`--start-services` starts
+them) and the NATS image the stack runs its own of.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ from pathlib import Path
 from software_passkey import SoftwarePasskey, b64url
 import dev_ca
 import oidc_provider_stand_in
-from stack import (REPO, EventStream, Failed, Ports, Stack, WebSocket, compose, psql, start_services, valkey_integer, wait_for,
-                   wait_for_services)
+import stack as deployments
+from stack import REPO, Deployment, EventStream, Failed, Ports, WebSocket, valkey_integer, wait_for
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
               transfer=13578, relay_min=46100, relay_max=46199)
@@ -122,7 +123,7 @@ def of(events: list[dict], kind: str, **fields) -> list[dict]:
 class World:
     """An owner and a member of one community, each signed in, the member's stream open."""
 
-    def __init__(self, stack: Stack, run: str):
+    def __init__(self, stack: Deployment, run: str):
         self.stack = stack
         self.run = run
         self.owner = self.account("owner")
@@ -613,9 +614,9 @@ def replies(world: World, check: Checks) -> None:
     world.stream.gather(0.8)
 
 
-def join(token: str) -> WebSocket:
-    """Joins a call on the voice server with a join token."""
-    socket = WebSocket(f"ws://127.0.0.1:{PORTS.voice}/ws")
+def join(stack: Deployment, token: str) -> WebSocket:
+    """Joins a call on `stack`'s voice server with a join token."""
+    socket = WebSocket(stack.voice_socket)
     socket.send({"type": "identify", "token": token})
     return socket
 
@@ -658,11 +659,11 @@ def calls(world: World, check: Checks) -> None:
           stranger.get("counted") is False and stranger.get("failures") == 0, stranger)
     offered = stack.api("POST", f"/voice-servers/{server}/failures", None, world.member["token"])
     check("one from someone an offer sent there counts", offered.get("counted") is True, offered)
-    call = join(first["token"])
+    call = join(stack, first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
     # Replayed at once, while the token is far from expiring, so that having been used is the
     # only thing wrong with it.
-    replay = join(first["token"])
+    replay = join(stack, first["token"])
     refused = frame_of(replay, "error")
     check("the token they joined with admits no second connection",
           refused is not None and refused.get("fatal") is True, refused)
@@ -693,7 +694,7 @@ def calls(world: World, check: Checks) -> None:
     wait_for("the member's leaving to be recorded", lambda: not in_call(world), 30)
     muted_offer = offer()
     check("the next join offer says the mute stands", muted_offer.get("serverMuted") is True, muted_offer)
-    call = join(muted_offer["token"])
+    call = join(stack, muted_offer["token"])
     check("the member joins again", frame_of(call, "ready") is not None)
 
     def recorded_muted() -> bool:
@@ -757,7 +758,7 @@ def calls(world: World, check: Checks) -> None:
     world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
     early = offer()
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["speak"]})
-    late = join(early["token"])
+    late = join(stack, early["token"])
     check("a join on a token from before the change succeeds", frame_of(late, "ready") is not None)
     changed = frame_of(late, "grantsChanged", 15)
     check("and is then told it may not speak", changed is not None and not changed["grants"]["speak"], changed)
@@ -767,20 +768,20 @@ def calls(world: World, check: Checks) -> None:
     late.close()
     second = world.sign_in(world.member["name"])
     stale = stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])
-    elsewhere = join(stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])["token"])
+    elsewhere = join(stack, stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])["token"])
     check("another sign-in of the member joins the call", frame_of(elsewhere, "ready") is not None)
     stack.api("POST", "/auth/logout", {"refreshToken": second["refresh"]}, second["token"])
     kicked = frame_of(elsewhere, "kicked", 10)
     check("signing out takes that sign-in out of the call, saying why",
           kicked is not None and kicked.get("reason") == "signedOut", kicked)
     elsewhere.close()
-    after = join(stale["token"])
+    after = join(stack, stale["token"])
     check("a token issued to the sign-in before it ended still joins", frame_of(after, "ready") is not None)
     kicked = frame_of(after, "kicked", 15)
     check("but is taken out once its join is recorded",
           kicked is not None and kicked.get("reason") == "signedOut", kicked)
     after.close()
-    late = join(offer()["token"])
+    late = join(stack, offer()["token"])
     check("the member's own sign-in joins again", frame_of(late, "ready") is not None)
     world.as_owner("PUT", f"/communities/{world.community}/bans/{world.member['id']}", {})
     kicked = frame_of(late, "kicked", 10)
@@ -1087,11 +1088,11 @@ def deployment_settings(world: World, check: Checks) -> None:
     room = world.channel("files", ty="voice")
     wait_for("a voice server offer",
              lambda: stack.status("POST", f"/channels/{room}/voice/join", {}, world.member["token"]) == 200, 90)
-    call = join(stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["token"])
+    call = join(stack, stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["token"])
     check("the member joins a call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
     # The owner joins too and takes a file the member offers.
-    owners_call = join(stack.api("POST", f"/channels/{room}/voice/join", {}, world.owner["token"])["token"])
+    owners_call = join(stack, stack.api("POST", f"/channels/{room}/voice/join", {}, world.owner["token"])["token"])
     check("the owner joins the same call", frame_of(owners_call, "ready") is not None)
     offer = str(uuid.uuid4())
     call.send({"type": "offerFile", "offer": offer, "name": "notes.txt", "size": 5, "allowDirect": True,
@@ -1194,15 +1195,14 @@ def deployment_profile(world: World, check: Checks) -> None:
     put = urllib.request.Request(handle["uploadUrl"], data=large, method="PUT", headers={"content-type": "image/png"})
     urllib.request.urlopen(put, timeout=15).close()
     old = handle["id"]
-    staged = psql(f"SELECT storage_key FROM icon WHERE id = '{old}'", stack.database)
-    psql(f"UPDATE icon SET storage_key = 'uploads/' || storage_key, ready_at = now() WHERE id = '{old}'",
-         stack.database)
+    staged = stack.sql(f"SELECT storage_key FROM icon WHERE id = '{old}'")
+    stack.sql(f"UPDATE icon SET storage_key = 'uploads/' || storage_key, ready_at = now() WHERE id = '{old}'")
     world.as_owner("PATCH", "/deployment", {"icon": old})
     before = profile()["icon"]
     check("an icon stored before is served as it was uploaded",
           before["id"] == old and before["mimeType"] == "image/png", before)
-    psql("INSERT INTO job (id, kind, key, class, due, not_before, payload) "
-         "VALUES (gen_random_uuid(), 'shrinkIcons', NULL, 4, now(), now(), '{}')", stack.database)
+    stack.sql("INSERT INTO job (id, kind, key, class, due, not_before, payload) "
+              "VALUES (gen_random_uuid(), 'shrinkIcons', NULL, 4, now(), now(), '{}')")
     check("the shrinkIcons job stores it fitted, and every server's profile follows",
           soon(lambda: profile()["icon"]["mimeType"] == "image/webp", 30), profile()["icon"])
     record = stack.api("GET", f"/icons/{old}", token=world.owner["token"])
@@ -1215,8 +1215,8 @@ def deployment_profile(world: World, check: Checks) -> None:
     check("under the link it had, as WebP within 512 pixels",
           record["mimeType"] == "image/webp" and served_type == "image/webp" and webp_size(served) == (512, 384),
           (record, served_type, webp_size(served), staged))
-    check("and the job is done", soon(lambda: psql("SELECT count(*) FROM job WHERE kind = 'shrinkIcons'",
-                                                   stack.database) == "0", 30))
+    check("and the job is done",
+          soon(lambda: stack.sql("SELECT count(*) FROM job WHERE kind = 'shrinkIcons'") == "0", 30))
     world.as_owner("PATCH", "/users/@me", {"icon": avatar})
     world.as_owner("PATCH", "/deployment", {"icon": None, "displayName": None})
     stack.command("admin", "revoke", world.owner["name"])
@@ -1339,7 +1339,7 @@ def presence(world: World, check: Checks) -> None:
     check("and in the member sample again", in_sample(world.member["token"], world.owner["id"]))
     # A DM between them shares their presence whatever their communities; the database stands in
     # for one they never had, so that the community alone is what the removal takes away.
-    psql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'", world.stack.database)
+    world.stack.sql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'")
     world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
     world.stream.gather(0.5)
     check("removed from the community, the member sees the owner offline",
@@ -1347,6 +1347,11 @@ def presence(world: World, check: Checks) -> None:
 
 
 def lost_presence_keys(world: World, check: Checks) -> None:
+    if world.stack.ul:
+        # Its short-lived store is its own memory, which loses nothing while it runs, and with
+        # which every connection ends.
+        say("an invisible user whose presence keys Valkey lost: not for aspen-ul, which has no Valkey to lose them")
+        return
     say("an invisible user whose presence keys Valkey lost, coming back, is never shown online")
 
     def status_of(token: str) -> str:
@@ -1468,7 +1473,7 @@ def chosen_presence(world: World, check: Checks) -> None:
         wait_for("a voice server offer", lambda: world.stack.status(
             "POST", f"/channels/{dm}/voice/join", {}, world.member["token"]) == 200, 90)
         world.stream.gather(0.5)
-        call = join(world.stack.api("POST", f"/channels/{dm}/voice/join", {}, world.member["token"])["token"])
+        call = join(world.stack, world.stack.api("POST", f"/channels/{dm}/voice/join", {}, world.member["token"])["token"])
         frame_of(call, "ready")
         events = world.stream.gather(2.0)
         call.close()
@@ -1757,8 +1762,7 @@ def device_links(world: World, check: Checks) -> None:
     stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
               world.member["token"])
     stale = world.sign_in(world.member["name"])
-    psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'",
-         stack.database)
+    stack.sql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'")
     refused = stack.request("POST", "/auth/device-links", {}, stale["token"])
     check("a sign-in not verified lately cannot offer itself to another device",
           refused[0] == 403 and code_of(refused[1]) == "reauthenticationRequired", refused)
@@ -1807,8 +1811,7 @@ def typed_device_links(world: World, check: Checks) -> None:
               world.member["token"])
 
     stale = world.sign_in(world.member["name"])
-    psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'",
-         stack.database)
+    stack.sql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'")
     waiting = asked()
     typed = stack.request("POST", "/auth/device-link-entries", {"code": waiting["code"]}, stale["token"])
     check("a sign-in not verified lately cannot give itself by typing a code",
@@ -1934,7 +1937,7 @@ def redirected_to(url: str) -> str:
         return error.headers["location"]
 
 
-def provider_flow(stack: Stack, provider: str, purpose: str, token: str | None = None) -> tuple[int, dict, str, str]:
+def provider_flow(stack: Deployment, provider: str, purpose: str, token: str | None = None) -> tuple[int, dict, str, str]:
     """Runs a flow through the stand-in as the web client and the browser would: starts it, follows
     the provider and the callback, and claims what came back. Answers the claim's status and body,
     the flow's id, and its verifier."""
@@ -1949,7 +1952,7 @@ def provider_flow(stack: Stack, provider: str, purpose: str, token: str | None =
     return status, json.loads(text) if text else {}, returned["flow"], verifier
 
 
-def back_channel_logout(stack: Stack, token: str) -> int:
+def back_channel_logout(stack: Deployment, token: str) -> int:
     data = urllib.parse.urlencode({"logout_token": token}).encode()
     request = urllib.request.Request(f"{stack.base}/auth/oidc/back-channel-logout", data=data, method="POST",
                                      headers={"content-type": "application/x-www-form-urlencoded"})
@@ -2046,8 +2049,7 @@ def identity_providers(world: World, check: Checks) -> None:
         check("but not the one made with their password", password_stream.closed is None, password_stream.closed)
 
         stale = world.sign_in(username)
-        psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{account}'",
-             stack.database)
+        stack.sql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{account}'")
         refused = stack.status("DELETE", f"/users/@me/identities/{identity}", token=stale["token"])
         check("unlinking needs a recent verification", refused == 403, refused)
         idp.sign_in_next(sub=sub, amr=["pwd"], sid="again")
@@ -2087,14 +2089,14 @@ def identity_providers(world: World, check: Checks) -> None:
                                 {"clientId": "other"}, world.owner["token"])
         check("nor its client id", refused[0] == 400, refused)
         stack.command("admin", "revoke", world.owner["name"])
-        psql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
-             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
+        stack.sql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
+                  f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'")
         idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
         check("a link made at another issuer than the provider's signs no one in",
               claimed.get("outcome") == "accountRequired", claimed)
-        psql(f"UPDATE user_identity SET issuer = '{idp.issuer}' "
-             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
+        stack.sql(f"UPDATE user_identity SET issuer = '{idp.issuer}' "
+                  f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'")
 
         stack.command("identity-providers", "set", name, "--enabled", "false")
         check("a disabled provider is offered no more",
@@ -2104,8 +2106,8 @@ def identity_providers(world: World, check: Checks) -> None:
         check("and starts no flow", refused[0] == 404 and code_of(refused[1]) == "identityProviderUnavailable", refused)
         stack.command("identity-providers", "remove", name)
         check("removing it lets its links go",
-              eventually(lambda: psql(f"SELECT count(*) FROM user_identity WHERE provider = '{provider}'",
-                                      stack.database) == "0"))
+              eventually(lambda: stack.sql(
+                  f"SELECT count(*) FROM user_identity WHERE provider = '{provider}'") == "0"))
 
 
 def name_colours(world: World, check: Checks) -> None:
@@ -2490,8 +2492,7 @@ def bot_transfers(world: World, check: Checks) -> None:
     bot, old_token = made["bot"]["id"], made["token"]
 
     def stale() -> None:
-        psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{giver['id']}'",
-             stack.database)
+        stack.sql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{giver['id']}'")
 
     stale()
     rotated = stack.request("POST", f"/bots/{bot}/token", token=giver["token"])
@@ -2653,7 +2654,7 @@ def community_takedowns(world: World, check: Checks) -> None:
           and stack.status("GET", "/users/@me", token=world.owner["token"]) == 200)
 
     def left(sql: str) -> int:
-        return int(psql(sql, stack.database) or 0)
+        return int(stack.sql(sql) or 0)
 
     community = f"'{world.community}'"
     check("its contents are erased but the message a report case is about", eventually(lambda: (
@@ -2907,9 +2908,9 @@ def profile_annotations(world: World, check: Checks) -> None:
     stack, member = world.stack, world.member
     start_plugin(world, word_filter(), WORD_FILTER_ID)
     # No example plugin annotates people, so the row is written as a plugin's would be.
-    psql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
-         f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
-         "'{\"key\": \"checked\"}')", stack.database)
+    stack.sql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
+              f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
+              "'{\"key\": \"checked\"}')")
     outsider = world.account("outsider")
     path = f"/users/{member['id']}/annotations"
     plugin_here = f"/communities/{world.community}/plugins/{WORD_FILTER_ID}"
@@ -2931,7 +2932,7 @@ def profile_annotations(world: World, check: Checks) -> None:
           stack.api("GET", path, token=world.owner["token"])["data"] == [])
     world.as_owner("DELETE", plugin_here)
     stack.command("plugins", "disable", WORD_FILTER_ID)
-    psql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.sql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'")
 
 
 def calendar_channels(world: World, check: Checks) -> None:
@@ -3021,8 +3022,8 @@ def calendar_channels(world: World, check: Checks) -> None:
     def reminders() -> str:
         """How many jobs are the reminder of the member's event: the timer the plugin names
         `remind:<event>`, whose job the host keys by the plugin and that name."""
-        return psql("SELECT count(*) FROM job WHERE kind = 'firePluginTimer' "
-                    f"AND key = '{CALENDAR_ID}/remind:{mine}'", stack.database)
+        return stack.sql("SELECT count(*) FROM job WHERE kind = 'firePluginTimer' "
+                         f"AND key = '{CALENDAR_ID}/remind:{mine}'")
 
     check("an event to come has a reminder", reminders() == "1", reminders())
     check("but may delete their own",
@@ -3030,11 +3031,11 @@ def calendar_channels(world: World, check: Checks) -> None:
     check("and its reminder goes with it", reminders() == "0", reminders())
     # Deleting the calendar deletes the reminders set in it, with its events.
     check("an event's reminder is kept in the calendar's scope",
-          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) != "0")
+          stack.sql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'") != "0")
     world.as_owner("DELETE", f"/channels/{calendar}")
     # What a plugin kept in a deleted channel is forgotten by a job (`forgetPluginScope`).
     check("deleting the calendar deletes its reminders, shortly after", eventually(
-        lambda: psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) == "0"))
+        lambda: stack.sql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'") == "0"))
     stack.command("plugins", "disable", CALENDAR_ID)
 
 
@@ -3052,7 +3053,7 @@ def email(world: World, check: Checks) -> None:
     check("an unverified address is not shown, though the member chose to",
           stack.api("GET", f"/users/{member['id']}", token=outsider["token"]).get("publicEmail") is None)
     # The code goes to a mailbox no one reads here; the database stands in for typing it.
-    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.sql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'")
     stack.api("PATCH", "/users/@me/email", {"shown": False}, member["token"])
     owner_stream.gather(0.5)
     stack.api("PATCH", "/users/@me/email", {"shown": True}, member["token"])
@@ -3080,7 +3081,7 @@ def email(world: World, check: Checks) -> None:
     check("whose requests are refused but for verifying it",
           stack.status("GET", "/users/@me", token=member["token"]) == 403
           and stack.status("GET", "/users/@me/email", token=member["token"]) == 200)
-    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.sql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'")
     check("and once it is verified their session works again",
           stack.status("GET", "/users/@me", token=member["token"]) == 200)
     stream = stack.events(member["token"])
@@ -3089,7 +3090,7 @@ def email(world: World, check: Checks) -> None:
     stream.gather(2.0)
     check("changing to an unverified address while verified ones are required closes their stream",
           stream.closed == 4428, stream.closed)
-    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.sql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'")
     stack.command("settings", "set", "--email-verification-required", "false")
 
     seen = world.channel("seen")
@@ -3098,13 +3099,13 @@ def email(world: World, check: Checks) -> None:
     world.post(hidden, "not for the member")
     world.as_owner("PUT", f"/channels/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     stack.api("PATCH", "/users/@me/email", {"digest": True}, member["token"])
-    psql(f"UPDATE user_email SET digest_since = now() - interval '1 hour', digest_next_at = now() "
-         f"WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.sql(f"UPDATE user_email SET digest_since = now() - interval '1 hour', digest_next_at = now() "
+              f"WHERE \"user\" = '{member['id']}'")
 
     def digest() -> str:
-        return psql(f"SELECT payload->'mail' FROM job WHERE kind = 'sendEmail' "
-                    f"AND payload->>'user' = '{member['id']}' "
-                    f"AND payload->'mail'->>'kind' = 'digest'", stack.database)
+        return stack.sql(f"SELECT payload->'mail' FROM job WHERE kind = 'sendEmail' "
+                         f"AND payload->>'user' = '{member['id']}' "
+                         f"AND payload->'mail'->>'kind' = 'digest'")
 
     check("a digest is made when it is due", soon(lambda: digest() != "", 75))
     made = digest()
@@ -3604,10 +3605,10 @@ def emoji_deletions(world: World, check: Checks) -> None:
           stack.status("PUT", f"/messages/{post}/reactions/{key}/@me", token=world.owner["token"]) in (400, 404))
     # The reactions go by a job (`purgeCustomEmoji`), and then the emoji and its picture.
     check("its reactions are taken off, shortly after", eventually(
-        lambda: psql(f"SELECT count(*) FROM react WHERE custom_emoji = '{emoji}'", stack.database) == "0"))
+        lambda: stack.sql(f"SELECT count(*) FROM react WHERE custom_emoji = '{emoji}'") == "0"))
     check("and then it goes, with its picture", eventually(
-        lambda: psql(f"SELECT count(*) FROM custom_emoji WHERE id = '{emoji}'", stack.database) == "0"
-        and psql(f"SELECT count(*) FROM icon WHERE id = '{icon}'", stack.database) == "0"))
+        lambda: stack.sql(f"SELECT count(*) FROM custom_emoji WHERE id = '{emoji}'") == "0"
+        and stack.sql(f"SELECT count(*) FROM icon WHERE id = '{icon}'") == "0"))
 
 
 def plugin_removal(world: World, check: Checks) -> None:
@@ -3625,7 +3626,7 @@ def plugin_removal(world: World, check: Checks) -> None:
     later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 7200))
     world.as_owner("POST", events, {"title": "Never", "start": later})
     timers = f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'plugin' = '{CALENDAR_ID}'"
-    check("its event set a timer", psql(timers, stack.database) != "0")
+    check("its event set a timer", stack.sql(timers) != "0")
     world.stream.gather(0.5)
     stack.command("plugins", "remove", CALENDAR_ID, "--yes")
     check("removed, it is listed nowhere", eventually(
@@ -3640,8 +3641,8 @@ def plugin_removal(world: World, check: Checks) -> None:
           stack.status("GET", f"/communities/{world.community}/members/{principal}", token=world.owner["token"]) == 404)
     stack.command("plugins", "purge", CALENDAR_ID, "--yes")
     check("purging it deletes its timers and what it kept, shortly after", eventually(
-        lambda: psql(timers, stack.database) == "0"
-        and psql(f"SELECT count(*) FROM plugin_storage WHERE plugin = '{CALENDAR_ID}'", stack.database) == "0"))
+        lambda: stack.sql(timers) == "0"
+        and stack.sql(f"SELECT count(*) FROM plugin_storage WHERE plugin = '{CALENDAR_ID}'") == "0"))
 
 
 def join_messages(world: World, check: Checks) -> None:
@@ -3833,7 +3834,7 @@ def pins_of_deleted_messages(world: World, check: Checks) -> None:
     check("a fresh read of the channel's pins lacks it",
           all(p["messageId"] != pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)["data"]))
     check("and its row is gone, so the place it held among the channel's pins is free",
-          psql(f"SELECT count(*) FROM pin WHERE message_id = '{pinned}'", stack.database) == "0")
+          stack.sql(f"SELECT count(*) FROM pin WHERE message_id = '{pinned}'") == "0")
     check("another message is pinned after it",
           stack.status("PUT", f"/messages/{world.post(board, 'pinned next')}/pin", token=world.owner["token"]) == 201)
 
@@ -4019,7 +4020,7 @@ def scheduled_messages(world: World, check: Checks) -> None:
         return [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
 
     def jobs() -> int:
-        return int(psql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'", stack.database))
+        return int(stack.sql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'"))
 
     status, scheduled = schedule("see you tomorrow")
     check("a member schedules a message", status == 201 and scheduled.get("status") == "scheduled", (status, scheduled))
@@ -4141,7 +4142,7 @@ def speculative_sends(world: World, check: Checks) -> None:
         return [e["held"] for e in of(stream.gather(seconds), "heldMessageChanged") if e["held"]["id"] == held]
 
     def jobs() -> int:
-        return int(psql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'", stack.database))
+        return int(stack.sql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'"))
 
     settle()
     notes = reserve(b"first notes")
@@ -4301,9 +4302,8 @@ def speculative_sends(world: World, check: Checks) -> None:
 
     # Waiting for a file gives out, a day after it was sent: brought forward here.
     def give_out(held_id: str) -> None:
-        psql(f"UPDATE held_message SET uploads_due = now() WHERE id = '{held_id}'", stack.database)
-        psql(f"UPDATE job SET not_before = now() WHERE kind = 'releaseHeldMessage' AND key = '{held_id}'",
-             stack.database)
+        stack.sql(f"UPDATE held_message SET uploads_due = now() WHERE id = '{held_id}'")
+        stack.sql(f"UPDATE job SET not_before = now() WHERE kind = 'releaseHeldMessage' AND key = '{held_id}'")
 
     never = reserve(b"never arrives")
     _, stranded = send("its file never arrives", [never], awaitUploads=True)
@@ -4377,9 +4377,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check that changes to access reach everything already open.")
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
+    deployments.add_arguments(parser)
     parser.add_argument("--only", help="the scenarios to run, comma separated by name; every one when absent")
-    parser.add_argument("--media", choices=["s3", "directory"], default="s3",
-                        help="where the deployment keeps files: S3 (SeaweedFS), or a directory it serves itself")
+    parser.add_argument("--media", choices=["s3", "directory"],
+                        help="where the deployment keeps files: S3 (SeaweedFS), or a directory it serves itself; "
+                             "S3 for the full deployment and a directory for aspen-ul when not given")
     parser.add_argument("--shard", type=shard, default=(1, 1), metavar="K/N",
                         help="run the K-th of N parts of the scenarios (every N-th from the K-th), for runs "
                              "on N machines at once; the whole when absent")
@@ -4388,18 +4390,16 @@ def main() -> None:
     if only is not None and (unknown := only - {scenario.__name__ for scenario in SCENARIOS}):
         parser.error(f"--only names no scenario: {', '.join(sorted(unknown))}")
     part, parts = args.shard
-    if shutil.which("docker") is None:
+    if not args.ul and shutil.which("docker") is None:
         sys.exit("permissions: docker is required")
-    if args.start_services:
-        say("starting the database, Valkey, and SeaweedFS")
-        start_services()
-    wait_for_services(args.media)
+    deployments.prepare_services(args, args.start_services, args.media)
     dev_ca.authority()
     check = Checks()
     try:
-        say("starting a database and a NATS of its own, the chat server, and the voice server")
-        with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS, public_host="localhost",
-                   media=args.media) as stack:
+        say("starting aspen-ul" if args.ul else
+            "starting a database and a NATS of its own, the chat server, and the voice server")
+        with deployments.deployment(args, "permissions", PORTS, SETTINGS, public_host="localhost",
+                                    media=args.media) as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
             for index, scenario in enumerate(SCENARIOS):
                 if only is not None and scenario.__name__ not in only:

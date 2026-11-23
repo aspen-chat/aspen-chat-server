@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check real calls in real browsers against built servers.
 
-Runs a deployment of its own (`stack.py`), whose web client is a page made of the client's own
+Runs a deployment of its own (`stack.py`; with `--ul`, Aspen Ultra Lite, its voice server within
+it), whose web client is a page made of the client's own
 call code (`client/packages/protocol/calls/`), and drives two people's browsers through it with
 Playwright (`calls/drive.ts`): Ann in Chromium, Bob in Chromium and then in Firefox. Each hears
 the other's microphone on an audio slot; a camera reaches Bob only once he shows video; a shared
@@ -24,7 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from stack import Failed, Ports, Stack, clean_env, start_services, wait_for, wait_for_services
+import stack as deployments
+from stack import Deployment, Failed, Ports, clean_env, wait_for
 from web_client import PREVIEW_PICTURE
 
 REPO = Path(__file__).resolve().parent.parent
@@ -48,13 +50,13 @@ def build_page() -> None:
     shutil.copyfile(PREVIEW_PICTURE, PAGE / "open-graph.png")
 
 
-def person(stack: Stack, name: str) -> dict:
+def person(stack: Deployment, name: str) -> dict:
     stack.api("POST", "/users", {"name": name, "password": PASSWORD})
     signed = stack.api("POST", "/auth/login", {"username": name, "password": PASSWORD})
     return {key: signed[key] for key in ("userId", "sessionToken", "sessionTokenExpires", "refreshToken")}
 
 
-def calls(stack: Stack) -> None:
+def calls(stack: Deployment) -> None:
     run = os.getpid()
     ann = person(stack, f"ann{run}")
     bob = person(stack, f"bob{run}")
@@ -78,17 +80,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check real calls in real browsers.")
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
+    deployments.add_arguments(parser)
     args = parser.parse_args()
-    if shutil.which("docker") is None:
+    if not args.ul and shutil.which("docker") is None:
         sys.exit("calls: docker is required")
-    if args.start_services:
-        say("starting the database, Valkey, and SeaweedFS")
-        start_services()
     try:
         build_page()
-        wait_for_services()
-        say("starting a database and a NATS of its own, the chat server, and the voice server")
-        with Stack(args.bin.resolve(), "calls", PORTS, web_client=PAGE) as stack:
+        deployments.prepare_services(args, args.start_services)
+        say("starting aspen-ul" if args.ul else
+            "starting a database and a NATS of its own, the chat server, and the voice server")
+        with deployments.deployment(args, "calls", PORTS, web_client=PAGE) as stack:
             calls(stack)
         say("passed")
     except Failed as failure:

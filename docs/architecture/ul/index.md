@@ -24,6 +24,11 @@ than reading `aspen.toml` and connecting: UL writes the settings it derives as T
 a file's would be. `nats_url`, `nats_auth_token`, and `valkey_url`, which a server reaching those
 services needs, are given addresses under `.invalid` that are never read.
 
+Metrics are off unless `[server.metrics]` turns them on, and then the API server's exporter serves
+the whole process's: the voice server records into the same global recorder, and its samplers
+(`VoiceServer::spawn_metrics_samplers`) are started with it, so one endpoint holds both servers'
+figures.
+
 The voice server reports over the same bus, at an inbox under its own prefix
 (`voice_protocol::control::inbox_prefix`), so the API server answers its join-token key request
 exactly as it answers one from a voice server elsewhere. It is registered as the voice server named

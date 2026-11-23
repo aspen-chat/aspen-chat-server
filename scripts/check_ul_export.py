@@ -22,18 +22,15 @@ import json
 import os
 import shutil
 import socket
-import struct
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import device_credential  # noqa: E402
-from stack import Failed, Stack, clean_env, wait_for  # noqa: E402
+from stack import Failed, Reached, clean_env, fetch, png, put, wait_for  # noqa: E402
 from web_client import stand_in  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -53,45 +50,6 @@ PASSWORD = "export-check-password-1"
 
 def say(message: str) -> None:
     print(f"check_ul_export: {message}", flush=True)
-
-
-class Client:
-    """The parts of `stack.Stack` its request helpers read, at `base`."""
-
-    request = Stack.request
-    api = Stack.api
-    status = Stack.status
-
-    def __init__(self, base: str):
-        self._base = base
-        self.devices = device_credential.Devices()
-
-    @property
-    def base(self) -> str:
-        return self._base
-
-
-def png(width: int = 64, height: int = 48) -> bytes:
-    rows = b"".join(
-        b"\x00" + bytes(v for x in range(width) for v in (x * 4 & 0xFF, y * 5 & 0xFF, (x ^ y) & 0xFF))
-        for y in range(height)
-    )
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
-
-
-def put(url: str, body: bytes, content_type: str) -> None:
-    request = urllib.request.Request(url, data=body, method="PUT", headers={"content-type": content_type})
-    urllib.request.urlopen(request, timeout=30).close()
-
-
-def fetch(url: str) -> tuple[bytes, str]:
-    with urllib.request.urlopen(url, timeout=30) as response:
-        return response.read(), response.headers.get("content-type", "")
 
 
 def free(port: int) -> None:
@@ -195,7 +153,7 @@ class Check:
             f"[voice]\nmedia_port = {media}\ntransfer_port = {transfer}\nrelay_ports = [{relay_min}, {relay_max}]\n"
         )
 
-    def seed(self, client: Client) -> dict:
+    def seed(self, client: Reached) -> dict:
         """Data of many kinds, and what is read back after the move."""
         tokens = {}
         users = {}
@@ -243,7 +201,7 @@ class Check:
         wait_for("the picture's preview", lambda: self.preview_made(client, general, alice, message["id"]), 60)
         return {"token": alice, "channel": general, "message": message["id"], "note": note}
 
-    def preview_made(self, client: Client, channel: str, token: str, message: str) -> bool:
+    def preview_made(self, client: Reached, channel: str, token: str, message: str) -> bool:
         window = client.api("GET", f"/channels/{channel}/messages?around={message}&include=attachments", token=token)
         attachments = window.get("included", {}).get("attachments", [])
         return any(a.get("previewUrl") or a.get("preview") for a in attachments)
@@ -286,7 +244,7 @@ class Check:
         self.work.mkdir(parents=True)
         self.write_ul_config()
         server = self.spawn(self.ul(), "ul.log", self.work)
-        client = Client(self.base)
+        client = Reached(self.base)
         self.until("aspen-ul", lambda: client.status("GET", "/health") == 204, server, 120)
         seeded = self.seed(client)
         say("seeded Ultra Lite: accounts, a community, messages with a file and a picture, a reaction, a thread, a poll, a DM, an icon")
@@ -370,7 +328,7 @@ class Check:
         self.check_move_to_s3(client, seeded, before, served)
         say("passed")
 
-    def check_move_to_s3(self, client: Client, seeded: dict, before: dict, served: dict) -> None:
+    def check_move_to_s3(self, client: Reached, seeded: dict, before: dict, served: dict) -> None:
         """Ultra Lite keeping its files in object storage instead: refused to start while the data
         directory still holds them, then moved, then serving them from there."""
         urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{self.filer}/buckets/{UL_BUCKET}/", method="POST"),

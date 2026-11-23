@@ -3,6 +3,7 @@
 
     scripts/package_ul.py --arch x86_64        # or --arch aarch64
     scripts/package_ul.py --arch x86_64 --binary target/debug/aspen-ul --out aspen-ul
+    scripts/package_ul.py --arch x86_64 --postgres-only   # prints where it is
 
 The runtime is the bundled PostgreSQL (`pgsql/`) and the built web client (`web-client/`), a
 zstd-compressed tar the binary unpacks into its data directory on first start (`server/ul/src/
@@ -10,7 +11,9 @@ bundle.rs`, whose trailer this writes: the archive's SHA-256, its length as a li
 and the magic). PostgreSQL is built from source against the Debian 12 sysroot of
 `scripts/baseline_build.py`, so that it runs wherever the binary does, with only the extensions
 the migrations create, and pruned to what running, dumping, restoring, and `pg_upgrade` need; it
-is built once per version and architecture into `target/ul/<arch>/`. The binary is built by
+is built once per version and architecture into `target/ul/<arch>/`, which `--postgres-only`
+builds alone, for running a build of aspen-ul with `--runtime` (`scripts/stack.py`'s `UlStack`
+does). The binary is built by
 `baseline_build.py` unless `--binary` names one. The web client must already be built
 (`pnpm build` in `client/`).
 
@@ -110,11 +113,16 @@ def check_postgres(prefix: Path, paths: baseline.Paths) -> None:
                 baseline.fail(f"{path} needs glibc {major}.{minor}")
 
 
+def postgres_prefix(arch: str, version: str) -> Path:
+    """Where the pruned installation of `version` for `arch` is built."""
+    return UL / arch / f"postgresql-{version}" / "pgsql"
+
+
 def build_postgres(arch: str, version: str, jobs: int) -> Path:
     """The pruned installation of `version` for `arch`, built if it is not yet."""
     paths = baseline.Paths(arch, "bookworm")
-    root = UL / arch / f"postgresql-{version}"
-    prefix = root / "pgsql"
+    prefix = postgres_prefix(arch, version)
+    root = prefix.parent
     done = root / ".built"
     if done.exists():
         return prefix
@@ -222,15 +230,20 @@ def main() -> None:
     parser.add_argument("--binary", type=Path, help="an aspen-ul to pack instead of building one")
     parser.add_argument("--web-client", type=Path, default=WEB_CLIENT, help=f"the built web client ({WEB_CLIENT})")
     parser.add_argument("--out", type=Path, help="where to write it (target/ul/<arch>/aspen-ul)")
+    parser.add_argument("--postgres-only", action="store_true",
+                        help="build PostgreSQL alone, printing where its installation is")
     parser.add_argument("-j", "--jobs", type=int, default=8, help="parallel jobs for make and cargo")
     parser.add_argument(
         "--postgres-version", default=POSTGRES_VERSION, help=f"the PostgreSQL to bundle ({POSTGRES_VERSION})"
     )
     args = parser.parse_args()
-    for tool in ("make", "patchelf", "zstd"):
+    for tool in ("make", "patchelf", *([] if args.postgres_only else ["zstd"])):
         if shutil.which(tool) is None:
             baseline.fail(f"missing tool: {tool}")
     postgres = build_postgres(args.arch, args.postgres_version, args.jobs)
+    if args.postgres_only:
+        print(postgres)
+        return
     binary = args.binary
     if binary is None:
         paths = baseline.Paths(args.arch, "bookworm")
