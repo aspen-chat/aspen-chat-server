@@ -1,6 +1,10 @@
-//! Plain HTTP, answered only with a permanent redirect to the same path at the deployment's
-//! address over HTTPS: to `media_url` for a request naming its host, to `public_url` for any
-//! other, so the redirect never leads anywhere the request's `Host` alone chose.
+//! Plain HTTP, answered with a permanent redirect to the same path at the deployment's address
+//! over HTTPS: to `media_url` for a request naming its host, to `public_url` for any other, so the
+//! redirect never leads anywhere the request's `Host` alone chose.
+//!
+//! The API's requests and the voice server's are refused instead. A client set up with an
+//! `http://` address would follow a redirect and go on working, sending its token in the clear
+//! ahead of every request, where a refusal fails the first time it is tried.
 
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
@@ -38,11 +42,35 @@ impl Redirect {
     }
 
     pub fn router(self) -> axum::Router {
-        axum::Router::new().fallback(move |headers: HeaderMap, uri: Uri| {
-            let location = self.location(&headers, &uri);
-            async move { redirect(location) }
-        })
+        axum::Router::new()
+            .fallback(move |headers: HeaderMap, uri: Uri| {
+                let refused = refused(&uri).then(|| self.public_url.clone());
+                let location = self.location(&headers, &uri);
+                async move {
+                    match refused {
+                        Some(public_url) => aspen_api::error::ApiError::new(
+                            aspen_api::error::ProblemCode::Forbidden,
+                        )
+                        .with_detail(crate::t!("plainHttpRefused", url = public_url))
+                        .into_response(),
+                        None => redirect(location),
+                    }
+                }
+            })
+            .layer(axum::middleware::from_fn(aspen_app::locale::layer))
     }
+}
+
+/// Where every version of the API is served (`aspen_api::API_PREFIX` is this one's).
+const API: &str = "/api";
+
+/// Whether `uri` is the API's or the voice server's, which carry tokens and so are refused.
+fn refused(uri: &Uri) -> bool {
+    [API, crate::VOICE_PATH].iter().any(|prefix| {
+        uri.path()
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
 }
 
 fn redirect(location: String) -> Response {
@@ -98,6 +126,17 @@ mod tests {
             location(&redirect, "elsewhere.example", "/x"),
             "https://chat.example.org/x"
         );
+        for path in [
+            "/api/v1/health",
+            "/api/v1/events",
+            "/voice-server/ws",
+            "/api",
+        ] {
+            assert!(refused(&path.parse().unwrap()), "{path}");
+        }
+        for path in ["/apiary", "/", "/invite/x", "/voice-servers"] {
+            assert!(!refused(&path.parse().unwrap()), "{path}");
+        }
         let without_media = Redirect::new("https://chat.example.org", None);
         assert_eq!(
             location(&without_media, "media.chat.example.org", "/"),

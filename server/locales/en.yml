@@ -12,6 +12,7 @@ usernameFixed: "A username can't be changed once the account is made. Change you
 messageFilesFixed: "Files can't be added to or swapped in a sent message. Remove a file, or send the new one in a message of its own."
 problemUnauthorized: "You must be logged in to do that."
 problemForbidden: "You are not allowed to do that."
+plainHttpRefused: "This deployment answers over HTTPS only: use %{url}. Whatever was sent with this request, a session or bot token included, crossed the network unencrypted, so replace it."
 problemNotFound: "The requested item does not exist."
 problemConflict: "The request conflicts with the current state."
 problemInvalidCredentials: "Incorrect username or password."

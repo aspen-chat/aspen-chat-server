@@ -12,6 +12,7 @@ usernameFixed: "El nombre de usuario no se puede cambiar una vez creada la cuent
 messageFilesFixed: "No se pueden agregar ni reemplazar archivos en un mensaje ya enviado. Quita un archivo, o envía el nuevo en un mensaje aparte."
 problemUnauthorized: "Debes iniciar sesión para hacer eso."
 problemForbidden: "No tienes permiso para hacer eso."
+plainHttpRefused: "Este servidor solo responde por HTTPS: usa %{url}. Todo lo que se envió con esta solicitud, incluido un token de sesión o de bot, viajó por la red sin cifrar, así que reemplázalo."
 problemNotFound: "El elemento solicitado no existe."
 problemConflict: "La solicitud entra en conflicto con el estado actual."
 problemInvalidCredentials: "Nombre de usuario o contraseña incorrectos."

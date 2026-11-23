@@ -79,9 +79,12 @@ renewed two thirds through its lifetime, and at once when it does not name every
 least every twelve hours; a failed issuance is retried after a minute, doubling to six hours, since
 authorities limit failed validations.
 
-With TLS on, `redirect_port` (80, or 0 for none) answers plain HTTP with a permanent redirect to the
-same path at `public_url`, or at `media_url` for a request naming its host (`redirect.rs`); the
-redirect is to the deployment's own address whatever the `Host` says.
+With TLS on, `redirect_port` (80, or 0 for none) answers plain HTTP (`redirect.rs`): a page with a
+permanent redirect to the same path at `public_url`, or at `media_url` for a request naming its
+host, whatever else the `Host` says; and anything under `/api` or the voice server's path with `403`
+`forbidden`, whose detail says the request crossed the network unencrypted. A client set up with an
+`http://` address would follow a redirect and go on working, sending its token in the clear ahead of
+every request, where a refusal fails the first time it is tried.
 
 ## PostgreSQL's major versions
 
@@ -169,6 +172,18 @@ and every secret are in the database, so they come back with it.
 Before a start applies migrations to a database that already has some, UL dumps it to
 `backups/before-migrating-<time>.dump`, keeping the newest three, so a failed upgrade can be undone
 with the binary before it.
+
+## Doctor
+
+`aspen-ul doctor` (`doctor.rs`) says what stands between the machine and a working deployment, each
+problem with what to do about it, and exits non-zero when there is any: the machine's memory, free
+disk, and whether the data is on an SD card; whether the deployment runs and answers at its port
+(asked of this machine under the deployment's name), and the certificate it holds; the machine's
+public addresses (Cloudflare's `cdn-cgi/trace` at 1.1.1.1 and its IPv6 twin, as the Box asks),
+whether it is behind a router, the ports a router must forward, and an `announced_address` that does
+not name them; each name's `A` and `AAAA` records; and, once every name points here, HTTPS at each
+name with a certificate browsers accept and plain HTTP's redirect and refusal. Whether the internet
+reaches the media ports, which only a call shows, it leaves to the operator.
 
 ## Operator commands
 

@@ -8,10 +8,13 @@
 //! database's socket and the control socket commands reach the bus through; and `runtime/`, the
 //! bundled PostgreSQL and web client, unpacked from the binary ([`bundle`]).
 
+use aspen_locale::{_rust_i18n_try_translate, t};
+
 mod acme;
 mod backup;
 mod bundle;
 mod config;
+mod doctor;
 mod postgres;
 mod redirect;
 mod setup;
@@ -75,6 +78,8 @@ enum UlCommand {
         /// An empty or absent directory, which the backup is written into.
         dir: PathBuf,
     },
+    /// Say what stands between this machine and a working deployment, and what to do about each.
+    Doctor,
     /// Replace the deployment with a backup, with the deployment stopped. What the data
     /// directory held is moved into `replaced-<time>/` within it.
     Restore {
@@ -119,6 +124,7 @@ fn main() {
             | UlCommand::Init(_)
             | UlCommand::Backup { .. }
             | UlCommand::Restore { .. }
+            | UlCommand::Doctor
             | UlCommand::Operator(_),
         ) => setup::become_owner(&opt.data).map(|()| true),
     };
@@ -222,6 +228,11 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
             | UlCommand::Backup { .. }
             | UlCommand::Operator(_),
         ) => None,
+        Some(UlCommand::Doctor) => {
+            let data = std::fs::canonicalize(&opt.data)?;
+            let config = config::Config::read(&data.join("aspen-ul.toml"))?;
+            return doctor::doctor(&config, &data).await;
+        }
     };
     let config_path = opt.data.join("aspen-ul.toml");
     let config = config::Config::read(&config_path)?;
@@ -248,7 +259,12 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
         return Ok(());
     }
     match opt.command {
-        Some(UlCommand::Install(_) | UlCommand::Init(_) | UlCommand::Restore { .. }) => Ok(()),
+        Some(
+            UlCommand::Install(_)
+            | UlCommand::Init(_)
+            | UlCommand::Restore { .. }
+            | UlCommand::Doctor,
+        ) => Ok(()),
         Some(UlCommand::Backup { dir }) => {
             if aspen_bus::Remote::connect(&control_socket(&data))
                 .await
