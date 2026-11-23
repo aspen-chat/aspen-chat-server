@@ -28,6 +28,13 @@ use crate::CHACHA_RNG;
 /// The type an object is served with when its record does not say.
 const UNKNOWN_TYPE: &str = "application/octet-stream";
 
+/// A file in the store's directory that every removal of an object (deleting it, or moving it to
+/// another key) holds a shared lock on while it removes, and that `aspen-ul backup` locks
+/// exclusively while it links the objects its database snapshot may name, so none of them is
+/// removed between the snapshot and the links. Links take seconds where copying could take
+/// hours, so removals wait no longer than that.
+pub const REMOVALS_LOCK: &str = "removals.lock";
+
 /// What is kept beside an object.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -444,8 +451,26 @@ impl Directory {
             .map(|_| bytes))
     }
 
+    /// A shared lock on [`REMOVALS_LOCK`], held until it is dropped.
+    async fn removing(&self) -> crate::Result<std::fs::File> {
+        let path = self.root.join(REMOVALS_LOCK);
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path)?;
+            file.lock_shared()?;
+            Ok::<_, std::io::Error>(file)
+        })
+        .await
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+        .map_err(io)
+    }
+
     pub(crate) async fn delete(&self, key: &str) -> crate::Result<()> {
         let (object, record) = self.paths(key)?;
+        let _removing = self.removing().await?;
         for path in [object, record] {
             match tokio::fs::remove_file(&path).await {
                 Ok(()) => {}
@@ -463,6 +488,7 @@ impl Directory {
     pub(crate) async fn move_object(&self, from: &str, to: &str) -> crate::Result<bool> {
         let (from_object, from_record) = self.paths(from)?;
         let (to_object, to_record) = self.paths(to)?;
+        let _removing = self.removing().await?;
         for path in [&to_object, &to_record] {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(io)?;
@@ -533,6 +559,35 @@ mod tests {
             content_type: kind.to_string(),
             disposition: Some("inline".to_string()),
         }
+    }
+
+    #[tokio::test]
+    async fn removals_wait_while_a_backup_holds_the_lock() {
+        let (root, store) = store(StdDuration::from_secs(60)).await;
+        for key in ["attachments/a", "attachments/b"] {
+            store.put_bytes(key, vec![1], "text/plain").await.unwrap();
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.path().join(REMOVALS_LOCK))
+            .unwrap();
+        lock.lock().unwrap();
+        let removing = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store.delete("attachments/a").await.unwrap();
+                store.move_object("attachments/b", "evidence/b").await.unwrap()
+            }
+        });
+        tokio::time::sleep(StdDuration::from_millis(300)).await;
+        assert!(!removing.is_finished());
+        assert_eq!(store.head_object("attachments/a").await.unwrap(), Some(1));
+        drop(lock);
+        assert!(removing.await.unwrap());
+        assert_eq!(store.head_object("attachments/a").await.unwrap(), None);
+        assert_eq!(store.head_object("evidence/b").await.unwrap(), Some(1));
     }
 
     #[tokio::test]

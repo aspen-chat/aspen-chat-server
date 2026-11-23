@@ -101,7 +101,8 @@ impl Postgres {
         )
     }
 
-    fn command(&self, program: &str) -> Command {
+    /// A program of the bundled PostgreSQL's, run with no locale of the machine's.
+    pub fn tool(&self, program: &str) -> Command {
         let mut command = Command::new(self.bin.join(program));
         // The cluster's locale is its own; the machine's is never read.
         command.env_remove("LANG").env("LC_ALL", "C");
@@ -116,7 +117,7 @@ impl Postgres {
         tracing::info!(cluster = %self.cluster.display(), "making the database cluster");
         tokio::fs::create_dir_all(&self.cluster).await?;
         let made = self
-            .command("initdb")
+            .tool("initdb")
             .arg("--pgdata")
             .arg(&self.cluster)
             .args(["--username", &self.user, "--auth=peer", "--encoding=UTF8"])
@@ -185,7 +186,7 @@ impl Postgres {
             ("io_workers", "1".to_string()),
             ("huge_pages", "off".to_string()),
         ];
-        let mut command = self.command("postgres");
+        let mut command = self.tool("postgres");
         command.arg("-D").arg(&self.cluster);
         for (name, value) in settings {
             command.arg("-c").arg(format!("{name}={value}"));
@@ -218,7 +219,7 @@ impl Postgres {
                 );
             }
             let ready = self
-                .command("pg_isready")
+                .tool("pg_isready")
                 .arg("--quiet")
                 .arg("--host")
                 .arg(&self.socket_dir)

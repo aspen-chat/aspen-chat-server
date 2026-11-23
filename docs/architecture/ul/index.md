@@ -39,6 +39,7 @@ Everything the deployment keeps is in the directory `--data` names:
 | `aspen-ul.toml` | What the operator says (`config.rs`)                                                          |
 | `postgres/18/`  | The cluster, made on first start with every locale category `C.UTF-8` of the builtin provider |
 | `media/`        | The files (see [Directory storage](../../operators/configuration/media.md#mediadirectory))    |
+| `backups/`      | Dumps made before applying migrations, the newest three, and a backup's staging while it runs |
 | `acme/`         | The ACME account, and the certificate and its key, readable by UL's user alone                |
 | `logs/`         | PostgreSQL's log                                                                              |
 | `run/`          | PostgreSQL's socket and the control socket, readable by UL's user alone                       |
@@ -106,6 +107,53 @@ gone.
 A restart empties the bus and the short-lived store. What correctness or security needs kept is in
 PostgreSQL (`used_once`, `attempt_count`), and the bus's sequences start above any an earlier run
 gave, so a client resuming from one reloads rather than resuming into the wrong place.
+
+## Installing
+
+`aspen-ul install`, as root (`setup.rs`), makes the system user `aspen-ul`, its data directory
+(`/var/lib/aspen-ul`, mode 0750), copies the binary to `/usr/local/bin/aspen-ul`, and writes a
+systemd unit that runs it as that user, with `CAP_NET_BIND_SERVICE` alone (ports 80 and 443) and the
+filesystem read-only but for the data directory. The unit stops UL with SIGTERM to UL alone
+(`KillMode=mixed`), which stops PostgreSQL itself, and restarts it when it fails; a PostgreSQL that
+stops makes UL stop, so the unit restarts both. Run again, `install` replaces the binary and
+restarts the deployment, which is how it is upgraded.
+
+Started as root for anything else, UL becomes the user that owns the data directory before any
+thread starts, so `sudo aspen-ul <command>` reads and writes as the deployment does; it refuses a
+data directory root owns.
+
+`aspen-ul init --domain` writes `aspen-ul.toml`, asking for the domain again (or `--yes`), since it
+can never change. `public_url` is always `https://` and the domain alone: people reach the
+deployment at 443, whether through a router forwarding it or, with `--tls off`, a proxy on the
+machine, which then reaches UL at `--port` on loopback. With `--invite-only` it makes creating an
+account take an invite and makes one for the first administrator, printing its `/register?invite=`
+link.
+
+## Backups
+
+`aspen-ul backup DIR` writes the whole deployment into a directory of its own, mode 0700 since the
+dump holds the deployment's secrets, while it runs (`backup.rs`): `database.dump`
+(`pg_dump --format=custom --no-owner --no-privileges`), `media/`, `aspen-ul.toml`, `acme/`, and
+`backup.json`, written last. Files kept in S3 are not in it.
+
+The files and the database are taken at one moment. The command opens a repeatable-read transaction
+and exports its snapshot, then takes `media/removals.lock` exclusively, which every removal of a
+file in directory storage (`delete`, `move_object`) holds shared while it removes
+(`media_store::directory::REMOVALS_LOCK`), hard-links every object and record into
+`backups/.staging-<pid>/`, and lets go. Only then does `pg_dump --snapshot` dump that snapshot, and
+the staged files move into the backup, copied if it is on another filesystem. So no file the
+snapshot names can be removed before it is linked, and removals wait only as long as linking takes.
+A file written after the snapshot may be among them, one no row names. Files are only ever written
+to a scratch name and renamed, so a link never sees a file change.
+
+`aspen-ul restore DIR` refuses while the deployment runs. It moves the data directory's
+`aspen-ul.toml`, `postgres/`, `media/`, and `acme/` into `replaced-<time>/`, copies the backup's in,
+makes a new cluster, and restores the dump into it in one transaction. Sessions, the federation key,
+and every secret are in the database, so they come back with it.
+
+Before a start applies migrations to a database that already has some, UL dumps it to
+`backups/before-migrating-<time>.dump`, keeping the newest three, so a failed upgrade can be undone
+with the binary before it.
 
 ## Operator commands
 

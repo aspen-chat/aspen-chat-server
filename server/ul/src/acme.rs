@@ -361,9 +361,13 @@ fn parse(chain_pem: &[u8], key_pem: &[u8]) -> Result<(Arc<CertifiedKey>, Held)> 
                 .value
                 .general_names
                 .iter()
-                .filter_map(|name| match name {
-                    x509_parser::extensions::GeneralName::DNSName(name) => Some(name.to_string()),
-                    _ => None,
+                // Only DNS names are ever asked for, so only they are compared.
+                .filter_map(|name| {
+                    if let x509_parser::extensions::GeneralName::DNSName(name) = name {
+                        Some(name.to_string())
+                    } else {
+                        None
+                    }
                 })
                 .collect()
         })

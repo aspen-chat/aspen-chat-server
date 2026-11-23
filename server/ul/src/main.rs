@@ -9,10 +9,12 @@
 //! bundled PostgreSQL and web client, unpacked from the binary ([`bundle`]).
 
 mod acme;
+mod backup;
 mod bundle;
 mod config;
 mod postgres;
 mod redirect;
+mod setup;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -62,6 +64,23 @@ struct Opt {
 enum UlCommand {
     /// Serve the deployment, which is what aspen-ul does given no command.
     Serve,
+    /// Install aspen-ul on this machine, as root: the user it runs as, its data directory, the
+    /// binary, and a systemd unit starting it at boot. Run again to upgrade.
+    Install(setup::InstallArgs),
+    /// Describe a new deployment in the data directory's aspen-ul.toml.
+    Init(setup::InitArgs),
+    /// Back the whole deployment up into a directory of its own, while it runs: its database,
+    /// files, configuration, and certificate.
+    Backup {
+        /// An empty or absent directory, which the backup is written into.
+        dir: PathBuf,
+    },
+    /// Replace the deployment with a backup, with the deployment stopped. What the data
+    /// directory held is moved into `replaced-<time>/` within it.
+    Restore {
+        /// A directory `aspen-ul backup` wrote.
+        dir: PathBuf,
+    },
     /// An operator command of `aspen-chat-server`'s, run against this deployment: through the
     /// running deployment's bus when it runs, so that what it changes reaches everyone connected.
     #[command(flatten)]
@@ -75,8 +94,9 @@ fn control_socket(data: &Path) -> PathBuf {
 
 fn main() {
     let opt = Opt::parse();
-    // An operator command's answer is its standard output, so its logs go to standard error.
-    let to_stderr = matches!(opt.command, Some(UlCommand::Operator(_)));
+    // A command's answer is its standard output, so its logs go to standard error; the server's go
+    // to standard output, which its supervisor keeps.
+    let to_stderr = !matches!(opt.command, None | Some(UlCommand::Serve));
     tracing_subscriber::fmt()
         .with_writer(move || -> Box<dyn std::io::Write> {
             if to_stderr {
@@ -91,6 +111,25 @@ fn main() {
         )
         .init();
     std::panic::set_hook(Box::new(tracing_panic::panic_hook));
+    let prepared = match &opt.command {
+        Some(UlCommand::Install(args)) => setup::install(&opt.data, args).map(|()| false),
+        None
+        | Some(
+            UlCommand::Serve
+            | UlCommand::Init(_)
+            | UlCommand::Backup { .. }
+            | UlCommand::Restore { .. }
+            | UlCommand::Operator(_),
+        ) => setup::become_owner(&opt.data).map(|()| true),
+    };
+    match prepared {
+        Ok(true) => {}
+        Ok(false) => std::process::exit(0),
+        Err(e) => {
+            error!("{e:#}");
+            std::process::exit(1);
+        }
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(RUNTIME_THREAD_STACK)
@@ -149,14 +188,41 @@ fn quoted(text: &str) -> String {
 /// Runs the deployment, leaving in `database` the PostgreSQL it started, for `main` to stop once
 /// nothing uses it.
 async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
-    // SAFETY: geteuid has no preconditions.
-    if unsafe { libc::geteuid() } == 0 {
-        bail!(
-            "aspen-ul does not run as root, and neither does PostgreSQL: run it as a user of its \
-             own that owns {}",
-            opt.data.display()
-        );
-    }
+    let first_invite = match &opt.command {
+        Some(UlCommand::Init(args)) => {
+            let public_url = setup::init(&opt.data, args)?;
+            if !args.invite_only {
+                println!(
+                    "next: start the deployment (sudo systemctl start aspen-ul), create your \
+                     account at {public_url}/register, and make it the administrator with \
+                     `sudo aspen-ul admin grant <username>`"
+                );
+                return Ok(());
+            }
+            Some(public_url)
+        }
+        Some(UlCommand::Restore { dir }) => {
+            let data = std::fs::canonicalize(&opt.data)?;
+            if aspen_bus::Remote::connect(&control_socket(&data))
+                .await
+                .is_ok()
+            {
+                bail!("the deployment is running; stop it first (sudo systemctl stop aspen-ul)");
+            }
+            let runtime = match &opt.runtime {
+                Some(runtime) => std::fs::canonicalize(runtime)?,
+                None => bundle::unpacked(&data)?,
+            };
+            return backup::restore(&runtime, &data, dir).await;
+        }
+        None
+        | Some(
+            UlCommand::Serve
+            | UlCommand::Install(_)
+            | UlCommand::Backup { .. }
+            | UlCommand::Operator(_),
+        ) => None,
+    };
     let config_path = opt.data.join("aspen-ul.toml");
     let config = config::Config::read(&config_path)?;
     let memory = memory_mib(config.memory_mib)?;
@@ -169,7 +235,34 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
     };
 
     let mut postgres = postgres::Postgres::new(&runtime, &data)?;
+    if let Some(public_url) = first_invite {
+        postgres.start(sizes).await?;
+        let made = first_invite_link(&config, &runtime, &data, &postgres, sizes, &public_url).await;
+        *database = postgres.running();
+        let link = made?;
+        println!(
+            "creating an account now takes an invite. Next: start the deployment (sudo systemctl \
+             start aspen-ul), create your account at {link}, and make it the administrator with \
+             `sudo aspen-ul admin grant <username>`"
+        );
+        return Ok(());
+    }
     match opt.command {
+        Some(UlCommand::Install(_) | UlCommand::Init(_) | UlCommand::Restore { .. }) => Ok(()),
+        Some(UlCommand::Backup { dir }) => {
+            if aspen_bus::Remote::connect(&control_socket(&data))
+                .await
+                .is_ok()
+            {
+                // The deployment runs, and so does its database.
+                backup::backup(&config, &data, &postgres, &dir).await
+            } else {
+                postgres.start(sizes).await?;
+                let made = backup::backup(&config, &data, &postgres, &dir).await;
+                *database = postgres.running();
+                made
+            }
+        }
         None | Some(UlCommand::Serve) => {
             info!(memory_mib = memory, pool = sizes.pool, "starting");
             postgres.start(sizes).await?;
@@ -190,6 +283,7 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
                 // reaches no one, since no one is connected to hear it.
                 Err(_) => {
                     postgres.start(sizes).await?;
+                    migrate(&postgres).await?;
                     aspen_app::aspen_config::use_process_bus(aspen_bus::Bus::Memory(
                         aspen_bus::Memory::new(None),
                     ));
@@ -201,6 +295,59 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
             }
         }
     }
+}
+
+/// Applies every migration this binary holds that the database lacks.
+async fn migrate(database: &postgres::Postgres) -> Result<()> {
+    let mut conn = aspen_app::database::connect(&database.url(postgres::DATABASE)).await?;
+    aspen_migrate::migration::lock(&mut conn).await?;
+    aspen_migrate::migration::up::run_up(&mut conn, aspen_migrate::registry::MIGRATIONS).await?;
+    Ok(())
+}
+
+/// An operator command, as typed after `aspen-ul`.
+#[derive(Parser)]
+struct OperatorLine {
+    #[command(subcommand)]
+    command: aspen_chat_server::Command,
+}
+
+/// Makes creating an account take an invite, and makes one for the first administrator,
+/// returning the link that registers with it.
+async fn first_invite_link(
+    config: &config::Config,
+    runtime: &Path,
+    data: &Path,
+    database: &postgres::Postgres,
+    sizes: postgres::Sizes,
+    public_url: &str,
+) -> Result<String> {
+    migrate(database).await?;
+    aspen_app::aspen_config::use_process_bus(aspen_bus::Bus::Memory(aspen_bus::Memory::new(None)));
+    let server_config = server_config(config, runtime, data, database, sizes)?;
+    let line = OperatorLine::try_parse_from([
+        "aspen-ul",
+        "settings",
+        "set",
+        "--registration-invite-required",
+        "true",
+    ])?;
+    aspen_chat_server::run_command_with(&server_config, line.command).await?;
+    let mut conn = aspen_app::database::connect(&database.url(postgres::DATABASE)).await?;
+    let invite = aspen_app::registration_invite::create(
+        &mut conn,
+        None,
+        aspen_app::registration_invite::Terms {
+            max_uses: 1,
+            expires_in: None,
+            note: Some("The first administrator's".to_string()),
+        },
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("could not make the first administrator's invite: {e}"))?;
+    let mut link = url::Url::parse(public_url)?.join("/register")?;
+    link.query_pairs_mut().append_pair("invite", &invite.code);
+    Ok(link.to_string())
 }
 
 /// The API server's configuration: what UL derives from `config`, the machine, and where it keeps
@@ -262,12 +409,8 @@ async fn serve(
     sizes: postgres::Sizes,
     memory: u64,
 ) -> Result<()> {
-    {
-        let mut conn = aspen_app::database::connect(&database.url(postgres::DATABASE)).await?;
-        aspen_migrate::migration::lock(&mut conn).await?;
-        aspen_migrate::migration::up::run_up(&mut conn, aspen_migrate::registry::MIGRATIONS)
-            .await?;
-    }
+    backup::dump_before_migrating(data, database).await?;
+    migrate(database).await?;
     let server_config = server_config(config, runtime, data, database, sizes)?;
     let share = in_process_share(memory);
     let bus = aspen_bus::Memory::new(Some(share));
