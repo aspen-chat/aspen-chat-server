@@ -9,6 +9,7 @@
 
 mod memory;
 mod nats;
+pub mod remote;
 
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
@@ -20,6 +21,7 @@ use futures_util::Stream;
 
 pub use memory::{Memory, MemoryBucket};
 pub use nats::Nats;
+pub use remote::Remote;
 
 /// A connection to the message bus. Cheap to clone; every clone shares the connection.
 #[derive(Clone)]
@@ -27,6 +29,8 @@ pub enum Bus {
     Nats(Nats),
     /// The bus inside this process, for a deployment that is one server.
     Memory(Memory),
+    /// Another process's memory bus, for a command run beside that one server.
+    Remote(Remote),
 }
 
 /// What went wrong on the bus.
@@ -333,6 +337,7 @@ impl Stream for Watch {
 pub enum Bucket {
     Nats(Box<async_nats::jetstream::kv::Store>),
     Memory(std::sync::Arc<MemoryBucket>),
+    Remote(Remote, BucketConfig),
 }
 
 impl Bus {
@@ -341,6 +346,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.connected(),
             Bus::Memory(memory) => memory.connected(),
+            Bus::Remote(_) => true,
         }
     }
 
@@ -349,6 +355,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.publish(subject.into(), payload).await,
             Bus::Memory(memory) => memory.publish(subject.into(), payload).await,
+            Bus::Remote(remote) => remote.publish(subject.into(), payload).await,
         }
     }
 
@@ -357,6 +364,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.flush().await,
             Bus::Memory(memory) => memory.flush().await,
+            Bus::Remote(_) => Ok(()),
         }
     }
 
@@ -364,6 +372,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.subscribe(subject.into(), None).await,
             Bus::Memory(memory) => memory.subscribe(subject.into(), None).await,
+            Bus::Remote(_) => Err(remote::refused("subscribing")),
         }
     }
 
@@ -376,6 +385,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.subscribe(subject.into(), Some(group.into())).await,
             Bus::Memory(memory) => memory.subscribe(subject.into(), Some(group.into())).await,
+            Bus::Remote(_) => Err(remote::refused("subscribing")),
         }
     }
 
@@ -384,6 +394,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.request(subject.into(), payload).await,
             Bus::Memory(memory) => memory.request(subject.into(), payload).await,
+            Bus::Remote(_) => Err(remote::refused("asking")),
         }
     }
 
@@ -405,6 +416,11 @@ impl Bus {
                     .publish_to_stream(subject.into(), headers, payload)
                     .await
             }
+            Bus::Remote(remote) => {
+                remote
+                    .publish_to_stream(subject.into(), headers, payload)
+                    .await
+            }
         }
     }
 
@@ -413,6 +429,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.create_or_update_stream(config).await,
             Bus::Memory(memory) => memory.create_or_update_stream(config).await,
+            Bus::Remote(remote) => remote.create_or_update_stream(config).await,
         }
     }
 
@@ -421,6 +438,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.stream_info(name).await,
             Bus::Memory(memory) => memory.stream_info(name).await,
+            Bus::Remote(remote) => remote.stream_info(name).await,
         }
     }
 
@@ -429,6 +447,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.purge(stream, filter.into()).await,
             Bus::Memory(memory) => memory.purge(stream, filter.into()).await,
+            Bus::Remote(remote) => remote.purge(stream, filter.into()).await,
         }
     }
 
@@ -438,6 +457,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.ordered(stream, start).await,
             Bus::Memory(memory) => memory.ordered(stream, start).await,
+            Bus::Remote(_) => Err(remote::refused("reading a stream")),
         }
     }
 
@@ -446,6 +466,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.durable(stream, config).await,
             Bus::Memory(memory) => memory.durable(stream, config).await,
+            Bus::Remote(_) => Err(remote::refused("reading a stream")),
         }
     }
 
@@ -454,6 +475,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.account_memory().await,
             Bus::Memory(memory) => memory.account_memory().await,
+            Bus::Remote(remote) => remote.account_memory().await,
         }
     }
 
@@ -462,6 +484,7 @@ impl Bus {
         match self {
             Bus::Nats(nats) => nats.bucket(config).await,
             Bus::Memory(memory) => memory.bucket(config).await,
+            Bus::Remote(remote) => Ok(Bucket::Remote(remote.clone(), config)),
         }
     }
 }
@@ -471,6 +494,7 @@ impl Bucket {
         match self {
             Bucket::Nats(store) => nats::get(store, key).await,
             Bucket::Memory(bucket) => bucket.get(key),
+            Bucket::Remote(remote, config) => remote.bucket_get(config, key).await,
         }
     }
 
@@ -478,6 +502,7 @@ impl Bucket {
         match self {
             Bucket::Nats(store) => nats::put(store, key, value).await,
             Bucket::Memory(bucket) => bucket.put(key, value),
+            Bucket::Remote(remote, config) => remote.bucket_put(config, key, value).await,
         }
     }
 
@@ -486,6 +511,7 @@ impl Bucket {
         match self {
             Bucket::Nats(store) => nats::purge(store, key).await,
             Bucket::Memory(bucket) => bucket.purge(key),
+            Bucket::Remote(remote, config) => remote.bucket_purge(config, key).await,
         }
     }
 
@@ -494,6 +520,7 @@ impl Bucket {
         match self {
             Bucket::Nats(store) => nats::keys(store).await,
             Bucket::Memory(bucket) => bucket.keys(),
+            Bucket::Remote(remote, config) => remote.bucket_keys(config).await,
         }
     }
 
@@ -501,6 +528,7 @@ impl Bucket {
         match self {
             Bucket::Nats(store) => nats::watch(store, key).await,
             Bucket::Memory(bucket) => bucket.watch(key),
+            Bucket::Remote(..) => Err(remote::refused("watching a bucket")),
         }
     }
 }

@@ -49,11 +49,37 @@ struct Opt {
     /// The runtime: the bundled PostgreSQL (`pgsql/`) and the web client (`web-client/`).
     #[arg(long)]
     runtime: PathBuf,
+    #[command(subcommand)]
+    command: Option<UlCommand>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum UlCommand {
+    /// Serve the deployment, which is what aspen-ul does given no command.
+    Serve,
+    /// An operator command of `aspen-chat-server`'s, run against this deployment: through the
+    /// running deployment's bus when it runs, so that what it changes reaches everyone connected.
+    #[command(flatten)]
+    Operator(aspen_chat_server::Command),
+}
+
+/// Where the running deployment serves its bus to commands, in the data directory's `run/`.
+fn control_socket(data: &Path) -> PathBuf {
+    data.join("run").join("control.sock")
 }
 
 fn main() {
     let opt = Opt::parse();
+    // An operator command's answer is its standard output, so its logs go to standard error.
+    let to_stderr = matches!(opt.command, Some(UlCommand::Operator(_)));
     tracing_subscriber::fmt()
+        .with_writer(move || -> Box<dyn std::io::Write> {
+            if to_stderr {
+                Box::new(std::io::stderr())
+            } else {
+                Box::new(std::io::stdout())
+            }
+        })
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("ASPEN_LOG")
                 .unwrap_or_else(|_| "info,str0m=warn".into()),
@@ -133,29 +159,51 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
     let runtime = std::fs::canonicalize(&opt.runtime)
         .with_context(|| format!("the runtime {} is not there", opt.runtime.display()))?;
     let data = std::fs::canonicalize(&opt.data)?;
-    info!(memory_mib = memory, pool = sizes.pool, "starting");
 
     let mut postgres = postgres::Postgres::new(&runtime, &data)?;
-    postgres.start(sizes).await?;
-    let served = serve(&config, &runtime, &data, &mut postgres, sizes, memory).await;
-    *database = postgres.running();
-    served
+    match opt.command {
+        None | Some(UlCommand::Serve) => {
+            info!(memory_mib = memory, pool = sizes.pool, "starting");
+            postgres.start(sizes).await?;
+            let served = serve(&config, &runtime, &data, &mut postgres, sizes, memory).await;
+            *database = postgres.running();
+            served
+        }
+        Some(UlCommand::Operator(command)) => {
+            let socket = control_socket(&data);
+            match aspen_bus::Remote::connect(&socket).await {
+                // The deployment runs, with its database, and hears what the command publishes.
+                Ok(remote) => {
+                    aspen_app::aspen_config::use_process_bus(aspen_bus::Bus::Remote(remote));
+                    let server_config = server_config(&config, &runtime, &data, &postgres, sizes)?;
+                    aspen_chat_server::run_command_with(&server_config, command).await
+                }
+                // It does not: the command starts the database itself, and what it publishes
+                // reaches no one, since no one is connected to hear it.
+                Err(_) => {
+                    postgres.start(sizes).await?;
+                    aspen_app::aspen_config::use_process_bus(aspen_bus::Bus::Memory(
+                        aspen_bus::Memory::new(None),
+                    ));
+                    let server_config = server_config(&config, &runtime, &data, &postgres, sizes)?;
+                    let ran = aspen_chat_server::run_command_with(&server_config, command).await;
+                    *database = postgres.running();
+                    ran
+                }
+            }
+        }
+    }
 }
 
-async fn serve(
+/// The API server's configuration: what UL derives from `config`, the machine, and where it keeps
+/// things, with `[server]` laid over it.
+fn server_config(
     config: &config::Config,
     runtime: &Path,
     data: &Path,
-    database: &mut postgres::Postgres,
+    database: &postgres::Postgres,
     sizes: postgres::Sizes,
-    memory: u64,
-) -> Result<()> {
-    {
-        let mut conn = aspen_app::database::connect(&database.url(postgres::DATABASE)).await?;
-        aspen_migrate::migration::lock(&mut conn).await?;
-        aspen_migrate::migration::up::run_up(&mut conn, aspen_migrate::registry::MIGRATIONS)
-            .await?;
-    }
+) -> Result<aspen_app::aspen_config::AspenConfig> {
     let media_url = config.media_url()?;
     // The bus and short-lived store are this process's, so `nats_url`, `nats_auth_token`, and
     // `valkey_url`, which a server reaching NATS and Valkey needs, are given addresses that name
@@ -182,22 +230,60 @@ async fn serve(
         media = quoted(&data.join("media").display().to_string()),
         media_url = quoted(&media_url),
     );
-    let server_config = aspen_app::aspen_config::load_config_sources(vec![
+    aspen_app::aspen_config::load_config_sources(vec![
         Box::new(::config::File::from_str(
             &derived,
             ::config::FileFormat::Toml,
         )),
         Box::new(config.server_settings()?),
     ])
-    .context("the API server's settings, as aspen-ul.toml gives them, are not right")?;
+    .context("the API server's settings, as aspen-ul.toml gives them, are not right")
+}
+
+async fn serve(
+    config: &config::Config,
+    runtime: &Path,
+    data: &Path,
+    database: &mut postgres::Postgres,
+    sizes: postgres::Sizes,
+    memory: u64,
+) -> Result<()> {
+    {
+        let mut conn = aspen_app::database::connect(&database.url(postgres::DATABASE)).await?;
+        aspen_migrate::migration::lock(&mut conn).await?;
+        aspen_migrate::migration::up::run_up(&mut conn, aspen_migrate::registry::MIGRATIONS)
+            .await?;
+    }
+    let server_config = server_config(config, runtime, data, database, sizes)?;
     let share = in_process_share(memory);
     let bus = aspen_bus::Memory::new(Some(share));
     let backends = aspen_app::context::Backends::InProcess {
         bus: aspen_bus::Bus::Memory(bus.clone()),
         ephemeral: aspen_ephemeral::Ephemeral::Memory(aspen_ephemeral::Memory::new(share as usize)),
     };
+    aspen_app::aspen_config::use_process_bus(aspen_bus::Bus::Memory(bus.clone()));
     let (context, serving) =
         aspen_api::start_with(aspen_app::context::Role::Public, server_config, backends).await?;
+    let socket = control_socket(data);
+    // A socket left by a deployment that stopped without removing it; one answering is a
+    // deployment running now, which this must not serve beside.
+    if aspen_bus::Remote::connect(&socket).await.is_ok() {
+        bail!(
+            "another aspen-ul serves this data directory ({}); stop it first",
+            data.display()
+        );
+    }
+    let _ = std::fs::remove_file(&socket);
+    let control = tokio::net::UnixListener::bind(&socket)
+        .with_context(|| format!("could not listen at {}", socket.display()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+    }
+    tokio::spawn(aspen_bus::remote::serve(
+        control,
+        aspen_bus::Bus::Memory(bus.clone()),
+    ));
     let mut serving = serving.context("a public server serves")?;
 
     let voice_url = format!("{}{VOICE_PATH}", config.public_url.trim_end_matches('/'));

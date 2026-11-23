@@ -53,7 +53,7 @@ async fn clean(bus: &Bus, streams: &[&str], buckets: &[&str]) {
                 let _ = nats.0.jetstream.delete_key_value(bucket).await;
             }
         }
-        Bus::Memory(_) => {}
+        Bus::Memory(_) | Bus::Remote(_) => {}
     }
 }
 
@@ -622,4 +622,105 @@ async fn memory_sequences_start_above_any_an_earlier_run_gave() {
     );
     let info = bus.stream_info("seq").await.unwrap().unwrap();
     assert_eq!(info.state.last_sequence, sequence);
+}
+
+#[tokio::test]
+async fn a_command_reaches_a_memory_bus_through_its_socket() {
+    let dir = std::env::temp_dir().join(unique("socket"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket = dir.join("bus.sock");
+    let memory = Bus::Memory(Memory::new(Some(10_000_000)));
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    tokio::spawn(crate::remote::serve(listener, memory.clone()));
+    let remote = Bus::Remote(crate::Remote::connect(&socket).await.unwrap());
+
+    // A stream made through the socket is the server's, and so is what is published to it.
+    let config = stream("remote", Retention::Limits);
+    let made = remote
+        .create_or_update_stream(config.clone())
+        .await
+        .unwrap();
+    assert_eq!(made.config, config);
+    let (mut reading, _) = memory
+        .ordered("remote", Start::BySequence(1))
+        .await
+        .unwrap();
+    let mut headers = Headers::new();
+    headers.insert("Aspen-Test", "through");
+    let sequence = remote
+        .publish_to_stream("remote.a", headers, Bytes::from_static(b"over"))
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let read = next(&mut reading).await.unwrap();
+    assert_eq!(
+        (read.sequence, read.payload.as_ref()),
+        (sequence, b"over".as_ref())
+    );
+    assert_eq!(read.headers.get("Aspen-Test"), Some("through"));
+    assert_eq!(
+        remote
+            .stream_info("remote")
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+            .last_sequence,
+        sequence
+    );
+    assert!(remote.stream_info("absent").await.unwrap().is_none());
+    assert!(matches!(
+        remote.purge("absent", "absent.>".to_string()).await,
+        Err(Error::NoSuchStream(_))
+    ));
+    let mut big = stream("too_big", Retention::Limits);
+    big.max_bytes = 20_000_000;
+    assert!(matches!(
+        remote.create_or_update_stream(big).await,
+        Err(Error::NoRoom(_))
+    ));
+    assert_eq!(
+        remote.account_memory().await.unwrap().limit,
+        Some(10_000_000)
+    );
+
+    // What is published reaches the server's subscribers.
+    let mut woken = memory.subscribe("wake").await.unwrap();
+    remote
+        .publish("wake", Bytes::from_static(b"now"))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut woken).await.payload, "now");
+
+    // A bucket written through the socket is the server's, and its watchers hear of it.
+    let config = BucketConfig {
+        name: "remote_bucket".to_string(),
+        description: String::new(),
+        max_age: None,
+    };
+    let held = memory.bucket(config.clone()).await.unwrap();
+    let mut watch = held.watch("k").await.unwrap();
+    let through = remote.bucket(config).await.unwrap();
+    through.put("k", Bytes::from_static(b"v")).await.unwrap();
+    assert_eq!(next(&mut watch).await.unwrap().operation, Operation::Put);
+    assert_eq!(held.get("k").await.unwrap(), Some(Bytes::from_static(b"v")));
+    assert_eq!(
+        through.get("k").await.unwrap(),
+        Some(Bytes::from_static(b"v"))
+    );
+    assert_eq!(through.keys().await.unwrap(), ["k"]);
+    through.purge("k").await.unwrap();
+    assert_eq!(held.get("k").await.unwrap(), None);
+
+    // What only a server does is refused.
+    assert!(remote.subscribe("wake").await.is_err());
+    assert!(
+        remote
+            .ordered("remote", Start::BySequence(1))
+            .await
+            .is_err()
+    );
+    assert!(through.watch("k").await.is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

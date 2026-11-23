@@ -771,6 +771,17 @@ impl AspenConfig {
     }
 
     /// Connects to NATS as `nats_options` says.
+    /// The bus: the process's own when it has one ([`use_process_bus`]), else NATS as this
+    /// config says.
+    pub async fn connect_bus(&self) -> Result<aspen_bus::Bus, async_nats::ConnectError> {
+        if let Some(bus) = PROCESS_BUS.get() {
+            return Ok(bus.clone());
+        }
+        Ok(aspen_bus::Bus::Nats(aspen_bus::Nats::new(
+            self.connect_nats().await?,
+        )))
+    }
+
     pub async fn connect_nats(&self) -> Result<async_nats::Client, async_nats::ConnectError> {
         async_nats::connect_with_options(&self.nats_url, self.nats_options()).await
     }
@@ -1158,6 +1169,17 @@ pub fn default_event_queue_size() -> usize {
 
 pub fn default_event_retained_mib() -> usize {
     256
+}
+
+/// The bus of a process that holds or reaches one of its own rather than NATS (`aspen-ul`), which
+/// [`AspenConfig::connect_bus`] answers.
+static PROCESS_BUS: std::sync::OnceLock<aspen_bus::Bus> = std::sync::OnceLock::new();
+
+/// Has every [`AspenConfig::connect_bus`] of this process answer `bus`: for a process whose bus
+/// is not NATS, so that what an operator command publishes reaches it. Set once; a later call
+/// changes nothing.
+pub fn use_process_bus(bus: aspen_bus::Bus) {
+    let _ = PROCESS_BUS.set(bus);
 }
 
 /// The built-in rate limits, beneath whatever `aspen.toml` sets.

@@ -156,31 +156,33 @@ pub fn tls_from_files(key: &Path, cert: &Path, keylog: bool) -> Result<TlsAccept
     }
     Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
-/// Runs an operator command against the deployment the configuration names, then wakes the
-/// servers' job runners for any job it saved.
+/// Runs an operator command against the deployment `aspen.toml` and the environment name, then
+/// wakes the servers' job runners for any job it saved.
 pub async fn run_command(command: Command) -> Result<()> {
-    let config = aspen_config::load_config()?;
+    run_command_with(&aspen_config::load_config()?, command).await
+}
+
+/// As [`run_command`], against the deployment `config` names.
+pub async fn run_command_with(config: &aspen_config::AspenConfig, command: Command) -> Result<()> {
     let ran = match command {
-        Command::Limits { action } => operator::limits(&config, action).await,
-        Command::Bench { action } => operator::bench(&config, action).await,
-        Command::Admin { action } => operator::admin(&config, action).await,
-        Command::Attachments { action } => operator::attachments(&config, action).await,
-        Command::Invites { action } => operator::invites(&config, action).await,
-        Command::Documents { action } => operator::documents(&config, action).await,
-        Command::Communities { action } => operator::communities(&config, action).await,
-        Command::Jobs { action } => operator::jobs(&config, action).await,
-        Command::Federation { action } => operator::federation(&config, action).await,
-        Command::Settings { action } => operator::settings(&config, action).await,
-        Command::VoiceServers { action } => operator::voice_servers(&config, action).await,
-        Command::IdentityProviders { action } => {
-            operator::identity_providers(&config, action).await
-        }
-        Command::Plugins { action } => operator::plugins(&config, action).await,
+        Command::Limits { action } => operator::limits(config, action).await,
+        Command::Bench { action } => operator::bench(config, action).await,
+        Command::Admin { action } => operator::admin(config, action).await,
+        Command::Attachments { action } => operator::attachments(config, action).await,
+        Command::Invites { action } => operator::invites(config, action).await,
+        Command::Documents { action } => operator::documents(config, action).await,
+        Command::Communities { action } => operator::communities(config, action).await,
+        Command::Jobs { action } => operator::jobs(config, action).await,
+        Command::Federation { action } => operator::federation(config, action).await,
+        Command::Settings { action } => operator::settings(config, action).await,
+        Command::VoiceServers { action } => operator::voice_servers(config, action).await,
+        Command::IdentityProviders { action } => operator::identity_providers(config, action).await,
+        Command::Plugins { action } => operator::plugins(config, action).await,
     };
     // What the command decided may be a job (a plugin's purge, signing out a blocked
     // deployment's users), which the servers start at once rather than at their next look.
     if ran.is_ok() {
-        app::jobs::wake_from(&config).await;
+        app::jobs::wake_from(config).await;
     }
     ran
 }

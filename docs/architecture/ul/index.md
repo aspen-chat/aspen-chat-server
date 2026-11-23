@@ -70,6 +70,23 @@ A restart empties the bus and the short-lived store. What correctness or securit
 PostgreSQL (`used_once`, `attempt_count`), and the bus's sequences start above any an earlier run
 gave, so a client resuming from one reloads rather than resuming into the wrong place.
 
+## Operator commands
+
+`aspen-ul <command>` runs any of `aspen-chat-server`'s operator commands against the deployment, in
+its own process, with its answer on standard output and its logs on standard error. A command
+changes the database directly, as it does in the full deployment, and publishes what it changes on
+the bus, which here is the running server's memory: so the command reaches it through the control
+socket the server serves, `run/control.sock`, readable by UL's user alone (`aspen_bus::remote`).
+Over the socket a command publishes, sizes and purges streams, and reads and writes buckets; what
+only a server does (subscribing, reading streams through consumers) is refused there. Every place a
+command reaches the bus asks `AspenConfig::connect_bus`, which answers the process's own bus
+(`use_process_bus`) when it has one.
+
+With the deployment stopped, a command starts PostgreSQL itself and stops it after, and what it
+publishes reaches no one, since no one is connected to hear it. A server starting refuses a data
+directory another one serves, which it tells by its socket answering, and replaces a socket a
+stopped one left.
+
 ## Access and what clients hold
 
 Ultra Lite adds no route and no record: what each reads and is told is decided by the same code as

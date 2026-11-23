@@ -336,9 +336,8 @@ pub struct Publisher {
 impl Publisher {
     /// Connects to the event stream `config` names.
     pub async fn connect(config: &crate::aspen_config::AspenConfig) -> crate::Result<Self> {
-        let client = config.connect_nats().await?;
         Ok(Publisher {
-            bus: aspen_bus::Bus::Nats(aspen_bus::Nats::new(client)),
+            bus: config.connect_bus().await?,
             channel_homes: channel_homes(),
         })
     }

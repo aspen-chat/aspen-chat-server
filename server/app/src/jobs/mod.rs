@@ -230,9 +230,7 @@ pub async fn checkpoint(
 /// logged: the runners look every [`POLL`] anyway.
 pub async fn wake_from(config: &crate::aspen_config::AspenConfig) {
     let woken = async {
-        let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(
-            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?,
-        ));
+        let bus = config.connect_bus().await?;
         bus.publish(WAKE_SUBJECT, bytes::Bytes::new()).await?;
         bus.flush().await?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
