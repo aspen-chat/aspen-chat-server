@@ -3,17 +3,15 @@
 What is here turns the steps of the [operator guide](../docs/operators/installing/index.md) into
 files a tool applies.
 
-| Directory                             | What it holds                                                                                                                                            |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`docker/`](docker/Dockerfile)        | The container images of both servers.                                                                                                                    |
-| [`box/`](box/README.md)               | A whole deployment on one Linux machine, anyone's: `aspen-box` writes its configuration, starts it, upgrades it without stopping the API, and checks it. |
-| [`templates/`](templates/README.md)   | `aspen.toml`, `voice_server.toml`, and NATS's configuration, as everything here writes them.                                                             |
-| [`aws/`](aws/README.md)               | A whole deployment on AWS, for [OpenTofu](https://opentofu.org): managed services, several API servers, a machine for each voice server.                 |
-| [`aws-single/`](aws-single/README.md) | A box on one AWS machine, with its files in S3, which costs a fraction of that and is down whenever the machine is.                                      |
+| Directory                           | What it holds                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docker/`](docker/Dockerfile)      | The container images of both servers.                                                                                                    |
+| [`templates/`](templates/README.md) | `aspen.toml`, `voice_server.toml`, and NATS's configuration, as everything here writes them.                                             |
+| [`aws/`](aws/README.md)             | A whole deployment on AWS, for [OpenTofu](https://opentofu.org): managed services, several API servers, a machine for each voice server. |
 
-The two AWS configurations are prototypes: planned, never applied. They share the storage, in
-`aws/modules/media`. A box that outgrows its machine, on AWS or anywhere else,
-[moves to the larger configuration](aws/README.md#moving-a-box-here).
+The AWS configuration is a prototype: planned, never applied. A whole deployment on one machine is
+[Ultra Lite](../docs/operators/ultra-lite/index.md), one program with nothing here to apply; one
+that outgrows its machine [moves to the AWS configuration](aws/README.md#moving-ultra-lite-here).
 
 ## The images
 

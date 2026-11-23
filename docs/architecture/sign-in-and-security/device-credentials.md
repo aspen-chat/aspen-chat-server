@@ -150,7 +150,7 @@ A suspension of the address limits (`limits suspend`) also skips `device`, `ip_f
 ## Scripts and the benchmark
 
 - **Python:** `scripts/device_credential.py` earns one credential per deployment. `stack.py`,
-  `dev_federation.py` and `check_box.py` present it on requests without a token. Scripts that wait
+  `dev_federation.py`, and `check_ul.py` present it on requests without a token. Scripts that wait
   for a server ask `GET /health`.
 - **Benchmark:** a run that suspends the limits earns none, since its suspension waives them. One
   that does not earns one for each source address of its profile, or one without them, and the users

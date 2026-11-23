@@ -82,7 +82,7 @@ resource "aws_instance" "voice" {
     ECS_CLUSTER=${module.cluster.name}
     ECS_INSTANCE_ATTRIBUTES={"aspen.voice":"${each.key}"}
     CONFIG
-    echo '${filebase64("${path.module}/../aws-single/machine/voice-imds.service")}' | base64 -d > /etc/systemd/system/aspen-voice-imds.service
+    echo '${filebase64("${path.module}/machine/voice-imds.service")}' | base64 -d > /etc/systemd/system/aspen-voice-imds.service
     systemctl enable --now aspen-voice-imds.service
   EOT
 

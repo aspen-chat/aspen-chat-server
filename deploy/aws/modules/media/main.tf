@@ -1,5 +1,5 @@
 # A deployment's object storage: the bucket, what the servers' role may do with it
-# (`access_policy`), and the read path clients download from. Both AWS configurations use it.
+# (`access_policy`), and the read path clients download from.
 
 terraform {
   required_providers {
@@ -10,15 +10,12 @@ terraform {
   }
 }
 
-# A bucket's name is for good: changing it means a new bucket. `var.bucket` keeps one made
-# under another deployment's name, when this deployment takes that one's storage over.
+# A bucket's name is for good: changing it means a new bucket.
 resource "aws_s3_bucket" "media" {
-  bucket        = var.bucket
-  bucket_prefix = var.bucket == null ? "${var.name}-media-" : null
+  bucket_prefix = "${var.name}-media-"
 }
 
-# `migration/` holds a dump of the database while a deployment moves from one configuration to
-# another (../../migrate.py). The read path does not serve it, and a dump is every
+# `migration/` holds a dump of the database while a deployment moves here (../../migrate.py). The read path does not serve it, and a dump is every
 # account's data, so one is not left there.
 resource "aws_s3_bucket_lifecycle_configuration" "media" {
   bucket = aws_s3_bucket.media.id
@@ -187,9 +184,7 @@ resource "aws_acm_certificate_validation" "this" {
   validation_record_fqdns = [aws_route53_record.certificate_validation.fqdn]
 }
 
-# Held back, by `public_dns`, while the name is still another deployment's: one this deployment
-# replaces, whose storage it does not take over. One that takes it over takes this record over
-# with the distribution.
+# Held back, by `public_dns`, while the name is still the deployment's this one replaces.
 resource "aws_route53_record" "this" {
   for_each        = var.public_dns ? toset(["A", "AAAA"]) : toset([])
   zone_id         = var.route53_zone_id

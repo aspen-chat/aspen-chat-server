@@ -6,8 +6,8 @@
 # across six runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and
 # the Android and iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS,
 # and the App Store signed, the dmgs sent for notarization; two deployments federate and wake
-# a stand-in phone over real TLS; the box runs from images built here, and both AWS
-# configurations pass their plan tests; the servers are built for 64-bit ARM two ways,
+# a stand-in phone over real TLS; the images are built and each server started in its own, and
+# the AWS configuration passes its plan tests; the servers are built for 64-bit ARM two ways,
 # natively and with the cross-compile script, and each build is started against real services
 # on an ARM machine; and Ultra Lite (`aspen-ul`) is checked as the full deployment is, its
 # permissions, calls, and channel mana, started, used, and left for the full deployment, and
@@ -966,24 +966,23 @@ jobs:
           tofu_version: 1.13.1
           tofu_wrapper: false
       - run: tofu fmt -check -recursive deploy
-      # Each plans against made-up providers, so it needs no AWS account.
-      - name: Validate and test each
+      # It plans against made-up providers, so it needs no AWS account.
+      - name: Validate and test
         run: |
-          for configuration in deploy/aws deploy/aws-single; do
-            tofu -chdir="$configuration" init -backend=false -input=false
-            tofu -chdir="$configuration" validate
-            tofu -chdir="$configuration" test
-          done
+          tofu -chdir=deploy/aws init -backend=false -input=false
+          tofu -chdir=deploy/aws validate
+          tofu -chdir=deploy/aws test
+      # AWS's read path and the development one pass the prefixes the server stores public
+      # objects under, read from the files.
+      - run: python3 scripts/check_media_prefixes.py
 
-  box:
-    name: The box — start, upgrade, restore, export
+  # Both images built as `images.yml` publishes them, and each server started in its own.
+  images:
+    name: Images — built, and each server started
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      # The box's read path, AWS's, and the development one pass the prefixes the server stores
-      # public objects under, read from the files before anything is built.
-      - run: python3 scripts/check_media_prefixes.py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # The images workflow's cache for this architecture, read but not written: a pull
       # request's build is not one to build from.
@@ -1005,7 +1004,10 @@ jobs:
           load: true
           tags: aspen-voice:check
           cache-from: type=gha,scope=image-amd64
-      - run: python3 scripts/check_box.py --api-image aspen-api:check --voice-image aspen-voice:check
+      # Each writes its schemas and exits, which needs no configuration: a binary that does not
+      # start in its image fails here.
+      - run: docker run --rm aspen-api:check aspen-chat-server --gen-openapi-schema
+      - run: docker run --rm aspen-voice:check voice_server --gen-signal-schema
 
   # The release build and the workspace's tests in release, each on a runner of its own; the
   # tests' build, which holds every dependency the servers' build does and more, keeps the cache

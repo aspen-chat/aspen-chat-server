@@ -6,8 +6,7 @@
 #     --build-arg ASPEN_COMMIT=$(git rev-parse --short=12 HEAD)
 #   docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 #
-# `api` holds aspen-chat-server, aspen-migrate, the web client, and the box's tool; `voice` holds
-# voice_server.
+# `api` holds aspen-chat-server, aspen-migrate, and the web client; `voice` holds voice_server.
 # Both hold curl, for asking a server's health from inside its container. Neither holds
 # configuration: each reads `aspen.toml` or `voice_server.toml` from its working directory,
 # /etc/aspen, and `ASPEN_` variables from its environment.
@@ -80,7 +79,7 @@ RUN apt-get update \
 
 # A user of its own, 10002, not the API server's: a machine running both tells them apart by
 # it, and refuses this one the cloud's instance metadata service
-# (deploy/aws-single/machine/voice-imds.service).
+# (deploy/aws/machine/voice-imds.service).
 FROM runtime AS voice
 RUN useradd --system --uid 10002 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen-voice \
     && install -d -o aspen-voice -g aspen-voice -m 0700 /etc/aspen
@@ -93,18 +92,8 @@ FROM runtime AS api
 RUN useradd --system --uid 10001 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen \
     && install -d -o aspen -g aspen -m 0700 /etc/aspen
 WORKDIR /etc/aspen
-# openssl makes the certificates a box opens NATS with to voice servers elsewhere
-# (deploy/box/aspen_box/nats_tls.py).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bin/aspen-chat-server /out/bin/aspen-migrate /usr/local/bin/
 COPY --from=build /out/web /srv/aspen/web
-# The box's tool and the templates it fills, for a machine with Docker and no checkout of the
-# repository to take them from: `docker run --rm --entrypoint tar <image> -C /usr/share/aspen
-# -c . | tar -x` (deploy/box/README.md).
-COPY deploy/box /usr/share/aspen/box
-COPY deploy/templates /usr/share/aspen/templates
 # The environment overrides `aspen.toml`, so whichever one a deployment gives this image, the
 # server serves the web client built with it.
 ENV ASPEN_WEB_CLIENT__DIR=/srv/aspen/web

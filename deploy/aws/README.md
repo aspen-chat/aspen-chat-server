@@ -23,7 +23,7 @@ account, so expect to fix things the first time.
 Nothing but the load balancer (80 and 443) and the voice servers' media and file transfer ports is
 open to the internet. All of them, and the read path, answer over IPv4 and IPv6, and the servers
 reach the internet over both. Each voice server's machine refuses the voice server its instance
-metadata service ([`voice-imds.service`](../aws-single/machine/voice-imds.service)).
+metadata service ([`voice-imds.service`](machine/voice-imds.service)).
 
 The servers run the published images, `ghcr.io/aspen-chat/aspen-api` and `aspen-voice`, built for
 x86-64 and 64-bit ARM. To run images of your own, build them from
@@ -106,18 +106,15 @@ Set `image_tag` to the new release, and `tofu apply`. The apply follows
 | Move a voice server to the current machine image   | `tofu apply -replace='aws_instance.voice["<name>"]'`. It keeps its address.                                                                                                    |
 | Change a voice server's capacity                   | Change it in `voice_servers`. A capacity set in the dashboard is overwritten at the next release.                                                                              |
 
-## Moving a box here
+## Moving Ultra Lite here
 
-A deployment that runs on one machine with [`aspen-box`](../box/README.md), on AWS with
-[`../aws-single`](../aws-single/README.md) or anywhere else, moves here with its accounts, messages,
-sign-ins, and address. Its database is copied. From `../aws-single`, its storage is kept, not
-copied: this deployment takes the bucket and its read path over. From any other box, its files are
-copied into this deployment's bucket. An [Ultra Lite](../../docs/operators/ultra-lite/index.md)
-deployment (`aspen-ul`) moves here the same way, from its export, with each file's type kept.
+An [Ultra Lite](../../docs/operators/ultra-lite/index.md) deployment (`aspen-ul`) moves here with
+its accounts, messages, sign-ins, and address. Its database is copied, and its files are copied into
+this deployment's bucket, each with the type it is served with.
 
 **Not rehearsed on AWS.** The copy itself has been run between local stand-ins of the two
-deployments. The steps around it (taking the storage over, the name changing hands) have only been
-planned. Read each plan before approving it.
+deployments (`scripts/check_ul_export.py`). The steps around it (the name changing hands) have only
+been planned. Read each plan before approving it.
 
 | Step    | The old deployment | Takes                                                              |
 | ------- | ------------------ | ------------------------------------------------------------------ |
@@ -125,53 +122,28 @@ planned. Read each plan before approving it.
 | 3       | Down               | The copy, a release, and up to five minutes for the name to follow |
 | 4       | Gone               |                                                                    |
 
-1. **A box or Ultra Lite elsewhere than AWS only:** its domain must be in a Route 53 hosted zone
-   first. Make the zone, write the records the box has now into it (`aspen-box doctor` lists them),
+1. Its domain must be in a Route 53 hosted zone first. Make the zone, write the records the
+   deployment has now into it (its `A` and `AAAA` records, for the domain and `media.` under it),
    move the domain's name servers to it at your registrar, and wait until `dig NS <domain>` names
    Route 53's.
 
 2. In `deploy/aws`, write `terraform.tfvars`, without `image_tag`: with none, no server starts, and
    the first release must find the old deployment's database, not make an empty one. Give no voice
-   server the name `voice`, which the box's own has. Then, from `../aws-single`:
+   server the name `aspen-ul`, which Ultra Lite's own has. Then:
 
    ```
-   ./migrate.py prepare --from-single
-   ```
-
-   which takes `region`, `domain`, and `route53_zone_id` from the old deployment (leave them out),
-   and needs a `name` the old deployment does not have. From any other box:
-
-   ```
-   ./migrate.py prepare --from-box --domain chat.example.org
-   ```
-
-   From Ultra Lite, whose own voice server is `aspen-ul` (give no voice server that name):
-
-   ```
-   ./migrate.py prepare --from-ul --domain chat.example.org
-   ```
-
-   Then make everything:
-
-   ```
+   ./migrate.py prepare --domain chat.example.org
    tofu apply
    ```
 
-   From `../aws-single`, the plan imports two things, the bucket and the CloudFront distribution,
-   and changes the distribution in place. **Stop if it would replace or destroy either.** Everything
-   else is new. `domain` still points at the old deployment.
+   `domain` still points at the old deployment.
 
-3. Move. This stops the old deployment. From `../aws-single`:
-
-   ```
-   ./migrate.py copy
-   ```
-
-   From any other box, export it on its machine, which stops it and writes everything into a
-   directory, with room for every file people have uploaded:
+3. Move. This stops the old deployment. Stop it and export it on its machine, which writes
+   everything into a directory, with room for every file people have uploaded:
 
    ```
-   aspen-box export ~/aspen-export
+   sudo systemctl stop aspen-ul
+   sudo aspen-ul export ~/aspen-export
    ```
 
    Copy the directory to the machine you deploy from (`rsync -a`), keeping it where only you can
@@ -181,30 +153,20 @@ planned. Read each plan before approving it.
    ./migrate.py copy --export ~/aspen-export
    ```
 
-   From Ultra Lite, stop it and export it on its machine, then copy the directory here the same way:
-
-   ```
-   sudo systemctl stop aspen-ul
-   sudo aspen-ul export ~/aspen-export
-   ./migrate.py copy --export ~/aspen-export
-   ```
-
-   Its files are uploaded by `aspen-chat-server storage import` from the API image (`--image`, the
-   `main` image by default), run in Docker on this machine with the AWS command line's credentials
-   (its environment, or `~/.aws`), so each keeps the type it is served with. An Ultra Lite
-   deployment already keeping its files in object storage has them copied first: `copy` says how,
-   and then takes `--files-copied`.
-
-   It copies the database into the bucket, and the files when they were copied out, and restores the
-   database here. Then set `image_tag` in `terraform.tfvars` and release:
+   It copies the database into the bucket and restores it here. Its files are uploaded by
+   `aspen-chat-server storage import` from the API image (`--image`, the `main` image by default),
+   run in Docker on this machine with the AWS command line's credentials (its environment, or
+   `~/.aws`), so each keeps the type it is served with. A deployment already keeping its files in
+   object storage has them copied first: `copy` says how, and then takes `--files-copied`. Then set
+   `image_tag` in `terraform.tfvars` and release:
 
    ```
    tofu apply
    ```
 
    The release brings the database up to this release, registers the voice servers, starts every
-   server, and points `domain` (and `media.<domain>`, for a box elsewhere) here. People stay signed
-   in. Calls in progress ended when the old servers stopped.
+   server, and points `domain` and `media.<domain>` here. People stay signed in. Calls in progress
+   ended when the old deployment stopped.
 
 4. When the deployment answers at its address, let go of the old one:
 
@@ -212,15 +174,10 @@ planned. Read each plan before approving it.
    ./migrate.py finish
    ```
 
-   It removes the old voice servers' registrations. From `../aws-single`, it has the old
-   configuration forget what this one now uses, so that destroying it leaves the storage alone: then
-   `tofu -chdir=../aws-single destroy`. Its data volume and snapshots are kept as the old
-   deployment; delete them yourself once you are sure. From any other box, take it down on its
-   machine (`aspen-box down`), and any voice servers it had on other machines on theirs. From Ultra
-   Lite, keep it from starting again: `sudo systemctl disable aspen-ul`.
+   It removes the registration of Ultra Lite's voice server. Keep Ultra Lite from starting again:
+   `sudo systemctl disable aspen-ul`. Keep its data directory and the export until you are sure.
 
-   Keep `migration.auto.tfvars.json`: it holds `domain`, and from `../aws-single` the `media_bucket`
-   that is this deployment's bucket from now on.
+   Keep `migration.auto.tfvars.json`: it holds `domain`.
 
 The dump is deleted from the bucket after seven days. It is never served: the read path has no
 `migration/` prefix.
@@ -228,22 +185,8 @@ The dump is deleted from the bucket after seven days. It is never served: the re
 ### Going back
 
 Before `finish`, the old deployment is whole. **Whatever was written here since the copy is lost.**
-
-From `../aws-single`:
-
-1. Here, have this configuration forget the storage, so destroying it later leaves it alone:
-
-   ```
-   tofu state rm module.media.aws_s3_bucket.media module.media.aws_cloudfront_distribution.media
-   ```
-
-2. In `deploy/aws-single`, `tofu apply`, which takes back the name and the read path, and
-   `$(tofu output -raw on_machine) aspen-box up`, which starts the old deployment again.
-
-3. Here, `tofu destroy`.
-
-From any other box: here, `tofu destroy`, which takes the records with it; write the box's records
-into the zone again, and `aspen-box up` on its machine.
+Here, `tofu destroy`, which takes the records with it; write the old deployment's records into the
+zone again, and `sudo systemctl start aspen-ul` on its machine.
 
 ## What it does not do yet
 

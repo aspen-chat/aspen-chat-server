@@ -474,28 +474,17 @@ docker build -f deploy/docker/Dockerfile --target api -t aspen-api .
 docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 ```
 
-`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, `curl`, and the box's tool
-(`/usr/share/aspen`), and no ffmpeg; `voice` holds `voice_server` and `curl`. Both read their
-configuration from `/etc/aspen`. `deploy/box/aspen-box` (Python 3.9's standard library alone,
-`deploy/box/aspen_box/`) runs a whole small deployment on one Linux machine with Docker Compose:
-every service on loopback behind Caddy, PostgreSQL and storage each bundled (storage as Garage) or
-kept elsewhere, voice servers on other machines (each a box of its own, `init-voice`, reaching NATS
-over TLS from the box's own authority), upgrades that start the new API server beside the old,
-backups, `export` (the database and people's files, for a deployment that replaces the box), and
-`doctor`, which checks the machine, DNS, certificates, what plain HTTP is answered with, and the
-storage's read path and says what to fix; `scripts/check_box.py` checks all of it against built
-images. `deploy/aws/` is an OpenTofu configuration for a whole deployment on AWS, and
-`deploy/aws-single/` runs the box on one AWS machine with its files in S3, releasing through Session
-Manager; both are prototypes that have been planned (`tofu test` in each, which needs no account)
-and never applied. All three write `aspen.toml`, `voice_server.toml`, and NATS's configuration from
-`deploy/templates/`, which hold only `${name}` placeholders so that OpenTofu and `aspen-box` fill
-them alike: a setting a deployment cannot start without is added there and to each caller.
-`deploy/aws/migrate.py` moves a box to the larger configuration: a box from `aws-single` hands over
-its bucket and read path (`media_bucket`, the media module's `handed_over`), any other has its files
-copied from its export, and both have their database restored from a dump, so whatever a deployment
-keeps outside PostgreSQL and the bucket must be added to `aspen-box export` and that move. See
-`deploy/README.md`, and `docs/architecture/operations/deploying-from-files-design-notes.md` for why
-it is the way it is.
+`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, and `curl`, and no ffmpeg; `voice`
+holds `voice_server` and `curl`. Both read their configuration from `/etc/aspen`. `deploy/aws/` is
+an OpenTofu configuration for a whole deployment on AWS, a prototype that has been planned
+(`tofu test`, which needs no account) and never applied. It writes `aspen.toml`,
+`voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold only `${name}`
+placeholders: a setting a deployment cannot start without is added there and to `deploy/aws`.
+`deploy/aws/migrate.py` moves an Ultra Lite deployment there, its database restored from its
+export's dump and its files uploaded by `storage import`, so whatever a deployment keeps outside
+PostgreSQL and its files must be added to `aspen-ul export` and that move. A whole deployment on one
+machine is Ultra Lite (above, and see Ultra Lite). See `deploy/README.md`, and
+`docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
 
 ### Continuous integration
 
@@ -516,28 +505,27 @@ for the simulator with the extension's Web Push check, and on a pull request an 
 `main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
 for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
-debug servers; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list
-of the public media prefixes against the server's, `media_store::PublicPrefix`), and
-`scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
-container on GitHub's arm64 runner, and the workspace's tests in another; the baseline build script
-on x86-64 for both architectures; and `scripts/smoke_servers.py` against all three builds, the ARM
-ones on an arm64 runner, each kept as an artifact; `scripts/check_permissions.py`,
-`scripts/check_nats_memory.py`, `scripts/check_mana.py`, and `scripts/check_calls.py` run against
-the debug servers, each on a runner of its own, the first split across three (`--shard`) and
-building and installing the example plugins, the last calling between Chromium and Firefox through
-Playwright; Ultra Lite's debug build run through the permissions and calls checks too (`--ul`), and
-through `scripts/smoke_servers.py`, `scripts/check_mana.py`, and `scripts/check_ul_export.py` in a
-job of their own, with the bundled PostgreSQL built once (`ul-postgres`) and unpacked where
-`package_ul.py` builds it (`.github/actions/ul-postgres`); and Ultra Lite packaged for both
-architectures from the baseline builds and the built web client (`web-client`), each package run
-through `scripts/check_ul.py` on a runner of its architecture and kept as an artifact. A tag `v*`
-runs the whole workflow and then publishes the two packages and their `SHA256SUMS` as the tag's
-GitHub release (`release`). Lints, tests, and checks run on runners of their own, so a run takes
-about as long as its longest job, and Rust caches, and the bundled PostgreSQL's build, are saved
-from `main` alone: the repository's caches share 10 GB, and every pull request reads `main`'s. Every
-job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
-example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail
-the build.
+debug servers; the AWS configuration's `tofu test` and `scripts/check_media_prefixes.py` (every list
+of the public media prefixes against the server's, `media_store::PublicPrefix`); both images built,
+each server started in its own; an ARM build in a `debian:bookworm` container on GitHub's arm64
+runner, and the workspace's tests in another; the baseline build script on x86-64 for both
+architectures; and `scripts/smoke_servers.py` against all three builds, the ARM ones on an arm64
+runner, each kept as an artifact; `scripts/check_permissions.py`, `scripts/check_nats_memory.py`,
+`scripts/check_mana.py`, and `scripts/check_calls.py` run against the debug servers, each on a
+runner of its own, the first split across three (`--shard`) and building and installing the example
+plugins, the last calling between Chromium and Firefox through Playwright; Ultra Lite's debug build
+run through the permissions and calls checks too (`--ul`), and through `scripts/smoke_servers.py`,
+`scripts/check_mana.py`, and `scripts/check_ul_export.py` in a job of their own, with the bundled
+PostgreSQL built once (`ul-postgres`) and unpacked where `package_ul.py` builds it
+(`.github/actions/ul-postgres`); and Ultra Lite packaged for both architectures from the baseline
+builds and the built web client (`web-client`), each package run through `scripts/check_ul.py` on a
+runner of its architecture and kept as an artifact. A tag `v*` runs the whole workflow and then
+publishes the two packages and their `SHA256SUMS` as the tag's GitHub release (`release`). Lints,
+tests, and checks run on runners of their own, so a run takes about as long as its longest job, and
+Rust caches, and the bundled PostgreSQL's build, are saved from `main` alone: the repository's
+caches share 10 GB, and every pull request reads `main`'s. Every job runs the toolchain
+`rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so
+rustup installs both wherever the repository is built. Clippy warnings fail the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or
@@ -555,7 +543,7 @@ commit, or an annotated tag to follow to it with `git/tags/<sha>`.
 `.github/workflows/images.yml` publishes both images to the GitHub Container Registry
 (`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner
 of its architecture: every push to `main` as `main` and its commit's first twelve characters, and
-every tag `v*` as itself. The box and both AWS configurations run them by tag.
+every tag `v*` as itself. The AWS configuration runs them by tag.
 
 `.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its
 fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and

@@ -39,7 +39,7 @@ Pictures show "Attachment unavailable" when `public_base_url` is plain `http`: c
 The apps read the file from `[media.s3] public_base_url` themselves to save or copy it, which the
 browser allows only when the read path sends `Access-Control-Allow-Origin`. Add it as
 [The storage's read path](../installing/storage-read-path.md#its-origin-and-headers) says, and check
-it with the `curl` there. `aspen-box doctor` checks it on a box.
+it with the `curl` there.
 
 ## Videos show as downloads, without a poster
 

@@ -1,9 +1,10 @@
 # The deployment
 
 A deployment is one origin, `public_url`, served by any number of API servers, plus any number of
-voice servers, sharing PostgreSQL, NATS JetStream, Valkey, and S3-compatible storage. The smallest
-runs all of it on one machine (`deploy/box/`); a large one runs each part on machines of its own
-(`deploy/aws/`). The shape is the same.
+voice servers, sharing PostgreSQL, NATS JetStream, Valkey, and S3-compatible storage. A large one
+runs each part on machines of its own (`deploy/aws/`). The smallest is Ultra Lite, one program on
+one machine (`aspen-ul`), which holds the bus and short-lived store in its own memory, keeps its
+files in its data directory, and runs the voice server within it; its API server is the same code.
 
 ## Processes and services
 
@@ -15,7 +16,7 @@ flowchart TB
         phone["iOS and Android apps<br/>(Capacitor)"]
     end
 
-    proxy["TLS terminator or load balancer<br/>(Caddy in aspen-box; optional)"]
+    proxy["TLS terminator or load balancer<br/>(optional)"]
 
     subgraph api_tier["API servers (aspen-chat-server), any number"]
         api["API server<br/>REST /api/v1, event stream /api/v1/events,<br/>web client, /.well-known/aspen"]
@@ -30,7 +31,7 @@ flowchart TB
         pg[("PostgreSQL<br/>every record")]
         nats[("NATS JetStream<br/>events, voice reports and commands,<br/>settings, fleet heartbeats")]
         valkey[("Valkey<br/>rate limits, presence, ceremonies,<br/>voice offers, single-use ids")]
-        s3[("S3-compatible storage<br/>attachments, icons, previews<br/>(Garage in aspen-box)")]
+        s3[("S3-compatible storage<br/>attachments, icons, previews")]
     end
 
     subgraph outside["Outside the deployment"]
@@ -136,25 +137,20 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph box["aspen-box: one Linux machine, Docker Compose"]
-        caddy["Caddy<br/>public_url, voice., media."]
-        b_api["aspen-api container"]
-        b_voice["aspen-voice container"]
-        b_pg[("PostgreSQL<br/>(or elsewhere)")]
-        b_nats[("NATS")]
-        b_valkey[("Valkey")]
-        b_garage[("Garage<br/>(or elsewhere)")]
-        caddy --> b_api
-        caddy --> b_voice
-        caddy -- "media.: presigned uploads<br/>and the read path" --> b_garage
-        b_api --> b_pg & b_nats & b_valkey & b_garage
-        b_voice --> b_nats
+    subgraph ul["aspen-ul: one program on one Linux machine, under systemd"]
+        u_listener["Listener: TLS (ACME or files),<br/>public_url, media., port 80's redirect"]
+        u_api["API server"]
+        u_voice["Voice server, under /voice-server"]
+        u_bus[("Bus and short-lived store,<br/>in its memory")]
+        u_files[("media/, in the data directory<br/>(or S3)")]
+        u_control["run/control.sock<br/>(operator commands)"]
+        u_listener --> u_api & u_voice
+        u_api --> u_bus & u_files
+        u_voice --> u_bus
+        u_control --> u_bus
     end
-
-    subgraph more["More voice servers (init-voice)"]
-        v2["aspen-voice"]
-    end
-    v2 -- "NATS over TLS, from the box's own authority" --> b_nats
+    u_pg[("The bundled PostgreSQL,<br/>a child process, over a Unix socket")]
+    u_api --> u_pg
 
     subgraph aws["deploy/aws: the larger configuration"]
         lb["Load balancer<br/>(API and voice signalling)"]
@@ -167,11 +163,12 @@ flowchart TB
         a_voice --> a_rest
     end
 
-    box -. "moves to" .-> aws
+    ul -. "moves to" .-> aws
 ```
 
-Both run the images `.github/workflows/images.yml` publishes (`ghcr.io/aspen-chat/aspen-api` and
-`aspen-voice`) and write their configuration from `deploy/templates/`. A box that outgrows its
-machine moves to the larger configuration with `deploy/aws/migrate.py`, which restores its database
-from a dump and copies its files or hands over its bucket. See
-[`deploy/README.md`](../../deploy/README.md).
+The larger configuration runs the images `.github/workflows/images.yml` publishes
+(`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) and writes their configuration from
+`deploy/templates/`. An Ultra Lite deployment that outgrows its machine moves to it with
+`deploy/aws/migrate.py`, which restores its database from its export's dump and uploads its files
+with `storage import`. See [`deploy/README.md`](../../deploy/README.md) and
+[Ultra Lite](../architecture/ul/index.md).

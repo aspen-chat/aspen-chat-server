@@ -13,8 +13,9 @@ Ultra Lite.
 | The certificate            | Not moved: the new deployment gets its own.                                                             |
 | The voice server           | Not moved: Ultra Lite's is removed, and the new deployment registers its own.                           |
 
-On AWS, `deploy/aws/migrate.py --from-ul` does every step below; see
-[Moving a box here](../../../deploy/aws/README.md#moving-a-box-here). Anywhere else, follow them.
+On AWS, `deploy/aws/migrate.py` does every step below; see
+[Moving Ultra Lite here](../../../deploy/aws/README.md#moving-ultra-lite-here). Anywhere else,
+follow them.
 
 ## 1. Export
 

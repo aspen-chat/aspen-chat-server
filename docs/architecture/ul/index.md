@@ -205,11 +205,11 @@ bucket and reads them from there.
 problem with what to do about it, and exits non-zero when there is any: the machine's memory, free
 disk, and whether the data is on an SD card; whether the deployment runs and answers at its port
 (asked of this machine under the deployment's name), and the certificate it holds; the machine's
-public addresses (Cloudflare's `cdn-cgi/trace` at 1.1.1.1 and its IPv6 twin, as the Box asks),
-whether it is behind a router, the ports a router must forward, and an `announced_address` that does
-not name them; each name's `A` and `AAAA` records; and, once every name points here, HTTPS at each
-name with a certificate browsers accept and plain HTTP's redirect and refusal. Whether the internet
-reaches the media ports, which only a call shows, it leaves to the operator.
+public addresses (Cloudflare's `cdn-cgi/trace` at 1.1.1.1 and its IPv6 twin), whether it is behind a
+router, the ports a router must forward, and an `announced_address` that does not name them; each
+name's `A` and `AAAA` records; and, once every name points here, HTTPS at each name with a
+certificate browsers accept and plain HTTP's redirect and refusal. Whether the internet reaches the
+media ports, which only a call shows, it leaves to the operator.
 
 ## Operator commands
 

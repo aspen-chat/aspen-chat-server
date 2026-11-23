@@ -40,9 +40,9 @@ Why the operator's installation guide
 ## Plain HTTP
 
 - **The proxy answers port 80, not the server.** The server listens on one port, and behind a proxy
-  it never sees port 80. The box's Caddy (`deploy/box/caddy/api.tmpl`), the development one
-  (`scripts/caddy/Caddyfile`), and the AWS load balancer (`deploy/aws/servers.tf`) each do what the
-  guide asks of a proxy.
+  it never sees port 80. The development Caddy (`scripts/caddy/Caddyfile`) and the AWS load balancer
+  (`deploy/aws/servers.tf`) each do what the guide asks of a proxy, and Ultra Lite answers port 80
+  itself the same way (`server/ul/src/redirect.rs`).
 - **Requests under `/api/` are refused, never redirected.** A client set up with an `http://`
   address follows a redirect and goes on working, sending its token unencrypted ahead of every
   request, and nobody notices. A refusal fails the first time it is tried. A browser's preflight is
