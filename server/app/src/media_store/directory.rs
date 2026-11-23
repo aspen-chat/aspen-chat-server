@@ -185,6 +185,43 @@ impl Directory {
         }
     }
 
+    /// The key of every object the store holds but staged uploads, which an import leaves behind
+    /// (their uploads were never confirmed), in order. Read whole, for an operator's command
+    /// moving a deployment of one server's files, which a machine's memory holds the names of.
+    pub async fn keys(&self) -> crate::Result<Vec<String>> {
+        let objects = self.root.join("objects");
+        let mut keys = Vec::new();
+        let mut pending = vec![objects.clone()];
+        while let Some(directory) = pending.pop() {
+            let mut entries = match tokio::fs::read_dir(&directory).await {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io(e)),
+            };
+            while let Some(entry) = entries.next_entry().await.map_err(io)? {
+                let kind = entry.file_type().await.map_err(io)?;
+                if kind.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                let Some(key) = entry
+                    .path()
+                    .strip_prefix(&objects)
+                    .ok()
+                    .and_then(|relative| relative.to_str())
+                    .map(|relative| relative.replace(std::path::MAIN_SEPARATOR, "/"))
+                else {
+                    continue;
+                };
+                if !key.starts_with(UPLOAD_PREFIX) && self.path_of(&key).is_ok() {
+                    keys.push(key);
+                }
+            }
+        }
+        keys.sort();
+        Ok(keys)
+    }
+
     /// Where `key`'s object is and what it is served as, for serving it; `None` when there is none.
     pub async fn object(&self, key: &str) -> crate::Result<Option<(PathBuf, Record)>> {
         let (object, _) = self.paths(key)?;

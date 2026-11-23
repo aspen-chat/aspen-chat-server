@@ -275,6 +275,29 @@ impl S3 {
         Ok(())
     }
 
+    /// Uploads the file at `path` as `key`, served as `served` says, streaming it.
+    pub(crate) async fn put_file(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        served: &Served,
+    ) -> crate::error::Result<()> {
+        let body = ByteStream::from_path(path)
+            .await
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(&served.content_type)
+            .set_content_disposition(served.disposition.clone())
+            .body(body)
+            .send()
+            .await
+            .map_err(Box::new)?;
+        Ok(())
+    }
+
     pub(crate) async fn presign_upload(
         &self,
         key: &str,
@@ -645,6 +668,70 @@ impl S3 {
 
 /// Where the deployment's files are kept: uploads, attachments, their previews, icons, link
 /// preview pictures, and the evidence kept for reviewing reports. Objects are named by keys
+/// What [`import_directory`] did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Imported {
+    /// Objects uploaded.
+    pub copied: u64,
+    /// Objects already in the bucket at their size, from an import that stopped part way.
+    pub present: u64,
+    pub bytes: u64,
+}
+
+/// Copies every object of `from` but its staged uploads into `to`, each served as its record
+/// says and checked by its size once there, `concurrency` at a time. An object already in the
+/// bucket at its size is left as it is, so an import that stopped is finished by running it again.
+/// `on_each` is told each key as it is done.
+pub async fn import_directory(
+    from: &directory::Directory,
+    to: &S3,
+    concurrency: usize,
+    on_each: impl Fn(&str, &Imported),
+) -> crate::error::Result<Imported> {
+    use futures_util::StreamExt;
+    let keys = from.keys().await?;
+    let mut done = Imported::default();
+    let mut copies = futures_util::stream::iter(keys)
+        .map(|key| async move {
+            let (path, record) = from.object(&key).await?.ok_or_else(|| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("{key} was removed while it was being imported"),
+                ))
+            })?;
+            let size = tokio::fs::metadata(&path).await?.len();
+            if let Some((held, _)) = to.head(&key).await?
+                && held == size
+            {
+                return Ok::<_, crate::Error>((key, size, false));
+            }
+            let served = Served {
+                content_type: record.content_type,
+                disposition: record.disposition,
+            };
+            to.put_file(&key, &path, &served).await?;
+            match to.head(&key).await? {
+                Some((held, _)) if held == size => Ok((key, size, true)),
+                held => Err(crate::Error::Io(std::io::Error::other(format!(
+                    "{key} is {size} bytes, and the bucket holds {}",
+                    held.map_or("nothing".to_string(), |(held, _)| format!("{held} bytes"))
+                )))),
+            }
+        })
+        .buffer_unordered(concurrency.max(1));
+    while let Some(copied) = copies.next().await {
+        let (key, size, uploaded) = copied?;
+        if uploaded {
+            done.copied += 1;
+            done.bytes += size;
+        } else {
+            done.present += 1;
+        }
+        on_each(&key, &done);
+    }
+    Ok(done)
+}
+
 /// (`PublicPrefix::key`, [`upload_key`], [`evidence_key`]) whatever keeps them.
 #[derive(Clone)]
 pub enum MediaStore {

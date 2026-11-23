@@ -90,6 +90,11 @@ pub enum Command {
         #[clap(subcommand)]
         action: operator::SettingsCommand,
     },
+    /// Operator commands for the deployment's file storage: importing files kept in a directory.
+    Storage {
+        #[clap(subcommand)]
+        action: operator::StorageCommand,
+    },
     /// Operator commands for the registry of voice servers.
     VoiceServers {
         #[clap(subcommand)]
@@ -175,6 +180,7 @@ pub async fn run_command_with(config: &aspen_config::AspenConfig, command: Comma
         Command::Jobs { action } => operator::jobs(config, action).await,
         Command::Federation { action } => operator::federation(config, action).await,
         Command::Settings { action } => operator::settings(config, action).await,
+        Command::Storage { action } => operator::storage(config, action).await,
         Command::VoiceServers { action } => operator::voice_servers(config, action).await,
         Command::IdentityProviders { action } => operator::identity_providers(config, action).await,
         Command::Plugins { action } => operator::plugins(config, action).await,

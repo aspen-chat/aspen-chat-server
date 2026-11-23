@@ -30,6 +30,7 @@ mod jobs;
 mod limits;
 mod plugins;
 mod settings;
+mod storage;
 mod voice_servers;
 
 pub use admin::{AdminCommand, admin};
@@ -44,6 +45,7 @@ pub use jobs::{JobsCommand, jobs};
 pub use limits::{LimitsCommand, limits};
 pub use plugins::{PluginsCommand, plugins};
 pub use settings::{SettingsCommand, settings};
+pub use storage::{StorageCommand, storage};
 pub use voice_servers::{VoiceServersCommand, voice_servers};
 
 use anyhow::{Context, Result};

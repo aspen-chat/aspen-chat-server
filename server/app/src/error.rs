@@ -41,20 +41,21 @@ pub enum Error {
     AdminRequired,
     #[error("password does not meet requirement {0:?}")]
     PasswordRequirement(crate::PasswordRequirement),
-    #[error("error putting object to media store {0}")]
+    // The SDK's own errors read only "service error"; their context names what the service said.
+    #[error("error putting object to media store: {}", aws_sdk_s3::error::DisplayErrorContext(.0.as_ref()))]
     S3PutObject(
         #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::put_object::PutObjectError>>,
     ),
-    #[error("error deleting object from media store {0}")]
+    #[error("error deleting object from media store: {}", aws_sdk_s3::error::DisplayErrorContext(.0.as_ref()))]
     S3DeleteObject(
         #[from]
         Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_object::DeleteObjectError>>,
     ),
-    #[error("error reading object from media store {0}")]
+    #[error("error reading object from media store: {}", aws_sdk_s3::error::DisplayErrorContext(.0.as_ref()))]
     S3GetObject(
         #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>,
     ),
-    #[error("error inspecting object in media store {0}")]
+    #[error("error inspecting object in media store: {}", aws_sdk_s3::error::DisplayErrorContext(.0.as_ref()))]
     S3HeadObject(
         #[from]
         Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::head_object::HeadObjectError>>,
