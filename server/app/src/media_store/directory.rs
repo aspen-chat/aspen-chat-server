@@ -578,7 +578,10 @@ mod tests {
             let store = store.clone();
             async move {
                 store.delete("attachments/a").await.unwrap();
-                store.move_object("attachments/b", "evidence/b").await.unwrap()
+                store
+                    .move_object("attachments/b", "evidence/b")
+                    .await
+                    .unwrap()
             }
         });
         tokio::time::sleep(StdDuration::from_millis(300)).await;

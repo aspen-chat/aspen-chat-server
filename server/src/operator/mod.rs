@@ -49,9 +49,10 @@ pub use voice_servers::{VoiceServersCommand, voice_servers};
 use anyhow::{Context, Result};
 use aspen_app::aspen_config::AspenConfig;
 
-/// Who is running the command, for the servers' logs.
+/// Who ran the command, for the logs: the person `sudo` ran it for, or else this process's user.
 fn operator() -> String {
-    let user = std::env::var("USER")
+    let user = std::env::var("SUDO_USER")
+        .or_else(|_| std::env::var("USER"))
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".into());
     let host = std::fs::read_to_string("/etc/hostname")

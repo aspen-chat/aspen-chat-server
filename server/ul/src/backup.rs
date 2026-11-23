@@ -140,7 +140,14 @@ pub async fn backup(
             out.display()
         );
     }
-    std::fs::create_dir_all(out)?;
+    std::fs::create_dir_all(out).with_context(|| {
+        format!(
+            "could not make {}: the backup is written by the user the deployment runs as ({}), \
+             who must be able to write there",
+            out.display(),
+            crate::postgres::os_user().unwrap_or_default()
+        )
+    })?;
     // The dump holds the deployment's secrets (its federation key, its signing secrets), so the
     // backup is this user's alone.
     {

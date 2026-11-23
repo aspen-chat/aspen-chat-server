@@ -7,6 +7,7 @@ This guide is for whoever runs an Aspen deployment, from a single spare machine 
 | Guide                                       | What it covers                                                                                                                                                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Installing](installing/index.md)           | Step by step: the services, building, configuring, starting, the web client, voice servers, and the first administrator. Then network exposure and upgrading. |
+| [Ultra Lite](ultra-lite/index.md)           | The whole deployment in one program on one machine: installing, its settings, backups, and upgrading.                                                         |
 | [Configuration](configuration/index.md)     | Every setting of `aspen.toml` and `voice_server.toml`.                                                                                                        |
 | [Federation](federation/index.md)           | Letting your users use other deployments, and theirs yours.                                                                                                   |
 | [Plugins](plugins.md)                       | Installing plugins, granting what they ask, and where they run.                                                                                               |

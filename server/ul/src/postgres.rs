@@ -52,7 +52,7 @@ impl Sizes {
 }
 
 /// The user this process runs as, which the cluster's one role is named for.
-fn os_user() -> Result<String> {
+pub fn os_user() -> Result<String> {
     // SAFETY: getpwuid's answer is read before any other call into the password database.
     unsafe {
         let entry = libc::getpwuid(libc::geteuid());

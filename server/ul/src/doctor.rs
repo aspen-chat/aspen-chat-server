@@ -305,7 +305,11 @@ fn own_address(family: Family) -> Option<IpAddr> {
 
 fn ports(config: &Config) -> String {
     let voice = &config.voice;
-    let mut ports = vec![format!("TCP 443 to {}", config.port)];
+    let mut ports = match config.tls {
+        // The proxy in front answers 443 and 80, and reaches aspen-ul on this machine.
+        Tls::Off => vec!["TCP 443 and 80 to the proxy in front of aspen-ul".to_string()],
+        Tls::Files { .. } | Tls::Acme { .. } => vec![format!("TCP 443 to {}", config.port)],
+    };
     if !matches!(config.tls, Tls::Off) && config.redirect_port != 0 {
         ports.push(format!("TCP 80 to {}", config.redirect_port));
     }

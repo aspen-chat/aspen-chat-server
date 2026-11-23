@@ -98,6 +98,10 @@ fn control_socket(data: &Path) -> PathBuf {
 }
 
 fn main() {
+    // What the deployment writes (its files, its database, its backups) is its user's and group's
+    // alone, whatever umask started it.
+    // SAFETY: umask has no preconditions.
+    unsafe { libc::umask(0o027) };
     let opt = Opt::parse();
     // A command's answer is its standard output, so its logs go to standard error; the server's go
     // to standard output, which its supervisor keeps.
