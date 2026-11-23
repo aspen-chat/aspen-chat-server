@@ -112,7 +112,8 @@ A deployment that runs on one machine with [`aspen-box`](../box/README.md), on A
 [`../aws-single`](../aws-single/README.md) or anywhere else, moves here with its accounts, messages,
 sign-ins, and address. Its database is copied. From `../aws-single`, its storage is kept, not
 copied: this deployment takes the bucket and its read path over. From any other box, its files are
-copied into this deployment's bucket.
+copied into this deployment's bucket. An [Ultra Lite](../../docs/operators/ultra-lite/index.md)
+deployment (`aspen-ul`) moves here the same way, from its export, with each file's type kept.
 
 **Not rehearsed on AWS.** The copy itself has been run between local stand-ins of the two
 deployments. The steps around it (taking the storage over, the name changing hands) have only been
@@ -124,9 +125,10 @@ planned. Read each plan before approving it.
 | 3       | Down               | The copy, a release, and up to five minutes for the name to follow |
 | 4       | Gone               |                                                                    |
 
-1. **A box elsewhere than AWS only:** its domain must be in a Route 53 hosted zone first. Make the
-   zone, write the records the box has now into it (`aspen-box doctor` lists them), move the
-   domain's name servers to it at your registrar, and wait until `dig NS <domain>` names Route 53's.
+1. **A box or Ultra Lite elsewhere than AWS only:** its domain must be in a Route 53 hosted zone
+   first. Make the zone, write the records the box has now into it (`aspen-box doctor` lists them),
+   move the domain's name servers to it at your registrar, and wait until `dig NS <domain>` names
+   Route 53's.
 
 2. In `deploy/aws`, write `terraform.tfvars`, without `image_tag`: with none, no server starts, and
    the first release must find the old deployment's database, not make an empty one. Give no voice
@@ -141,6 +143,12 @@ planned. Read each plan before approving it.
 
    ```
    ./migrate.py prepare --from-box --domain chat.example.org
+   ```
+
+   From Ultra Lite, whose own voice server is `aspen-ul` (give no voice server that name):
+
+   ```
+   ./migrate.py prepare --from-ul --domain chat.example.org
    ```
 
    Then make everything:
@@ -173,6 +181,20 @@ planned. Read each plan before approving it.
    ./migrate.py copy --export ~/aspen-export
    ```
 
+   From Ultra Lite, stop it and export it on its machine, then copy the directory here the same way:
+
+   ```
+   sudo systemctl stop aspen-ul
+   sudo aspen-ul export ~/aspen-export
+   ./migrate.py copy --export ~/aspen-export
+   ```
+
+   Its files are uploaded by `aspen-chat-server storage import` from the API image (`--image`, the
+   `main` image by default), run in Docker on this machine with the AWS command line's credentials
+   (its environment, or `~/.aws`), so each keeps the type it is served with. An Ultra Lite
+   deployment already keeping its files in object storage has them copied first: `copy` says how,
+   and then takes `--files-copied`.
+
    It copies the database into the bucket, and the files when they were copied out, and restores the
    database here. Then set `image_tag` in `terraform.tfvars` and release:
 
@@ -194,7 +216,8 @@ planned. Read each plan before approving it.
    configuration forget what this one now uses, so that destroying it leaves the storage alone: then
    `tofu -chdir=../aws-single destroy`. Its data volume and snapshots are kept as the old
    deployment; delete them yourself once you are sure. From any other box, take it down on its
-   machine (`aspen-box down`), and any voice servers it had on other machines on theirs.
+   machine (`aspen-box down`), and any voice servers it had on other machines on theirs. From Ultra
+   Lite, keep it from starting again: `sudo systemctl disable aspen-ul`.
 
    Keep `migration.auto.tfvars.json`: it holds `domain`, and from `../aws-single` the `media_bucket`
    that is this deployment's bucket from now on.

@@ -319,7 +319,8 @@ or what an operator must open, route, or back up updates it in the same commit.
    bundled PostgreSQL (built from source against the same sysroot once per version, into
    `target/ul/<arch>/`; `--postgres-version` bundles another) and the built web client. `--binary`
    packs a binary already built, a debug one for development; it also needs `make`, `patchelf`, and
-   `zstd` (see Ultra Lite).
+   `zstd` (see Ultra Lite). `scripts/check_ul_export.py --ul BIN [--runtime DIR] --bin target/debug`
+   checks that a deployment leaves Ultra Lite whole, into a full deployment on services of its own.
 
 6. Run two deployments that federate, for developing federation:
 
@@ -569,8 +570,9 @@ Operator subcommands read the same configuration, log to stderr, and exit:
 `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, `settings show|set`, and
 `documents show|set|withdraw`, described under Administration, `communities unowned|set-owner`,
 under Roles and permissions, `jobs list|retry|cancel`, under Jobs,
-`attachments purge --message|--attachment`, under Reports, `voice-servers list|add|set|remove`,
-under Voice, `identity-providers list|add|set|remove`, under Identity providers,
+`attachments purge --message|--attachment`, under Reports, `storage import`, under Ultra Lite,
+`voice-servers list|add|set|remove`, under Voice, `identity-providers list|add|set|remove`, under
+Identity providers,
 `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`,
 under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`,
 under Plugins.

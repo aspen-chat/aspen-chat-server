@@ -45,4 +45,6 @@ itself are refused there: `public_url`, `database_url`, `database_pool_size`, NA
 
 To keep uploaded files in S3-compatible object storage rather than on the machine, give
 [`[server.media.s3]`](../configuration/media.md). `media_url` and its name are then not used, and
-backups no longer hold the files.
+backups no longer hold the files. A deployment that already has files moves them there with
+`aspen-ul move-to-s3`
+([Leaving Ultra Lite](leaving.md#moving-the-files-to-object-storage-staying-on-ultra-lite)).

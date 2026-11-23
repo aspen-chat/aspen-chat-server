@@ -15,6 +15,7 @@ mod backup;
 mod bundle;
 mod config;
 mod doctor;
+mod export;
 mod postgres;
 mod redirect;
 mod setup;
@@ -80,6 +81,19 @@ enum UlCommand {
     },
     /// Say what stands between this machine and a working deployment, and what to do about each.
     Doctor,
+    /// Write what a full deployment takes from this one into a directory of its own, with the
+    /// deployment stopped: its database, files, and what the database does not say.
+    Export {
+        /// An empty or absent directory, which the export is written into.
+        dir: PathBuf,
+    },
+    /// Move the deployment's files into the object storage `[server.media.s3]` names, with the
+    /// deployment stopped. The data directory's `media/` is moved aside once every file is there.
+    MoveToS3 {
+        /// How many files are uploaded at once.
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+    },
     /// Replace the deployment with a backup, with the deployment stopped. What the data
     /// directory held is moved into `replaced-<time>/` within it.
     Restore {
@@ -129,6 +143,8 @@ fn main() {
             | UlCommand::Backup { .. }
             | UlCommand::Restore { .. }
             | UlCommand::Doctor
+            | UlCommand::Export { .. }
+            | UlCommand::MoveToS3 { .. }
             | UlCommand::Operator(_),
         ) => setup::become_owner(&opt.data).map(|()| true),
     };
@@ -230,6 +246,8 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
             UlCommand::Serve
             | UlCommand::Install(_)
             | UlCommand::Backup { .. }
+            | UlCommand::Export { .. }
+            | UlCommand::MoveToS3 { .. }
             | UlCommand::Operator(_),
         ) => None,
         Some(UlCommand::Doctor) => {
@@ -269,21 +287,57 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
             | UlCommand::Restore { .. }
             | UlCommand::Doctor,
         ) => Ok(()),
+        Some(UlCommand::Export { dir }) => {
+            if aspen_bus::Remote::connect(&control_socket(&data))
+                .await
+                .is_ok()
+            {
+                bail!(
+                    "the deployment is running; stop it first (sudo systemctl stop aspen-ul), so \
+                     nothing changes after the export"
+                );
+            }
+            postgres.start(sizes).await?;
+            let made = export::export(&config, &data, &postgres, &dir).await;
+            *database = postgres.running();
+            made
+        }
+        Some(UlCommand::MoveToS3 { concurrency }) => {
+            if aspen_bus::Remote::connect(&control_socket(&data))
+                .await
+                .is_ok()
+            {
+                bail!("the deployment is running; stop it first (sudo systemctl stop aspen-ul)");
+            }
+            let server_config = server_config(&config, &runtime, &data, &postgres, sizes)?;
+            export::move_to_s3(&config, &server_config, &data, concurrency).await
+        }
         Some(UlCommand::Backup { dir }) => {
             if aspen_bus::Remote::connect(&control_socket(&data))
                 .await
                 .is_ok()
             {
                 // The deployment runs, and so does its database.
-                backup::backup(&config, &data, &postgres, &dir).await
+                let files = backup::backup(&config, &data, &postgres, &dir).await?;
+                backup::announce(&dir, files);
+                Ok(())
             } else {
                 postgres.start(sizes).await?;
                 let made = backup::backup(&config, &data, &postgres, &dir).await;
                 *database = postgres.running();
-                made
+                backup::announce(&dir, made?);
+                Ok(())
             }
         }
         None | Some(UlCommand::Serve) => {
+            if config.files_in_s3() && export::files_left(&data)? {
+                bail!(
+                    "aspen-ul.toml keeps files in object storage, and {} still holds the \
+                     deployment's files: move them there with `aspen-ul move-to-s3`, or take \
+                     [server.media.s3] out",
+                    data.join("media").display()
+                );
+            }
             info!(memory_mib = memory, pool = sizes.pool, "starting");
             postgres.start(sizes).await?;
             let served = serve(&config, &runtime, &data, &mut postgres, sizes, memory).await;

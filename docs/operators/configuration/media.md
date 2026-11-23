@@ -131,3 +131,13 @@ server. That server serves them itself, at an address of their own. Given, `[med
   under way. Apps upload those files again.
 - An upload is not cut off by `[connections] request_seconds`, so a large file over a slow
   connection completes. A connection with nothing happening on it still closes after `idle_seconds`.
+
+### Moving files from a directory into S3
+
+`aspen-chat-server storage import DIR` uploads a directory of files kept as `[media.directory]`
+keeps them (a directory holding `objects/` and `meta/`, or an
+[Ultra Lite export](../ultra-lite/leaving.md)) into the bucket `[media.s3]` names, each with the
+type and disposition it is served with, checking each by its size once there. A file already in the
+bucket at its size is left as it is, so an import that stopped is finished by running it again.
+`--concurrency` (8) is how many files are uploaded at once. Uploads that were never confirmed are
+left behind.

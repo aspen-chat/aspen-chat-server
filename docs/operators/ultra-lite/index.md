@@ -11,6 +11,7 @@ that outgrows it moves to the full one.
 | This page                         | What the machine needs, and installing step by step                               |
 | [Configuration](configuration.md) | Every setting of `aspen-ul.toml`                                                  |
 | [Running it](operating.md)        | Commands, `doctor`, backups and restoring, upgrading, logs, and the data it keeps |
+| [Leaving it](leaving.md)          | Moving to the full deployment, and moving the files to object storage             |
 
 ## What the machine needs
 

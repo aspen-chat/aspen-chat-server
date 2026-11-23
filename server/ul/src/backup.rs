@@ -50,14 +50,14 @@ pub enum Files {
     S3,
 }
 
-fn now() -> String {
+pub fn now() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("a time formats")
 }
 
 /// A name for a file or directory from the present moment, sortable and safe in a path.
-fn stamp() -> String {
+pub fn stamp() -> String {
     now().replace(':', "-")
 }
 
@@ -126,14 +126,26 @@ async fn run_tool(database: &Postgres, program: &str, args: &[&str]) -> Result<(
     Ok(())
 }
 
-/// Makes a backup of the deployment at `data` in `out`, which must be empty or absent.
-/// `database` is running, the deployment's or the command's own.
+/// Tells the operator where the backup at `out` is, and what it leaves out.
+pub fn announce(out: &Path, files: Files) {
+    match files {
+        Files::Directory => println!("backed up to {}", out.display()),
+        Files::S3 => println!(
+            "backed up to {}; the files are in object storage, which this backup does not \
+             hold: keep them as the storage allows (versioning, or a copy of the bucket)",
+            out.display()
+        ),
+    }
+}
+
+/// Makes a backup of the deployment at `data` in `out`, which must be empty or absent, returning
+/// whether it holds the files. `database` is running, the deployment's or the command's own.
 pub async fn backup(
     config: &crate::config::Config,
     data: &Path,
     database: &Postgres,
     out: &Path,
-) -> Result<()> {
+) -> Result<Files> {
     if out.exists() && std::fs::read_dir(out)?.next().is_some() {
         bail!(
             "{} is not empty; give a directory of its own to each backup",
@@ -221,15 +233,7 @@ pub async fn backup(
     let written = out.join("backup.json.partial");
     std::fs::write(&written, serde_json::to_vec_pretty(&manifest)?)?;
     std::fs::rename(&written, out.join("backup.json"))?;
-    match files {
-        Files::Directory => println!("backed up to {}", out.display()),
-        Files::S3 => println!(
-            "backed up to {}; the files are in object storage, which this backup does not \
-             hold: keep them as the storage allows (versioning, or a copy of the bucket)",
-            out.display()
-        ),
-    }
-    Ok(())
+    Ok(files)
 }
 
 /// Links the files into a staging directory beside them while removals are held back, returning

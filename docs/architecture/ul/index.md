@@ -173,6 +173,27 @@ Before a start applies migrations to a database that already has some, UL dumps 
 `backups/before-migrating-<time>.dump`, keeping the newest three, so a failed upgrade can be undone
 with the binary before it.
 
+## Leaving
+
+`aspen-ul export DIR` (`export.rs`), with the deployment stopped so nothing changes after it, is a
+backup with `export.json` beside it: what the full deployment needs that the database does not say,
+`public_url` exactly and the voice server UL registered for itself (`aspen-ul`, which the full
+deployment removes). The federation key, every secret, and every session are in the database. The
+full deployment restores the dump into an empty database and runs `aspen-migrate up`, and
+`aspen-chat-server storage import DIR` uploads the files (`media_store::import_directory`): every
+object but staged uploads, each with the type and disposition its record says, checked by its size
+once in the bucket, and one already there at its size left as it is, so an import that stopped is
+finished by running it again. `deploy/aws/migrate.py --from-ul` does the same through the API image.
+`aspen-ul move-to-s3` uploads the same way into the bucket `[server.media.s3]` names, then moves
+`media/` aside; UL refuses to start with that setting while `media/` still holds files.
+
+`scripts/check_ul_export.py` checks it end to end: it runs UL with accounts, a community, messages
+with a file and a picture, a reaction, a thread, a poll, a DM, and an icon, exports it, restores it
+into a full deployment on services of its own, and compares every table row for row (under one time
+zone and output style, since rows are compared as text), every file's size and type in the bucket, a
+session from before, and the channel and its files as read back; then it moves UL's own files to a
+bucket and reads them from there.
+
 ## Doctor
 
 `aspen-ul doctor` (`doctor.rs`) says what stands between the machine and a working deployment, each

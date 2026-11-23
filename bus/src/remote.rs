@@ -490,6 +490,10 @@ async fn answer_one(stream: UnixStream, bus: &Bus) -> std::io::Result<()> {
         .take(MAX_LINE as u64)
         .read_line(&mut line)
         .await?;
+    // A process asking only whether the deployment runs connects and closes, sending nothing.
+    if line.is_empty() {
+        return Ok(());
+    }
     let answer = match serde_json::from_str::<Request>(&line) {
         Ok(request) => answered(bus, request).await,
         Err(e) => Answer::Failed(format!("the request could not be read: {e}")),
