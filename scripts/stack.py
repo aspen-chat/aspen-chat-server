@@ -105,6 +105,23 @@ def wait_for_services(media: str = "s3") -> None:
         wait_for("SeaweedFS's S3", lambda: http_status("http://127.0.0.1:8333/") in (200, 403, 404), 90)
 
 
+
+def valkey_integer(*command: str) -> int:
+    """What the Valkey a stack uses (`VALKEY_URL`) answers `command` with, a command whose answer
+    is an integer (`EXISTS`, `DEL`), spoken in RESP over a socket so no client is needed."""
+    url = urllib.parse.urlsplit(VALKEY_URL)
+    if url.scheme != "redis" or url.password:
+        raise Failed(f"VALKEY_URL {VALKEY_URL!r}: only redis:// without a password is spoken here")
+    request = f"*{len(command)}\r\n".encode() + b"".join(
+        f"${len(part.encode())}\r\n".encode() + part.encode() + b"\r\n" for part in command
+    )
+    with socket.create_connection((url.hostname or "127.0.0.1", url.port or 6379), timeout=5) as conn:
+        conn.sendall(request)
+        reply = conn.makefile("rb").readline()
+    if not reply.startswith(b":"):
+        raise Failed(f"Valkey answered {' '.join(command)} with {reply!r}, not an integer")
+    return int(reply[1:].strip())
+
 def clean_env() -> dict[str, str]:
     """This environment without ASPEN_ variables, which would override the configs written."""
     return {k: v for k, v in os.environ.items() if not k.startswith("ASPEN_")}

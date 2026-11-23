@@ -41,7 +41,7 @@ from pathlib import Path
 from software_passkey import SoftwarePasskey, b64url
 import dev_ca
 import oidc_provider_stand_in
-from stack import (REPO, EventStream, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for,
+from stack import (REPO, EventStream, Failed, Ports, Stack, WebSocket, compose, psql, start_services, valkey_integer, wait_for,
                    wait_for_services)
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
@@ -1356,7 +1356,7 @@ def lost_presence_keys(world: World, check: Checks) -> None:
         """What Valkey answers `command` over the owner's presence keys of `kinds` with, a count.
         The keys are `app::user_status`'s and `app::presence_override::override_key`'s."""
         keys = [f"user:{world.owner['id']}:{kind}" for kind in kinds]
-        return int(compose("exec", "-T", "valkey", "valkey-cli", command, *keys).stdout.strip())
+        return valkey_integer(command, *keys)
 
     world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible"})
     check("Valkey holds what they chose", valkey("EXISTS", "override") == 1)
