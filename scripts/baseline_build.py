@@ -109,9 +109,10 @@ ROOT_PACKAGES = [
 ]
 # Trixie's compiler runtime is GCC 14's.
 ROOT_PACKAGES_TRIXIE = {"libgcc-12-dev": "libgcc-14-dev"}
-# The servers: the chat server, the voice server, and the migration runner.
-PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
-BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate"]
+# The servers: the chat server, the voice server, the migration runner, and Ultra Lite, whose
+# runtime `scripts/package_ul.py` appends.
+PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul"]
+BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul"]
 # Shared libraries the binaries may need beyond the C runtime, and the Debian package that
 # provides each where they run. A binary needing any other library is refused: it was linked
 # against something the deployment's machines are not promised to have.

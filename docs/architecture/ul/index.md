@@ -40,10 +40,28 @@ Everything the deployment keeps is in the directory `--data` names:
 | `postgres/18/`  | The cluster, made on first start with every locale category `C.UTF-8` of the builtin provider |
 | `media/`        | The files (see [Directory storage](../../operators/configuration/media.md#mediadirectory))    |
 | `logs/`         | PostgreSQL's log                                                                              |
-| `run/`          | PostgreSQL's socket, readable by UL's user alone                                              |
+| `run/`          | PostgreSQL's socket and the control socket, readable by UL's user alone                       |
+| `runtime/`      | The runtime unpacked from the binary (see below)                                              |
 
-The runtime (`--runtime`) holds the bundled PostgreSQL (`pgsql/`) and the web client
-(`web-client/`).
+## The runtime
+
+What UL runs beside its own code, the bundled PostgreSQL (`pgsql/`) and the web client
+(`web-client/`), is a zstd-compressed tar appended to the binary by `scripts/package_ul.py`
+(`bundle.rs`), so `cargo build` needs neither pnpm nor a PostgreSQL build. The binary ends with a
+trailer: the archive's SHA-256, its length, and a magic number. On start, UL unpacks the archive
+into `runtime/<hash>/` unless that directory is already there, unpacking beside it, checking the
+hash, and only then renaming it into place, so a directory by that name always holds the whole
+runtime. A damaged binary is refused. `runtime/current` names the runtime started last; when a new
+binary replaces it, the one it named is kept beside the new one, for a PostgreSQL major-version
+upgrade to run its binaries, and every older one is removed. `--runtime` names a directory to use
+instead, for development.
+
+PostgreSQL is built from source against the Debian 12 sysroot `scripts/baseline_build.py` uses,
+without OpenSSL, ICU, or readline, with zlib linked in statically, the extensions the migrations
+create (`pg_trgm`, `btree_gin`), and only the programs that running, dumping, restoring, and
+`pg_upgrade` need. It needs no library but the C runtime and its own `libpq`, which its programs
+find through their run path. `aspen-ul` itself is built by `baseline_build.py` like the other
+servers, and needs `libssl3`.
 
 ## Sizes
 

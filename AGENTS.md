@@ -314,6 +314,12 @@ or what an operator must open, route, or back up updates it in the same commit.
    compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB
    pages aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
 
+   `scripts/package_ul.py --arch ARCH` makes Ultra Lite as it is released, one file in
+   `target/ul/<arch>/aspen-ul`: the baseline build of `aspen-ul` with its runtime appended, the
+   bundled PostgreSQL (built from source against the same sysroot once per version, into
+   `target/ul/<arch>/`) and the built web client. `--binary` packs a binary already built, a debug
+   one for development; it also needs `make`, `patchelf`, and `zstd` (see Ultra Lite).
+
 6. Run two deployments that federate, for developing federation:
 
    ```

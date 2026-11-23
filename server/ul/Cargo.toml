@@ -36,3 +36,7 @@ url = "2.5.8"
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 voice_protocol = { version = "0.1.0", path = "../../voice_protocol" }
 voice_server = { version = "0.1.0", path = "../../voice_server" }
+tar = { version = "0.4.46", default-features = false }
+ruzstd = "0.9.1"
+sha2 = "0.10.9"
+hex = "0.4.3"

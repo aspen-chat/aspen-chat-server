@@ -4,9 +4,11 @@
 //! one port the API is served at, under `/voice-server`.
 //!
 //! Everything it keeps is in the data directory (`--data`): `aspen-ul.toml`, what the operator
-//! says ([`config`]); `postgres/`, the cluster; `media/`, the files; `logs/`; and `run/`, the
-//! database's socket.
+//! says ([`config`]); `postgres/`, the cluster; `media/`, the files; `logs/`; `run/`, the
+//! database's socket and the control socket commands reach the bus through; and `runtime/`, the
+//! bundled PostgreSQL and web client, unpacked from the binary ([`bundle`]).
 
+mod bundle;
 mod config;
 mod postgres;
 
@@ -46,9 +48,10 @@ struct Opt {
     /// The data directory, which holds `aspen-ul.toml` and everything the deployment keeps.
     #[arg(long, default_value = "/var/lib/aspen-ul")]
     data: PathBuf,
-    /// The runtime: the bundled PostgreSQL (`pgsql/`) and the web client (`web-client/`).
+    /// A runtime to use instead of the one this binary carries: a directory holding the bundled
+    /// PostgreSQL (`pgsql/`) and the web client (`web-client/`), for development.
     #[arg(long)]
-    runtime: PathBuf,
+    runtime: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<UlCommand>,
 }
@@ -156,9 +159,12 @@ async fn run(opt: Opt, database: &mut Option<postgres::Running>) -> Result<()> {
     let config = config::Config::read(&config_path)?;
     let memory = memory_mib(config.memory_mib)?;
     let sizes = postgres::Sizes::for_memory(memory);
-    let runtime = std::fs::canonicalize(&opt.runtime)
-        .with_context(|| format!("the runtime {} is not there", opt.runtime.display()))?;
     let data = std::fs::canonicalize(&opt.data)?;
+    let runtime = match &opt.runtime {
+        Some(runtime) => std::fs::canonicalize(runtime)
+            .with_context(|| format!("the runtime {} is not there", runtime.display()))?,
+        None => bundle::unpacked(&data)?,
+    };
 
     let mut postgres = postgres::Postgres::new(&runtime, &data)?;
     match opt.command {
