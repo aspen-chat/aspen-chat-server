@@ -8,9 +8,11 @@
 //! database's socket and the control socket commands reach the bus through; and `runtime/`, the
 //! bundled PostgreSQL and web client, unpacked from the binary ([`bundle`]).
 
+mod acme;
 mod bundle;
 mod config;
 mod postgres;
+mod redirect;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -210,7 +212,17 @@ fn server_config(
     database: &postgres::Postgres,
     sizes: postgres::Sizes,
 ) -> Result<aspen_app::aspen_config::AspenConfig> {
-    let media_url = config.media_url()?;
+    // Files are kept in the data directory unless `[server.media.s3]` keeps them in object
+    // storage.
+    let directory = if config.files_in_s3() {
+        String::new()
+    } else {
+        format!(
+            "[media.directory]\npath = {}\npublic_base_url = {}\n",
+            quoted(&data.join("media").display().to_string()),
+            quoted(&config.media_url()?)
+        )
+    };
     // The bus and short-lived store are this process's, so `nats_url`, `nats_auth_token`, and
     // `valkey_url`, which a server reaching NATS and Valkey needs, are given addresses that name
     // nothing (`.invalid` is reserved for that) and are never read.
@@ -224,17 +236,13 @@ fn server_config(
          event_retained_mib = 32\n\
          [web_client]\n\
          dir = {web}\n\
-         [media.directory]\n\
-         path = {media}\n\
-         public_base_url = {media_url}\n\
          [metrics]\n\
-         enabled = false\n",
+         enabled = false\n\
+         {directory}",
         public = quoted(&config.public_url),
         database = quoted(&database.url(postgres::DATABASE)),
         pool = sizes.pool,
         web = quoted(&runtime.join("web-client").display().to_string()),
-        media = quoted(&data.join("media").display().to_string()),
-        media_url = quoted(&media_url),
     );
     aspen_app::aspen_config::load_config_sources(vec![
         Box::new(::config::File::from_str(
@@ -305,15 +313,58 @@ async fn serve(
         config::Tls::Files { cert, key } => {
             Some(aspen_chat_server::tls_from_files(key, cert, false)?)
         }
+        config::Tls::Acme {
+            email,
+            directory,
+            ca_file,
+        } => {
+            let certificates = std::sync::Arc::new(acme::Certificates::default());
+            let keeper = acme::Acme::new(
+                &data.join("acme"),
+                config.names()?,
+                acme::Authority {
+                    directory: directory
+                        .clone()
+                        .unwrap_or_else(|| acme::LETS_ENCRYPT.to_string()),
+                    email: email.clone(),
+                    ca_file: ca_file.clone(),
+                },
+                certificates.clone(),
+            )?;
+            tokio::spawn(keeper.run());
+            Some(acme::acceptor(certificates))
+        }
     };
-    let addresses: Vec<SocketAddr> = if config.listen.is_empty() {
-        &aspen_sockets::EVERY_INTERFACE[..]
-    } else {
-        &config.listen[..]
+    if tls.is_some() && config.redirect_port != 0 {
+        let addresses: Vec<SocketAddr> = listen_addresses(config)
+            .map(|ip| SocketAddr::new(ip, config.redirect_port))
+            .collect();
+        let listeners = aspen_sockets::tcp_listeners(&addresses, !config.listen.is_empty())
+            .with_context(|| {
+                format!(
+                    "could not listen for plain HTTP at port {}, which redirects to the \
+                     deployment; set redirect_port = 0 for none",
+                    config.redirect_port
+                )
+            })?;
+        let media = if config.files_in_s3() {
+            None
+        } else {
+            let media_url = config.media_url()?;
+            let host = url::Url::parse(&media_url)?
+                .host_str()
+                .context("media_url names no host")?
+                .to_string();
+            Some((host, media_url))
+        };
+        tokio::spawn(redirect::serve(
+            redirect::Redirect::new(&config.public_url, media),
+            listeners,
+        ));
     }
-    .iter()
-    .map(|&ip| SocketAddr::new(ip, config.port))
-    .collect();
+    let addresses: Vec<SocketAddr> = listen_addresses(config)
+        .map(|ip| SocketAddr::new(ip, config.port))
+        .collect();
     let listeners = aspen_sockets::tcp_listeners(&addresses, !config.listen.is_empty())?;
     for listener in &listeners {
         info!(address = %listener.local_addr()?, "listening");
@@ -340,6 +391,17 @@ async fn serve(
     };
     voice.shutdown().await;
     served
+}
+
+/// The addresses `config` listens on, every interface's when it names none.
+fn listen_addresses(config: &config::Config) -> impl Iterator<Item = std::net::IpAddr> + '_ {
+    if config.listen.is_empty() {
+        &aspen_sockets::EVERY_INTERFACE[..]
+    } else {
+        &config.listen[..]
+    }
+    .iter()
+    .copied()
 }
 
 /// `web`, with the requests under [`VOICE_PATH`] taken by `voice` instead, their paths as the

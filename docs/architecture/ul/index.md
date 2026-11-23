@@ -14,7 +14,7 @@ redundant, or highly available. A deployment that outgrows it moves to the full 
 | Database                | The bundled PostgreSQL, a child process, over a Unix socket in `run/` alone (`postgres.rs`)                              | PostgreSQL, wherever it is    |
 | Bus                     | `aspen_bus::Bus::Memory`, in the process                                                                                 | NATS JetStream                |
 | Short-lived store       | `aspen_ephemeral::Ephemeral::Memory`, in the process                                                                     | Valkey                        |
-| Files                   | `MediaStore::Directory`, in `media/`, served at their own origin (`api::media`)                                          | S3 and its read path          |
+| Files                   | `MediaStore::Directory`, in `media/`, served at their own origin (`api::media`), or S3 when `[server.media.s3]` gives it | S3 and its read path          |
 | Voice server            | `voice_server::VoiceServer` in the process, its routes under `/voice-server` on the deployment's own port (`with_voice`) | `voice_server` processes      |
 | API server and listener | `api::start_with` and `aspen_chat_server::serve`, as `aspen-chat-server` runs them                                       | `aspen-chat-server` processes |
 
@@ -39,6 +39,7 @@ Everything the deployment keeps is in the directory `--data` names:
 | `aspen-ul.toml` | What the operator says (`config.rs`)                                                          |
 | `postgres/18/`  | The cluster, made on first start with every locale category `C.UTF-8` of the builtin provider |
 | `media/`        | The files (see [Directory storage](../../operators/configuration/media.md#mediadirectory))    |
+| `acme/`         | The ACME account, and the certificate and its key, readable by UL's user alone                |
 | `logs/`         | PostgreSQL's log                                                                              |
 | `run/`          | PostgreSQL's socket and the control socket, readable by UL's user alone                       |
 | `runtime/`      | The runtime unpacked from the binary (see below)                                              |
@@ -62,6 +63,24 @@ create (`pg_trgm`, `btree_gin`), and only the programs that running, dumping, re
 `pg_upgrade` need. It needs no library but the C runtime and its own `libpq`, which its programs
 find through their run path. `aspen-ul` itself is built by `baseline_build.py` like the other
 servers, and needs `libssl3`.
+
+## TLS
+
+`[tls] mode` is `off` (plain HTTP, for a proxy on the machine or a deployment at `localhost`),
+`files` (a certificate and key the operator keeps), or `acme` (`acme.rs`). With `acme`, UL asks an
+ACME authority, Let's Encrypt unless `directory` names another, for one certificate naming
+`public_url`'s host and, when it serves its files, `media_url`'s. It answers the authority's
+TLS-ALPN-01 validation on the port it serves at (`acme-tls/1` among its ALPN protocols, a
+`ResolvesServerCert` answering a validation with its challenge certificate and anything else with
+the live certificate), so no other port needs to reach the machine and nothing else stops serving
+while it does. Until the first certificate arrives, handshakes are refused. The certificate is
+renewed two thirds through its lifetime, and at once when it does not name every name, looked at at
+least every twelve hours; a failed issuance is retried after a minute, doubling to six hours, since
+authorities limit failed validations.
+
+With TLS on, `redirect_port` (80, or 0 for none) answers plain HTTP with a permanent redirect to the
+same path at `public_url`, or at `media_url` for a request naming its host (`redirect.rs`); the
+redirect is to the deployment's own address whatever the `Host` says.
 
 ## Sizes
 

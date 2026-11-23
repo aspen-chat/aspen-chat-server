@@ -36,6 +36,10 @@ pub struct Config {
     /// The port the deployment is served at.
     #[serde(default = "default_port")]
     pub port: u16,
+    /// The port plain HTTP is answered at with a redirect to the deployment, while TLS is on; 0
+    /// for none.
+    #[serde(default = "default_redirect_port")]
+    pub redirect_port: u16,
     pub tls: Tls,
     /// The memory this deployment may use, in MiB, which sizes PostgreSQL, the database pool, and
     /// what the bus and short-lived store hold. The machine's (or its cgroup's) when not given.
@@ -52,6 +56,10 @@ fn default_port() -> u16 {
     443
 }
 
+fn default_redirect_port() -> u16 {
+    80
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Tls {
@@ -60,6 +68,17 @@ pub enum Tls {
     Off,
     /// A certificate and key in files, PEM or DER, for every name the deployment answers.
     Files { cert: PathBuf, key: PathBuf },
+    /// A certificate from an ACME authority for every name the deployment answers, renewed while
+    /// it runs (`acme`).
+    Acme {
+        /// Where the authority tells of problems with the certificate.
+        email: Option<String>,
+        /// The authority's directory; Let's Encrypt's when not given.
+        directory: Option<String>,
+        /// Authorities trusted for reaching it besides the system's, for one of the operator's
+        /// own.
+        ca_file: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,16 +131,48 @@ impl Config {
             if table
                 .get("media")
                 .and_then(|media| media.clone().into_table().ok())
-                .is_some_and(|media| media.contains_key("directory") || media.contains_key("s3"))
+                .is_some_and(|media| media.contains_key("directory"))
             {
                 bail!(
-                    "[server.media] gives where files are kept, which aspen-ul sets itself; give \
-                     media_url at the top of {}",
+                    "[server.media.directory] is the data directory's, which aspen-ul sets \
+                     itself; give media_url at the top of {} for where its files are served, or \
+                     [server.media.s3] to keep them in object storage instead",
                     path.display()
                 );
             }
         }
         Ok(config)
+    }
+
+    /// Whether the deployment's files are in object storage (`[server.media.s3]`) rather than
+    /// the data directory, served at [`Self::media_url`].
+    pub fn files_in_s3(&self) -> bool {
+        self.server
+            .as_ref()
+            .and_then(|server| server.clone().into_table().ok())
+            .and_then(|server| server.get("media")?.clone().into_table().ok())
+            .is_some_and(|media| media.contains_key("s3"))
+    }
+
+    /// The host names the deployment answers at: `public_url`'s, and `media_url`'s when it
+    /// serves its files.
+    pub fn names(&self) -> Result<std::collections::BTreeSet<String>> {
+        let mut urls = vec![self.public_url.clone()];
+        if !self.files_in_s3() {
+            urls.push(self.media_url()?);
+        }
+        urls.iter()
+            .map(|url| {
+                let parsed =
+                    url::Url::parse(url).with_context(|| format!("{url:?} is not an address"))?;
+                match parsed.host() {
+                    Some(url::Host::Domain(domain)) => Ok(domain.to_string()),
+                    Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) | None => bail!(
+                        "{url:?} names no domain, and a certificate is issued for domains alone"
+                    ),
+                }
+            })
+            .collect()
     }
 
     /// `media_url`, or `media.` and `public_url`'s host at its scheme and port.
@@ -228,5 +279,41 @@ mod tests {
             read("public_url = \"https://chat.example.org\"\n").is_err(),
             "tls must be said"
         );
+    }
+
+    #[test]
+    fn the_certificate_names_the_media_host_only_when_it_serves_files() {
+        let here = read(
+            "public_url = \"https://chat.example.org\"\n[tls]\nmode = \"acme\"\nemail = \"ops@example.org\"\n",
+        )
+        .unwrap();
+        assert!(!here.files_in_s3());
+        assert_eq!(
+            here.names().unwrap(),
+            ["chat.example.org", "media.chat.example.org"]
+                .map(String::from)
+                .into()
+        );
+        assert!(matches!(
+            here.tls,
+            Tls::Acme {
+                email: Some(_),
+                directory: None,
+                ca_file: None
+            }
+        ));
+        assert_eq!(here.redirect_port, 80);
+        let s3 = read(
+            "public_url = \"https://chat.example.org\"\n[tls]\nmode = \"acme\"\n\
+             [server.media.s3]\nbucket = \"b\"\n",
+        )
+        .unwrap();
+        assert!(s3.files_in_s3());
+        assert_eq!(
+            s3.names().unwrap(),
+            ["chat.example.org"].map(String::from).into()
+        );
+        let address = read("public_url = \"https://192.0.2.1\"\n[tls]\nmode = \"acme\"\n").unwrap();
+        assert!(address.names().is_err());
     }
 }
