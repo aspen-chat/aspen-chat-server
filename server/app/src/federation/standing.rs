@@ -19,14 +19,14 @@
 //! nothing vouches for, at once ([`shut_out_home`]) and at each pass; and when the home has gone
 //! unreached for `standing_grace_seconds`.
 //!
-//! One server does each pass, under an advisory lock, while any gate is open. It reads again
-//! the documents of the deployments in use that a gate admits ([`refresh_documents`]), so a key
-//! one replaced stops verifying here within an interval, and beside that, while an immigration
-//! gate admits anyone, asks the homes, [`CONCURRENCY`] at a time and each within [`BUDGET`], so
-//! slow homes delay no one else; then it forgets deployments contacted once and never used
-//! (`directory::prune_unused`). A deployment that fails is left alone for a while, the wait doubling with
-//! each failure in a row up to an interval; its users still lose their sessions once unconfirmed
-//! for the grace.
+//! Each pass is a recurring job ([`pass_step`]), so one server does it at a time, while any gate is
+//! open. It reads again the documents of the deployments in use that a gate admits
+//! ([`refresh_documents`]), so a key one replaced stops verifying here within an interval, and
+//! beside that, while an immigration gate admits anyone, asks the homes, [`CONCURRENCY`] at a time
+//! and each within [`BUDGET`], so slow homes delay no one else; then it forgets deployments
+//! contacted once and never used (`directory::prune_unused`). A deployment that fails is left alone
+//! for a while, the wait doubling with each failure in a row up to an interval; its users still
+//! lose their sessions once unconfirmed for the grace.
 
 use crate::UserId;
 use crate::context::GlobalServerContext;
