@@ -32,10 +32,10 @@ docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 `ASPEN_COMMIT` is the commit About Aspen names; add `--build-arg ASPEN_MODIFIED=true` when the
 checkout has changes of its own.
 
-| Image   | Holds                                                        | Starts                                                                                               |
-| ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `api`   | `aspen-chat-server`, `aspen-migrate`, the web client, `curl` | `aspen-chat-server --no-https --port 8080`, for a load balancer or reverse proxy that terminates TLS |
-| `voice` | `voice_server`, `curl`                                       | `voice_server`                                                                                       |
+| Image   | Holds                                                                                          | Starts                                                                                               |
+| ------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `api`   | `aspen-chat-server`, `aspen-migrate`, the web client, `aspen-svg-render` and its fonts, `curl` | `aspen-chat-server --no-https --port 8080`, for a load balancer or reverse proxy that terminates TLS |
+| `voice` | `voice_server`, `curl`                                                                         | `voice_server`                                                                                       |
 
 Neither holds `ffmpeg`, so the `api` image offers videos for download without a poster. To take
 posters, build an image on it that installs `ffmpeg`, and set `[media.previews] ffmpeg` and

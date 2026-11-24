@@ -5,7 +5,8 @@
     scripts/package_ul.py --arch x86_64 --binary target/debug/aspen-ul --out aspen-ul
     scripts/package_ul.py --arch x86_64 --postgres-only   # prints where it is
 
-The runtime is the bundled PostgreSQL (`pgsql/`) and the built web client (`web-client/`), a
+The runtime is the bundled PostgreSQL (`pgsql/`), the built web client (`web-client/`), and the SVG
+renderer with the fonts it draws text in (`svg-render/`, `aspen-svg-render` and `fonts/`), a
 zstd-compressed tar the binary unpacks into its data directory on first start (`server/ul/src/
 bundle.rs`, whose trailer this writes: the archive's SHA-256, its length as a little-endian u64,
 and the magic). PostgreSQL is built from source against the Debian 12 sysroot of
@@ -13,9 +14,9 @@ and the magic). PostgreSQL is built from source against the Debian 12 sysroot of
 the migrations create, and pruned to what running, dumping, restoring, and `pg_upgrade` need; it
 is built once per version and architecture into `target/ul/<arch>/`, which `--postgres-only`
 builds alone, for running a build of aspen-ul with `--runtime` (`scripts/stack.py`'s `UlStack`
-does). The binary is built by
-`baseline_build.py` unless `--binary` names one. The web client must already be built
-(`pnpm build` in `client/`).
+does). The binary and the SVG renderer are built by `baseline_build.py` unless `--binary` names
+one, and then the renderer beside it is packed (`--svg-renderer` names another). The web client
+must already be built (`pnpm build` in `client/`), and the fonts (`scripts/svg_fonts.py`).
 
 It needs what `baseline_build.py` needs, `make` and `patchelf` to build PostgreSQL, and `zstd` to
 pack.
@@ -50,6 +51,7 @@ KEEP_BIN = {
 # `server/ul/src/bundle.rs`'s `MAGIC`.
 MAGIC = b"ASPENUL\x01"
 WEB_CLIENT = baseline.REPO / "client" / "packages" / "app" / "dist"
+SVG_FONTS = baseline.REPO / "target" / "svg-fonts"
 UL = baseline.REPO / "target" / "ul"
 
 
@@ -185,31 +187,44 @@ def build_postgres(arch: str, version: str, jobs: int) -> Path:
     return prefix
 
 
+def add_path(tar: tarfile.TarFile, path: Path, name: str) -> None:
+    """Adds `path` as `name`, with fixed owners and times, so the same inputs make the same
+    archive and so the same runtime directory."""
+    info = tar.gettarinfo(path, arcname=name)
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    info.mtime = 0
+    info.mode &= 0o755
+    if info.isreg():
+        with path.open("rb") as file:
+            tar.addfile(info, file)
+    else:
+        tar.addfile(info)
+
+
 def add_tree(tar: tarfile.TarFile, source: Path, name: str) -> None:
-    """Adds `source` as `name`, in a fixed order with fixed owners and times, so the same inputs
-    make the same archive and so the same runtime directory."""
-    paths = [source, *sorted(source.rglob("*"))]
-    for path in paths:
-        info = tar.gettarinfo(path, arcname=str(Path(name) / path.relative_to(source)))
-        info.uid = info.gid = 0
-        info.uname = info.gname = ""
-        info.mtime = 0
-        info.mode &= 0o755
-        if info.isreg():
-            with path.open("rb") as file:
-                tar.addfile(info, file)
-        else:
-            tar.addfile(info)
+    """Adds `source` as `name`, in a fixed order (`add_path`)."""
+    for path in [source, *sorted(source.rglob("*"))]:
+        add_path(tar, path, str(Path(name) / path.relative_to(source)))
 
 
-def pack(binary: Path, postgres: Path, web_client: Path, out: Path) -> None:
+def pack(binary: Path, postgres: Path, web_client: Path, svg_renderer: Path, svg_fonts: Path, out: Path) -> None:
     if not (web_client / "index.html").is_file():
         baseline.fail(f"{web_client} holds no built web client: run pnpm build in client/")
+    if not svg_renderer.is_file():
+        baseline.fail(f"there is no SVG renderer at {svg_renderer}")
+    if not any(svg_fonts.glob("*.ttf")):
+        baseline.fail(f"{svg_fonts} holds no fonts: run scripts/svg_fonts.py")
     require("zstd")
     plain = io.BytesIO()
     with tarfile.open(fileobj=plain, mode="w", format=tarfile.PAX_FORMAT) as tar:
         add_tree(tar, postgres, "pgsql")
         add_tree(tar, web_client, "web-client")
+        # Where `server/ul/src/bundle.rs` looks for them (`SVG_RENDERER`, `SVG_FONTS`).
+        # A directory entry for it, with the same fixed owners and times.
+        add_path(tar, svg_fonts.parent, "svg-render")
+        add_path(tar, svg_renderer, "svg-render/aspen-svg-render")
+        add_tree(tar, svg_fonts, "svg-render/fonts")
     say(f"compressing the runtime ({plain.tell() // 2**20} MiB)")
     archive = subprocess.run(
         ["zstd", "-q", "-19", "--long=27", "-T0", "-c"], input=plain.getvalue(), capture_output=True, check=True
@@ -238,6 +253,8 @@ def main() -> None:
     parser.add_argument("--arch", required=True, choices=sorted(baseline.ARCHES))
     parser.add_argument("--binary", type=Path, help="an aspen-ul to pack instead of building one")
     parser.add_argument("--web-client", type=Path, default=WEB_CLIENT, help=f"the built web client ({WEB_CLIENT})")
+    parser.add_argument("--svg-renderer", type=Path, help="the aspen-svg-render to pack (the one beside the binary)")
+    parser.add_argument("--svg-fonts", type=Path, default=SVG_FONTS, help=f"the fonts it draws with ({SVG_FONTS})")
     parser.add_argument("--out", type=Path, help="where to write it (target/ul/<arch>/aspen-ul)")
     parser.add_argument("--postgres-only", action="store_true",
                         help="build PostgreSQL alone, printing where its installation is")
@@ -256,7 +273,8 @@ def main() -> None:
         baseline.build(paths, "release", args.jobs)
         baseline.check(paths, "release")
         binary = paths.out("release") / "aspen-ul"
-    pack(binary, postgres, args.web_client, args.out or UL / args.arch / "aspen-ul")
+    svg_renderer = args.svg_renderer or binary.parent / "aspen-svg-render"
+    pack(binary, postgres, args.web_client, svg_renderer, args.svg_fonts, args.out or UL / args.arch / "aspen-ul")
 
 
 if __name__ == "__main__":

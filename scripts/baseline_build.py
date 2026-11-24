@@ -29,9 +29,9 @@ pages aborts at startup.
                                                      eval "$(scripts/baseline_build.py --arch ARCH env)"
 
 ARCH is `x86_64` or `aarch64`. Where the binaries run, they need `apt install libssl3 libpq5`
-(present on most installations), and the voice server neither. Needs Python 3.12 or later (3.14 for
-a Debian release whose packages are zstd-compressed), clang, lld, llvm-ar, llvm-readelf,
-pkg-config, rustup, and network access.
+(present on most installations), and the voice server and the SVG renderer neither. Needs Python
+3.12 or later (3.14 for a Debian release whose packages are zstd-compressed), clang, lld, llvm-ar,
+llvm-readelf, pkg-config, rustup, and network access.
 
 The checks start each built binary against the sysroot's own C library and OpenSSL: through the
 sysroot's dynamic loader when the target is this machine's architecture, and otherwise under
@@ -111,8 +111,8 @@ ROOT_PACKAGES = [
 ROOT_PACKAGES_TRIXIE = {"libgcc-12-dev": "libgcc-14-dev"}
 # The servers: the chat server, the voice server, the migration runner, and Ultra Lite, whose
 # runtime `scripts/package_ul.py` appends.
-PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul"]
-BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul"]
+PACKAGES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul", "aspen-svg-render"]
+BINARIES = ["aspen-chat-server", "voice_server", "aspen-migrate", "aspen-ul", "aspen-svg-render"]
 # Shared libraries the binaries may need beyond the C runtime, and the Debian package that
 # provides each where they run. A binary needing any other library is refused: it was linked
 # against something the deployment's machines are not promised to have.

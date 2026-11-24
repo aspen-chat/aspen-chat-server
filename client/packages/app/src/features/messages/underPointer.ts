@@ -1,7 +1,8 @@
 /**
  * What was right-clicked inside a message, which its context menu offers first: a picture,
  * video, or file attached to it, or a link's picture (`data-media-url`, with its file name in
- * `data-media-name`, and `data-media-picture` on a picture), or a link in its text that opens
+ * `data-media-name`, and `data-media-picture` on a picture, with what of it is shown in
+ * `data-media-shown` when that is not the file itself), or a link in its text that opens
  * elsewhere.
  */
 export type UnderPointer =
@@ -10,6 +11,8 @@ export type UnderPointer =
       readonly url: string;
       readonly name: string;
       readonly picture: boolean;
+      /** What is shown of it, which copying it as a picture copies (`Picture.shown`). */
+      readonly shown: string;
       /** What carries the address: a picture's button, which pressing opens the gallery on it. */
       readonly element: HTMLElement;
     }
@@ -28,6 +31,7 @@ export function underPointer(target: EventTarget | null): UnderPointer {
       url: media.dataset.mediaUrl,
       name: media.dataset.mediaName ?? "",
       picture: media.dataset.mediaPicture !== undefined,
+      shown: media.dataset.mediaShown ?? media.dataset.mediaUrl,
       element: media,
     };
   }

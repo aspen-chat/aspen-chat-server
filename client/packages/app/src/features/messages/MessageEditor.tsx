@@ -18,8 +18,7 @@ import {
   pendingControlClass,
   SpoilerToggle,
 } from "@/features/messages/AttachmentDescription";
-import { describable, isImageType } from "@/features/messages/images";
-import { mediaUrl } from "@/features/layout/safeUrl";
+import { describable, pictureSrc } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -283,9 +282,7 @@ function EditedFiles({ messageId, ids }: { messageId: string; ids: readonly stri
                 {describable(file.mimeType) && (
                   <AttachmentDescriptionButton
                     name={file.fileName}
-                    picture={
-                      isImageType(file.mimeType) ? (mediaUrl(file.downloadUrl) ?? null) : null
-                    }
+                    picture={pictureSrc(file, "original") ?? null}
                     description={file.description ?? ""}
                     onSave={(description) => {
                       change(file, { description });

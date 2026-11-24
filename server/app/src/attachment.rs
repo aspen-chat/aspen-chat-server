@@ -184,6 +184,12 @@ pub const INLINE_TYPES: &[&str] = &[
     "application/pdf",
 ];
 
+/// Whether an attachment of the declared `mime_type` is served for showing in place: its
+/// essence is among [`INLINE_TYPES`]. One that is not is shown in place only by its preview.
+pub fn shown_inline(mime_type: &str) -> bool {
+    INLINE_TYPES.contains(&essence(mime_type).as_str())
+}
+
 /// The type of anything not among [`INLINE_TYPES`], which browsers save rather than show.
 const SAVED_TYPE: &str = "application/octet-stream";
 

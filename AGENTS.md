@@ -47,8 +47,11 @@ explicit direction.
 - **Bot command patterns:** `regex`, with `regex-syntax` parsing each pattern so that only the
   subset JavaScript reads alike is accepted (`app::bot_command::pattern`); see Bots
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour
-  profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and
-  `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
+  profiles), and `webp` (libwebp, built from source) for pictures, `resvg` for SVGs, drawn by
+  `aspen-svg-render` (`server/svg_render/`), a program the API server runs for each one under
+  resource limits, behind a seccomp filter it installs on itself (`seccompiler`), with the web
+  client's own fonts (`scripts/svg_fonts.py`), and the operator's `ffmpeg` and `ffprobe`, run as
+  processes of their own, for videos' posters; see Attachment previews
 - **Voice media:** `str0m` in the voice server's `voice_media` crate (`voice_media/`), in its RTP
   mode and as an ICE-lite peer, with DTLS and SRTP through `aws-lc-rs`, so the voice server links no
   OpenSSL: media threads, each holding the WebRTC connections of the calls given to it on one UDP
@@ -180,8 +183,10 @@ or what an operator must open, route, or back up updates it in the same commit.
      `application/octet-stream` (`app::attachment::INLINE_TYPES`)
    - `[media.previews]` — `make` (whether this server makes previews; every server queues them),
      `concurrency`, `max_picture_bytes` and `max_picture_pixels`, `ffmpeg` and `ffprobe` (the
-     programs that take videos' posters; empty, none are taken), `max_video_bytes`, and
-     `ffmpeg_memory_mib` (the address space each run of them may map); see Attachment previews
+     programs that take videos' posters; empty, none are taken), `max_video_bytes`,
+     `ffmpeg_memory_mib` (the address space each run of them may map), `svg_renderer` and
+     `svg_fonts` (the program that draws SVGs and the fonts it draws their text in; empty, none are
+     drawn), `max_svg_bytes`, and `svg_memory_mib`; see Attachment previews
    - `[limits] max_communities_per_user` — the most communities one user may belong to (500 by
      default); it bounds what an event stream connection reads and how far a profile change fans
      out. `max_event_streams_per_user` (20) and `max_event_streams_per_address` (200) cap the event
@@ -317,14 +322,16 @@ or what an operator must open, route, or back up updates it in the same commit.
    `scripts/package_ul.py --arch ARCH` makes Ultra Lite as it is released, one file in
    `target/ul/<arch>/aspen-ul`: the baseline build of `aspen-ul` with its runtime appended, the
    bundled PostgreSQL (built from source against the same sysroot once per version, into
-   `target/ul/<arch>/`; `--postgres-version` bundles another) and the built web client. `--binary`
-   packs a binary already built, a debug one for development; it also needs `make`, `patchelf`, and
-   `zstd` (see Ultra Lite). `--postgres-only` builds the PostgreSQL alone and prints where it is,
-   which a build of `aspen-ul` runs with `--runtime` (a directory holding it as `pgsql/` and a web
-   client as `web-client/`). `scripts/check_ul.py --ul target/ul/<arch>/aspen-ul` checks a package
-   as an operator runs it, on a Debian 12 machine under systemd in a container of its own: install,
-   init with a certificate, the plain HTTP redirect, restarts and a crash, backup and restore, an
-   upgrade to another runtime, and export.
+   `target/ul/<arch>/`; `--postgres-version` bundles another), the built web client, and the SVG
+   renderer with the fonts `scripts/svg_fonts.py` builds into `target/svg-fonts/`. `--binary` packs
+   a binary already built, a debug one for development, with the `aspen-svg-render` beside it; it
+   also needs `make`, `patchelf`, and `zstd` (see Ultra Lite). `--postgres-only` builds the
+   PostgreSQL alone and prints where it is, which a build of `aspen-ul` runs with `--runtime` (a
+   directory holding it as `pgsql/`, a web client as `web-client/`, and the renderer and its fonts
+   as `svg-render/`). `scripts/check_ul.py --ul target/ul/<arch>/aspen-ul` checks a package as an
+   operator runs it, on a Debian 12 machine under systemd in a container of its own: install, init
+   with a certificate, the plain HTTP redirect, restarts and a crash, backup and restore, an upgrade
+   to another runtime, and export.
    `scripts/check_ul_export.py --ul BIN [--runtime DIR] --bin target/debug` checks that a deployment
    leaves Ultra Lite whole, into a full deployment on services of its own.
 
@@ -367,19 +374,20 @@ or what an operator must open, route, or back up updates it in the same commit.
    ```
 
    It migrates a database of its own, runs a NATS of its own, starts both servers on ports of their
-   own (a development stack keeps running beside it), registers and signs in a user, joins a call
-   through the voice server, reads both metrics endpoints, runs `estimate-capacity`, and checks that
-   a voice server whose id is not registered is listed in the fleet and stops when started, then
-   drops the database. `scripts/stack.py` is the deployment both this and the next check run
-   against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the
-   standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name
-   so they find its running services. With `--ul`, this check, `check_permissions.py`,
-   `check_mana.py`, and `check_calls.py` run against Ultra Lite instead (`stack.UlStack`):
-   `aspen-ul` from `--bin`, run with the PostgreSQL `scripts/package_ul.py --postgres-only` built
-   for this machine (`--ul-postgres` names another), keeping its files in its data directory, and
-   needing no service. A check of what only one kind of deployment has says so and checks nothing
-   there (the permissions check's Valkey losing presence keys, the smoke check's
-   `estimate-capacity`).
+   own (a development stack keeps running beside it), registers and signs in a user, has an SVG's
+   preview drawn (with the `aspen-svg-render` of `--bin` and the fonts in `target/svg-fonts/`, or
+   those `ASPEN_SVG_FONTS` names), joins a call through the voice server, reads both metrics
+   endpoints, runs `estimate-capacity`, and checks that a voice server whose id is not registered is
+   listed in the fleet and stops when started, then drops the database. `scripts/stack.py` is the
+   deployment both this and the next check run against, serving a stand-in web client
+   (`scripts/web_client.py`), with a WebSocket client of the standard library. In a worktree, set
+   `COMPOSE_PROJECT_NAME` to the main checkout's directory name so they find its running services.
+   With `--ul`, this check, `check_permissions.py`, `check_mana.py`, and `check_calls.py` run
+   against Ultra Lite instead (`stack.UlStack`): `aspen-ul` from `--bin`, run with the PostgreSQL
+   `scripts/package_ul.py --postgres-only` built for this machine (`--ul-postgres` names another),
+   keeping its files in its data directory, and needing no service. A check of what only one kind of
+   deployment has says so and checks nothing there (the permissions check's Valkey losing presence
+   keys, the smoke check's `estimate-capacity`).
 
    Check that changes to access reach everything already open:
 
@@ -474,16 +482,16 @@ docker build -f deploy/docker/Dockerfile --target api -t aspen-api .
 docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 ```
 
-`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, and `curl`, and no ffmpeg; `voice`
-holds `voice_server` and `curl`. Both read their configuration from `/etc/aspen`. `deploy/aws/` is
-an OpenTofu configuration for a whole deployment on AWS, a prototype that has been planned
-(`tofu test`, which needs no account) and never applied. It writes `aspen.toml`,
-`voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold only `${name}`
-placeholders: a setting a deployment cannot start without is added there and to `deploy/aws`.
-`deploy/aws/migrate.py` moves an Ultra Lite deployment there, its database restored from its
-export's dump and its files uploaded by `storage import`, so whatever a deployment keeps outside
-PostgreSQL and its files must be added to `aspen-ul export` and that move. A whole deployment on one
-machine is Ultra Lite (above, and see Ultra Lite). See `deploy/README.md`, and
+`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, `aspen-svg-render` and its fonts,
+and `curl`, and no ffmpeg; `voice` holds `voice_server` and `curl`. Both read their configuration
+from `/etc/aspen`. `deploy/aws/` is an OpenTofu configuration for a whole deployment on AWS, a
+prototype that has been planned (`tofu test`, which needs no account) and never applied. It writes
+`aspen.toml`, `voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold
+only `${name}` placeholders: a setting a deployment cannot start without is added there and to
+`deploy/aws`. `deploy/aws/migrate.py` moves an Ultra Lite deployment there, its database restored
+from its export's dump and its files uploaded by `storage import`, so whatever a deployment keeps
+outside PostgreSQL and its files must be added to `aspen-ul export` and that move. A whole
+deployment on one machine is Ultra Lite (above, and see Ultra Lite). See `deploy/README.md`, and
 `docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
 
 ### Continuous integration
@@ -492,21 +500,22 @@ machine is Ultra Lite (above, and see Ultra Lite). See `deploy/README.md`, and
 tag, from which it also publishes the signed Windows installer and its update feed
 (`publish-windows`) and the Flatpak to Aspen's Flatpak repository (`publish-flatpak`;
 `client/docs/architecture/desktop-updates.md`): `cargo fmt --check`, `cargo clippy -- -D warnings`,
-and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for
-`wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, `plugins/calendar`, and
-`plugins/blackjack`, each a workspace of its own), whose copies of `views/bridge.js` must be the
-same; the debug servers, built once in a job of their own (`servers`), which writes the API, event,
-and signalling schemas the client, Android, Windows, macOS, iOS, and Flatpak jobs wait for, and
-which every job that runs those servers unpacks (`.github/actions/debug-servers`) rather than
-building them again; the client's format (`pnpm format:check`), typecheck, lint, and tests, with its
-browser tests on Chromium (a desktop and a phone) split across six runners; the Android app's build,
-its unit tests, and its device tests on an emulator, the debug APK kept as an artifact
-(`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
-`package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox;
-on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the
-extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs,
-sent to Apple's notary service without waiting, and an App Store build for TestFlight from the
-`apple-signing` environment (`client/docs/architecture/apple-builds.md`);
+and the workspace tests on x86-64, with the fonts SVG previews' text is drawn in built once from the
+client's packages (`svg-fonts`) for them, the smoke checks, and Ultra Lite's packages; the example
+plugins' format, lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`,
+`plugins/forum`, `plugins/calendar`, and `plugins/blackjack`, each a workspace of its own), whose
+copies of `views/bridge.js` must be the same; the debug servers, built once in a job of their own
+(`servers`), which writes the API, event, and signalling schemas the client, Android, Windows,
+macOS, iOS, and Flatpak jobs wait for, and which every job that runs those servers unpacks
+(`.github/actions/debug-servers`) rather than building them again; the client's format
+(`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a desktop and
+a phone) split across six runners; the Android app's build, its unit tests, and its device tests on
+an emulator, the debug APK kept as an artifact (`client/docs/architecture/android-builds.md`); the
+desktop app's Flatpak, built with `package:flatpak`, installed, and its capture helper asked what it
+can capture inside the sandbox; on macOS, the capture helper's lints and tests, the iOS app built
+for the simulator with the extension's Web Push check, and on a pull request an unsigned dmg, while
+`main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
+for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
 debug servers; the AWS configuration's `tofu test` and `scripts/check_media_prefixes.py` (every list
 of the public media prefixes against the server's, `media_store::PublicPrefix`); both images built,
@@ -842,8 +851,10 @@ through `app` names it wherever it lives:
   trait macros (`wire_name_traits!` and the rest).
 - `aspen_locale` (`server/locale/`): the catalogue, `t!`, and each request's language
   (`app::locale`).
-- `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and
-  videos' posters.
+- `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews,
+  running the SVG renderer, and videos' posters. It names `aspen_svg_render` (`server/svg_render/`)
+  without its `render` feature, for the protocol alone; with it, that crate is the program
+  `aspen-svg-render`, which needs nothing of the workspace.
 - `aspen_search_text` (`server/search_text/`, `app::search::search_text`): what a message is
   searched by, its content with a space between every two words written without one, which
   `aspen-migrate` uses too.
@@ -944,9 +955,9 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/federation/index.md` — every phase of federation: identity and keys, gates and
   lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
-- `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how
-  they are made and queued, messages held for them, and messages sent while their files are still
-  uploading
+- `docs/architecture/attachment-previews/index.md` — previews of pictures, SVGs drawn behind a
+  sandbox, and videos' posters, how they are made and queued, messages held for them, and messages
+  sent while their files are still uploading
 - `docs/architecture/channel-mana/index.md` — channel mana: the budget a busy channel spends as
   messages are posted, its pools, costs, and settings, the queue of what waits for it, by rank and
   tenure, and its drainer, Bypass channel mana, and the bar viewers see

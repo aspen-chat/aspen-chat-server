@@ -51,7 +51,8 @@ The reasons behind the [attachment previews](index.md) design.
 - **Quality 85 with sharp YUV.** At that density it shows no loss, and sharp YUV keeps fine
   saturated detail (red text on white) from smearing.
 - **A preview less than ten percent smaller is not kept.** An original already small and web-ready
-  is shown as it is, and storage is not spent on a copy no smaller.
+  is shown as it is, and storage is not spent on a copy no smaller. One of an original served to be
+  saved is kept whatever its size: there is nothing else to show.
 
 ## Pictures
 
@@ -60,6 +61,39 @@ The reasons behind the [attachment previews](index.md) design.
 - **Moving pictures keep their original.** A preview would hold the first frame only.
 - **Pictures are brought into sRGB from their profile.** A phone's Display P3 photo keeps its
   colours. Ones that cannot be brought over faithfully keep their original.
+
+## SVGs
+
+- **An SVG is drawn on the server, not shown as itself.** Served as an SVG, a browser opening its
+  address would run its scripts at the media origin, and the anonymous read path is the operator's
+  to configure, with nothing to hold it to a `Content-Security-Policy`. Shown in an `<img>`, it
+  would run no script, but every reader would pay for drawing it, and an SVG can be made to take any
+  amount of time and memory to draw, freezing the page of everyone who scrolls past it. Drawn once
+  on the server, under limits, that cost is the server's and bounded. See [SVGs](svgs.md).
+- **In a program of its own, not a thread of the server.** A library drawing in the server's process
+  can be given no memory limit and cannot be stopped partway through. A process can be given both by
+  the kernel, as `ffmpeg` is.
+- **A program of its own, not the server run again in another mode.** The fonts make it tens of
+  megabytes it alone needs, and a renderer that is only itself has the least code in it for a
+  hostile SVG to reach.
+- **A seccomp filter, besides the resource limits.** Resource limits bound how much it uses, not
+  what it does: nothing in them stops a connection or a file being opened. usvg is told to resolve
+  nothing outside the SVG, and the filter makes that the kernel's to enforce rather than the
+  library's, should a bug or a later version of it reach further. It is installed after the fonts
+  are mapped, so the renderer needs no file access once it reads the SVG. The filter kills the
+  process on a call it does not list, rather than failing the call, so a call drawing turns out to
+  need shows as a warning and is added, rather than as an SVG drawn wrong.
+- **At its own size, capped by the preview box.** A vector has no resolution of its own; drawn at
+  the size it says it is, it shows as large as a browser would show it, small icons small.
+- **Its text in the app's own fonts, bundled.** System fonts differ between machines and are missing
+  from containers, so the same SVG would draw differently, or with its text gone, from one
+  deployment to the next. The faces are the app's, built from the same list (`fallbackFonts.json`),
+  so text reads as it would in a message, in every script the app draws.
+- **The fonts are files beside the renderer, not compiled into it.** Compiled in, every build of the
+  workspace, its lints and tests among them, would first need the client's packages installed and
+  the fonts built.
+- **Until it has a preview, an SVG shows as its text.** It is not shown as a picture that cannot
+  load ("unavailable"), and the app already shows `.svg` as text.
 
 ## Videos
 
@@ -77,8 +111,8 @@ The reasons behind the [attachment previews](index.md) design.
 ## Making previews
 
 - **Previews are jobs, made only by servers that can make them.** Only servers with `make` and
-  `[jobs] run` on claim them, and only those that can run `ffmpeg` claim posters. See
-  [Making previews](making-previews.md).
+  `[jobs] run` on claim them, only those that can run `ffmpeg` claim posters, and only those whose
+  SVG renderer passes its check claim SVGs. See [Making previews](making-previews.md).
 - **A preview job unmade for seven days is deleted.** One may wait that long when no server can run
   `ffmpeg`.
 - **Previews are stored under `attachment-previews/`, not under the original's key.** Some object

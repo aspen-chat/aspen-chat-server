@@ -55,10 +55,10 @@ starved.
 Some kinds share a bound of their own on how many run at once on each server (`jobs::bounded`), so
 they never take every place their class can use:
 
-| Kinds                                   | At most                                    |
-| --------------------------------------- | ------------------------------------------ |
-| `makePicturePreview`, `makeVideoPoster` | `[media.previews] concurrency`             |
-| `firePluginTimer`                       | Half of `[jobs] concurrency`, at least one |
+| Kinds                                                     | At most                                    |
+| --------------------------------------------------------- | ------------------------------------------ |
+| `makePicturePreview`, `makeSvgPreview`, `makeVideoPoster` | `[media.previews] concurrency`             |
+| `firePluginTimer`                                         | Half of `[jobs] concurrency`, at least one |
 
 ## When a runner looks
 

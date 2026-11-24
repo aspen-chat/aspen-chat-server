@@ -30,83 +30,24 @@ import type { Plugin } from "vite";
  * stylistic variants (looped Thai and Lao, unjoined Adlam).
  */
 
-/** Variable families, by Fontsource id after `noto-sans-`. */
-const VARIABLE = [
-  "adlam",
-  "arabic",
-  "armenian",
-  "balinese",
-  "bamum",
-  "bassa-vah",
-  "bengali",
-  "canadian-aboriginal",
-  "cham",
-  "ethiopic",
-  "georgian",
-  "gujarati",
-  "gunjala-gondi",
-  "gurmukhi",
-  "hanifi-rohingya",
-  "hebrew",
-  "javanese",
-  "kannada",
-  "kayah-li",
-  "khmer",
-  "lao",
-  "lisu",
-  "malayalam",
-  "meetei-mayek",
-  "myanmar",
-  "nag-mundari",
-  "new-tai-lue",
-  "ol-chiki",
-  "oriya",
-  "sinhala",
-  "sora-sompeng",
-  "sundanese",
-  "syriac",
-  "tai-tham",
-  "tamil",
-  "tangsa",
-  "telugu",
-  "thaana",
-  "thai",
-];
+/**
+ * The families, by Fontsource id: `fallbackFonts.json`, which `scripts/svg_fonts.py` reads too,
+ * so SVG previews are drawn with the same faces the app falls back to.
+ */
+interface FallbackFamilies {
+  /** Variable families, by id after `noto-sans-`. */
+  variable: readonly string[];
+  /** Families Fontsource has in one weight only, by id after `noto-sans-`. */
+  static: readonly string[];
+  /** Variable serif families for scripts with no Noto Sans face, by id after `noto-serif-`. */
+  serifVariable: readonly string[];
+  /** The regional CJK faces, by id after `noto-sans-`, in the order a page of no CJK language uses. */
+  han: readonly string[];
+  /** Slices of a family that the faces before it already draw, or that are not its script. */
+  sharedSubsets: readonly string[];
+}
 
-/** Families Fontsource has in one weight only, by id after `noto-sans-`. */
-const STATIC = [
-  "batak",
-  "buginese",
-  "chakma",
-  "hanunoo",
-  "lepcha",
-  "limbu",
-  "masaram-gondi",
-  "mende-kikakui",
-  "miao",
-  "mongolian",
-  "mro",
-  "newa",
-  "nko",
-  "pahawh-hmong",
-  "pau-cin-hau",
-  "saurashtra",
-  "sunuwar",
-  "syloti-nagri",
-  "tagalog",
-  "tai-le",
-  "tai-viet",
-  "tifinagh",
-  "tirhuta",
-  "vai",
-  "wancho",
-  "warang-citi",
-  "yi",
-];
-
-/** The regional CJK faces, by id after `noto-sans-`, in the order a page of no CJK language uses. */
-const HAN = ["sc", "tc", "hk", "jp", "kr"] as const;
-type Han = (typeof HAN)[number];
+type Han = "sc" | "tc" | "hk" | "jp" | "kr";
 
 /** The languages whose readers expect one regional face first, as `:lang()` arguments. */
 const HAN_LANGUAGES: Record<Han, readonly string[]> = {
@@ -118,18 +59,26 @@ const HAN_LANGUAGES: Record<Han, readonly string[]> = {
   kr: ["ko"],
 };
 
-/** Slices of a family that the faces before it already draw, or that are not its script. */
-const SHARED_SUBSETS = new Set([
-  "latin",
-  "latin-ext",
-  "cyrillic",
-  "cyrillic-ext",
-  "greek",
-  "greek-ext",
-  "vietnamese",
-  "math",
-  "symbols",
-]);
+const here = dirname(fileURLToPath(import.meta.url));
+const families = JSON.parse(
+  readFileSync(join(here, "fallbackFonts.json"), "utf8"),
+) as FallbackFamilies;
+
+function isHan(id: string): id is Han {
+  return Object.hasOwn(HAN_LANGUAGES, id);
+}
+
+const HAN: readonly Han[] = families.han.map((id) => {
+  if (!isHan(id)) {
+    throw new Error(`fallbackFonts.json: ${id} is not a regional face HAN_LANGUAGES names`);
+  }
+  return id;
+});
+if (new Set(HAN).size !== HAN.length || HAN.length !== Object.keys(HAN_LANGUAGES).length) {
+  throw new Error("fallbackFonts.json: every regional face HAN_LANGUAGES names is in han, once");
+}
+
+const SHARED_SUBSETS = new Set(families.sharedSubsets);
 
 interface Family {
   /** The package, as imported. */
@@ -139,17 +88,19 @@ interface Family {
 }
 
 const scripts: Family[] = [
-  ...VARIABLE.map((id) => ({
+  ...families.variable.map((id) => ({
     name: `@fontsource-variable/noto-sans-${id}`,
     id: `noto-sans-${id}`,
   })),
-  ...STATIC.map((id) => ({ name: `@fontsource/noto-sans-${id}`, id: `noto-sans-${id}` })),
-  { name: "@fontsource-variable/noto-serif-tibetan", id: "noto-serif-tibetan" },
+  ...families.static.map((id) => ({ name: `@fontsource/noto-sans-${id}`, id: `noto-sans-${id}` })),
+  ...families.serifVariable.map((id) => ({
+    name: `@fontsource-variable/noto-serif-${id}`,
+    id: `noto-serif-${id}`,
+  })),
 ];
 const han: Record<Han, Family> = Object.fromEntries(
   HAN.map((id) => [id, { name: `@fontsource-variable/noto-sans-${id}`, id: `noto-sans-${id}` }]),
 ) as Record<Han, Family>;
-const here = dirname(fileURLToPath(import.meta.url));
 const generated = join(here, "src/generated");
 const emojiDirectory = join(here, "fonts/noto-color-emoji");
 const require = createRequire(import.meta.url);

@@ -50,6 +50,20 @@ No server that makes previews can run `ffmpeg` and `ffprobe`. Each says so in it
   [`[media.previews]`](../configuration/previews.md#mediapreviews)).
 - An HDR video, or one larger than `max_video_bytes`, has no poster by design.
 
+## SVGs show as text, not as pictures
+
+No server that makes previews can draw SVGs. Each says why in its log as it starts ("the SVG
+renderer cannot draw, so this server makes no previews of SVGs"):
+
+- `aspen-svg-render` is not on `PATH`, or not where `[media.previews] svg_renderer` says.
+- `svg_fonts` holds no fonts: build them with `scripts/svg_fonts.py`.
+- Its sandbox cannot be entered: it runs only on Linux, and a container's seccomp profile must let
+  it install a filter of its own.
+
+An SVG larger than `max_svg_bytes`, or that asks for more memory or time than the renderer is given,
+has no preview by design. See
+[The SVG renderer and its fonts](../configuration/previews.md#the-svg-renderer-and-its-fonts).
+
 ## Messages with a picture take twenty seconds to appear
 
 No server makes previews, so each message waits out its hold. Either:

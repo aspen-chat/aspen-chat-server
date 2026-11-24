@@ -76,8 +76,8 @@ pub struct Stored {
 
 /// What the picture `bytes` of `mime_type` is stored as: a WebP fitted within [`STORED_BOX`]
 /// when the picture is larger than it, or is not WebP, and the WebP is at least
-/// `MIN_SAVING_PERCENT` smaller (`attachment::preview::worth_keeping`, the rule previews keep
-/// to); the picture itself otherwise. A WebP that already fits is never encoded again, which
+/// `MIN_SAVING_PERCENT` smaller (`attachment::preview::smaller_enough`, the rule previews of
+/// what is shown in place keep to); the picture itself otherwise. A WebP that already fits is never encoded again, which
 /// would lose more of it for nothing. A picture that moves, or whose colours cannot be brought
 /// into sRGB, is kept as it is (`aspen_previews::picture::fitted`).
 pub async fn as_stored(bytes: Vec<u8>, mime_type: String) -> Stored {
@@ -103,7 +103,7 @@ pub async fn as_stored(bytes: Vec<u8>, mime_type: String) -> Stored {
     let bytes = std::sync::Arc::unwrap_or_clone(bytes);
     match made {
         Ok(Ok(made))
-            if crate::attachment::preview::worth_keeping(
+            if crate::attachment::preview::smaller_enough(
                 made.webp.len() as u64,
                 bytes.len() as u64,
             ) =>

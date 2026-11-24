@@ -28,6 +28,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`deleteMessagesBy`](#deletemessagesby)             | normal                                             |                                                                | A ban's deletion window.                                                                                                                                       |
 | [`makePicturePreview`](#makepicturepreview)         | interactive, or bulk for what the migration queued |                                                                | Makes one picture's preview.                                                                                                                                   |
 | [`makeVideoPoster`](#makevideoposter)               | as `makePicturePreview`                            |                                                                | Takes one video's poster.                                                                                                                                      |
+| [`makeSvgPreview`](#makesvgpreview)                 | as `makePicturePreview`                            |                                                                | Draws one SVG's preview.                                                                                                                                       |
 | [`releaseHeldMessage`](#releaseheldmessage)         | interactive                                        |                                                                | Posts one held message.                                                                                                                                        |
 | [`drainManaQueue`](#drainmanaqueue)                 | interactive                                        |                                                                | Posts what waits for one busy channel's mana.                                                                                                                  |
 | [`firePluginTimer`](#fireplugintimer)               | normal                                             |                                                                | Hands a plugin one of its timers.                                                                                                                              |
@@ -36,6 +37,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`recordStats`](#recordstats)                       | maintenance                                        | hourly                                                         | Writes today's deployment totals.                                                                                                                              |
 | [`forgetIcon`](#forgeticon)                         | maintenance                                        |                                                                | Deletes one icon nothing uses.                                                                                                                                 |
 | [`shrinkIcons`](#shrinkicons)                       | maintenance                                        |                                                                | Stores icons confirmed before icons were stored fitted, fitted.                                                                                                |
+| [`queueSvgPreviews`](#queuesvgpreviews)             | maintenance                                        |                                                                | Queues previews of SVGs uploaded before SVGs had them.                                                                                                         |
 | [`purgeEvidence`](#purgeevidence)                   | maintenance                                        | daily                                                          | Deletes deleted messages' files past the retention.                                                                                                            |
 | [`fitStreams`](#fitstreams)                         | normal                                             | every fifteen seconds                                          | Sizes the NATS streams to their settings and NATS's memory.                                                                                                    |
 | [`forgetIdentityProvider`](#forgetidentityprovider) | normal                                             |                                                                | Deletes a removed identity provider's links.                                                                                                                   |
@@ -184,6 +186,14 @@ Eight icons a step, in id order, each step's last id kept as its progress:
 
 The originals are not kept.
 
+### `queueSvgPreviews`
+
+Queues the previews of the SVGs uploaded before SVGs had them (`preview::queue_svgs_step`; see
+[SVGs](../attachment-previews/svgs.md#svgs-uploaded-before)). A migration queues it once. A thousand
+attachments a step, in id order, each step's last id kept as its progress: each that is a confirmed
+SVG, not evidence, with no preview, gets a bulk `makeSvgPreview`, and one already queued is left as
+it is.
+
 ## Deleted roles and emoji
 
 ### `purgeRole`
@@ -316,6 +326,12 @@ migration queued.
 
 Takes one video's poster, as `makePicturePreview` makes a picture's, with the same class. It runs on
 the servers among those that can run `ffmpeg` and `ffprobe`.
+
+### `makeSvgPreview`
+
+Draws one SVG's preview, as `makePicturePreview` makes a picture's, with the same class. It runs on
+the servers among those whose SVG renderer passed its check when their runner started (see
+[SVGs](../attachment-previews/svgs.md)).
 
 ### `releaseHeldMessage`
 

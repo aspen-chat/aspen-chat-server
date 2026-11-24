@@ -47,6 +47,10 @@ REPO = Path(__file__).resolve().parent.parent
 NATS_IMAGE = "nats:2.11-alpine"
 # The Valkey docker-compose.yaml runs, unless `VALKEY_URL` names another, as the Rust tests read it.
 VALKEY_URL = os.environ.get("VALKEY_URL", "redis://127.0.0.1:6379")
+# The fonts SVG previews' text is drawn in (`scripts/svg_fonts.py`), unless `ASPEN_SVG_FONTS` names
+# others, as the SVG renderer's tests read them. A stack draws SVGs with the `aspen-svg-render` of
+# its `bins` and these, and makes no previews of SVGs when either is missing.
+SVG_FONTS = Path(os.environ.get("ASPEN_SVG_FONTS", REPO / "target" / "svg-fonts"))
 # The S3 credentials docker-compose.yaml gives SeaweedFS.
 S3_ACCESS_KEY = "GK484e56c38fb7e14b182bf47a"
 S3_SECRET_KEY = "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027"
@@ -394,6 +398,9 @@ class Stack(Deployment):
             f'valkey_url = "{VALKEY_URL}"\n'
             f"{self.settings}"
             f"{media_settings(self.media, self.work, p.api)}"
+            "[media.previews]\n"
+            f"svg_renderer = {json.dumps(str(self.bins / 'aspen-svg-render'))}\n"
+            f"svg_fonts = {json.dumps(str(SVG_FONTS.resolve()))}\n"
             "[metrics]\n"
             f'listen_addr = "127.0.0.1:{p.api_metrics}"\n'
             "[web_client]\n"
@@ -482,8 +489,9 @@ class Stack(Deployment):
 
 class UlStack(Deployment):
     """Aspen Ultra Lite: `aspen-ul` from `bins`, with a data directory of its own, run with the
-    PostgreSQL installation `postgres` (`scripts/package_ul.py --postgres-only` builds one) and the
-    web client as its runtime (`--runtime`), its voice server within it. Files are kept in its
+    PostgreSQL installation `postgres` (`scripts/package_ul.py --postgres-only` builds one), the
+    web client, and the `aspen-svg-render` of `bins` with `SVG_FONTS` as its runtime (`--runtime`),
+    its voice server within it. Files are kept in its
     data directory, or with `media` `s3` in docker-compose.yaml's SeaweedFS
     (`[server.media.s3]`). `ports.api` is the port it serves at, `rtc_min` its calls' media port,
     `transfer` and `relay_min` to `relay_max` the file transfers', and `api_metrics` its metrics'
@@ -515,6 +523,10 @@ class UlStack(Deployment):
         (self.runtime / "pgsql").symlink_to(self.postgres)
         (self.runtime / "web-client").symlink_to(
             (self.web_client or stand_in(self.work / "web-client")).resolve())
+        # Where aspen-ul looks for them in its runtime (`server/ul/src/bundle.rs`).
+        (self.runtime / "svg-render").mkdir()
+        (self.runtime / "svg-render" / "aspen-svg-render").symlink_to(self.bins / "aspen-svg-render")
+        (self.runtime / "svg-render" / "fonts").symlink_to(SVG_FONTS.resolve())
         self.data.mkdir(mode=0o750)
         p = self.ports
         media = "" if self.media == "directory" else media_settings("s3", self.work, p.api, under="server.")

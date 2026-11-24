@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { imageUrls, isImageUrl, onlyImageLinks, splitInline } from "./images";
+import {
+  imageUrls,
+  isImageUrl,
+  onlyImageLinks,
+  pictureSrc,
+  servedInline,
+  shownSrc,
+  splitInline,
+} from "./images";
 
 describe("inline image cap", () => {
   it("shows up to three pictures and counts the rest", () => {
@@ -42,5 +50,46 @@ describe("image links", () => {
     ).toBe(false);
     expect(onlyImageLinks("just words", isPicture)).toBe(false);
     expect(onlyImageLinks("", isPicture)).toBe(false);
+  });
+});
+
+describe("pictures whose originals are served to be saved", () => {
+  const original = "https://media.example.org/attachments/a";
+  const copy = "https://media.example.org/attachment-previews/a";
+  const preview = { url: copy, mimeType: "image/webp", width: 40, height: 20 };
+  const png = { mimeType: "image/png", downloadUrl: original };
+  const svg = { mimeType: "image/svg+xml", downloadUrl: original, inline: false };
+
+  it("takes a deployment that does not say as serving every original to be shown", () => {
+    expect(servedInline({})).toBe(true);
+    expect(servedInline({ inline: true })).toBe(true);
+    expect(servedInline({ inline: false })).toBe(false);
+  });
+
+  it("shows an original served inline, or its copy where that is preferred", () => {
+    expect(pictureSrc(png, "original")).toBe(original);
+    expect(pictureSrc({ ...png, preview }, "original")).toBe(original);
+    expect(pictureSrc({ ...png, preview }, "preview")).toBe(copy);
+    expect(pictureSrc(png, "preview")).toBe(original);
+  });
+
+  it("shows only the copy of an original served to be saved, and nothing until it has one", () => {
+    expect(pictureSrc(svg, "original")).toBeUndefined();
+    expect(pictureSrc(svg, "preview")).toBeUndefined();
+    expect(pictureSrc({ ...svg, preview }, "original")).toBe(copy);
+    expect(pictureSrc({ ...svg, preview }, "preview")).toBe(copy);
+  });
+
+  it("shows nothing of what is not a picture, or is at an address no deployment serves", () => {
+    expect(pictureSrc({ ...png, mimeType: "application/pdf" }, "original")).toBeUndefined();
+    expect(pictureSrc({ ...png, downloadUrl: "javascript:alert(1)" }, "original")).toBeUndefined();
+    expect(
+      pictureSrc({ ...svg, preview: { ...preview, url: "data:image/webp;base64,AA" } }, "preview"),
+    ).toBeUndefined();
+  });
+
+  it("shows at full size what it says it shows, and the original otherwise", () => {
+    expect(shownSrc({ src: original, name: "a" })).toBe(original);
+    expect(shownSrc({ src: original, name: "a.svg", shown: copy })).toBe(copy);
   });
 });

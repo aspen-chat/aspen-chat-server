@@ -8,6 +8,9 @@ voice server on ports of their own (so a development stack can keep running besi
 
 - asks the chat server whether it is up and ready (`GET /health`, `GET /health/ready`);
 - registers a user, signs in, and reads the user back;
+- uploads an SVG and waits for its preview, which the SVG renderer (`aspen-svg-render` from
+  `--bin`, with the fonts `scripts/svg_fonts.py` builds, or those `ASPEN_SVG_FONTS` names) draws
+  behind its sandbox, and checks its original is served to be saved;
 - makes a community with a voice channel and joins its call, which needs the voice server to
   have registered and reported in over NATS;
 - reads both servers' metrics, including the allocator's figures;
@@ -51,6 +54,45 @@ def say(message: str) -> None:
     print(f"smoke: {message}", flush=True)
 
 
+# An SVG of its own size, with text, which its preview must keep and draw.
+SMOKE_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">'
+             b'<rect width="120" height="40" fill="teal"/>'
+             b'<text x="8" y="28" font-size="20" fill="white">Smoke</text></svg>')
+
+
+def svg_preview(stack: Deployment, token: str) -> None:
+    """Uploads an SVG and waits for its preview: a WebP at the SVG's own size, which only a
+    server whose renderer passed its check makes. Its original is served to be saved."""
+    api = stack.api
+    handle = api("POST", "/attachments", {"fileName": "smoke.svg", "mimeType": "image/svg+xml",
+                                          "byteSize": len(SMOKE_SVG)}, token)
+    put = urllib.request.Request(handle["uploadUrl"], data=SMOKE_SVG, method="PUT",
+                                 headers={"content-type": "application/octet-stream"})
+    urllib.request.urlopen(put, timeout=15).close()
+    confirmed = api("POST", f"/attachments/{handle['id']}/confirm", token=token)
+    if confirmed.get("inline") is not False:
+        raise Failed(f"an SVG's record says it is served inline: {confirmed}")
+    with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as original:
+        served = original.headers.get_content_type()
+        if served != "application/octet-stream" or original.read() != SMOKE_SVG:
+            raise Failed(f"an SVG's original is served as {served}, not to be saved")
+    record: dict = {}
+
+    def previewed() -> bool:
+        nonlocal record
+        record = api("GET", f"/attachments/{handle['id']}", token=token)
+        return record.get("preview") is not None
+
+    wait_for("the SVG's preview", previewed, 60)
+    preview = record["preview"]
+    if (preview["width"], preview["height"], preview["mimeType"]) != (120, 40, "image/webp"):
+        raise Failed(f"an SVG's preview is {preview}, not a 120 by 40 WebP")
+    with urllib.request.urlopen(preview["url"], timeout=15) as response:
+        webp = response.read()
+    if webp[:4] != b"RIFF" or webp[8:12] != b"WEBP":
+        raise Failed(f"an SVG's preview is not WebP: {webp[:16]!r}")
+
+
 def smoke(stack: Deployment) -> None:
     api = stack.api
     say("asking whether the chat server is up and ready")
@@ -86,6 +128,9 @@ def smoke(stack: Deployment) -> None:
     left_out = api("GET", "/messages?filter[text]=smoke%20-picnic", token=token)
     if left_out["data"]:
         raise Failed(f"searching for smoke without the picnic found {left_out}")
+
+    say("drawing an SVG's preview, which runs the SVG renderer behind its sandbox")
+    svg_preview(stack, token)
 
     say("joining a call, which needs the voice server to have reported in")
     joined_call(stack, community_id, "Lounge", token)

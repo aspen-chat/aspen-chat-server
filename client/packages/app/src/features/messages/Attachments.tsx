@@ -25,6 +25,8 @@ import {
   isVideoType,
   keptRoom,
   pictureAlt,
+  servedInline,
+  shownSrc,
   splitInline,
   type InlinePreview,
   type Picture,
@@ -52,7 +54,10 @@ const imageClass = "block max-h-80 max-w-full rounded-md border border-line obje
  * from its copy in storage. An attachment whose address is not one a deployment may serve
  * (`mediaUrl`) is unavailable. Up to three pictures show inline; with more, a button in their
  * place opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
- * smaller copy the server made of it where there is one; the gallery shows the original. With
+ * smaller copy the server made of it where there is one; the gallery shows the original. A
+ * picture whose original is served to be saved (`Attachment.inline` false, an SVG) is shown by
+ * its copy alone, inline and in the gallery, and until it has one is offered as the file it is
+ * (as text, for an SVG, or a download chip). With
  * `onRemove`, each attachment shown carries a control that takes it off the message. An
  * attachment its uploader marked a spoiler is covered (`SpoilerCover`), whatever it is, until the
  * reader reveals it, its own controls left usable over the cover.
@@ -103,7 +108,9 @@ export function MessageMedia({
     }
     // The name is the uploader's, shown without what would change how it reads.
     const attachment = { ...record, downloadUrl, fileName: plainFileName(record.fileName) };
-    if (isImageType(attachment.mimeType)) {
+    const preview = inlinePreview(attachment.preview);
+    const inline = servedInline(attachment);
+    if (isImageType(attachment.mimeType) && inline) {
       pictures.push({
         src: attachment.downloadUrl,
         name: attachment.fileName,
@@ -111,7 +118,20 @@ export function MessageMedia({
         width: attachment.width,
         height: attachment.height,
         description: attachment.description,
-        preview: inlinePreview(attachment.preview),
+        preview,
+        spoiler: attachment.spoiler === true,
+      });
+    } else if (isImageType(attachment.mimeType) && preview !== undefined) {
+      // Its original is served to be saved, so its preview is all that is shown of it.
+      pictures.push({
+        src: attachment.downloadUrl,
+        name: attachment.fileName,
+        attachmentId: attachment.id,
+        width: preview.width,
+        height: preview.height,
+        description: attachment.description,
+        preview,
+        shown: preview.src,
         spoiler: attachment.spoiler === true,
       });
     } else if (isVideoType(attachment.mimeType) && attachment.preview != null) {
@@ -308,7 +328,8 @@ const LONG_PRESS_MS = 450;
  * finger's long press opens its own menu beneath it (`PictureMenu`). It shows
  * the server's smaller copy where there is one, at the copy's exact size, and the original if
  * the copy cannot be loaded; an original already loaded stays when a copy arrives later, as its
- * bytes are already here. A picture whose size is known keeps exactly its room while it loads
+ * bytes are already here. One whose original is served to be saved (`Picture.shown`) has only
+ * the copy to show, and is unavailable when that cannot be loaded. A picture whose size is known keeps exactly its room while it loads
  * (`keptRoom`). One whose size is not keeps a fixed square, a conservative guess, until it has
  * arrived, and then takes its own size: rendered as it arrives and told to the list in the same
  * task (`useKeepStill`), so the list keeps the view still through the change before anything
@@ -336,11 +357,12 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   useEffect(() => endPress, []);
   const [arrived, setArrived] = useState<string | null>(null);
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const full = shownSrc(picture);
   const preview: InlinePreview | undefined =
-    picture.preview !== undefined && !failed.has(picture.preview.src) && arrived !== picture.src
+    picture.preview !== undefined && !failed.has(picture.preview.src) && arrived !== full
       ? picture.preview
       : undefined;
-  const src = preview?.src ?? picture.src;
+  const src = preview?.src ?? full;
   const width = preview?.width ?? picture.width;
   const height = preview?.height ?? picture.height;
   const size = width != null && height != null ? { width, height } : undefined;
@@ -357,7 +379,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   }, [arrived, failed, keepStill]);
   // A link's picture that cannot be loaded shows as the link it came from, not as a broken
   // picture; an attachment that fails is said to be unavailable.
-  if (failed.has(picture.src)) {
+  if (failed.has(full)) {
     return picture.attachmentId === undefined ? (
       <a
         href={webPageUrl(picture.name)}
@@ -409,6 +431,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         data-media-url={picture.src}
         data-media-name={picture.name}
         data-media-picture
+        data-media-shown={full}
         className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <img

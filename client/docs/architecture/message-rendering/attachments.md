@@ -31,7 +31,8 @@ make it read as another name.
 
 Images render inline (`src/features/messages/Attachments.tsx`):
 
-- image attachments;
+- image attachments the deployment serves for showing in place, and those it serves to be saved
+  (`Attachment.inline` false, an SVG among them) once they have a preview;
 - the pictures of link previews, from links whose path has an image extension or that the server
   found to be images (previews with a picture and no text).
 
@@ -62,12 +63,13 @@ which opens the gallery on it, Download image, where the clipboard takes a pictu
 and last, where the message has a sheet of its actions (a touch-only screen, the message not being
 edited), More options, which opens that sheet as the message's own long press does
 (`OpenMessageActionsContext`, which `MessageItem` provides). Every picture action takes the original
-(`Picture.src`), never the smaller copy shown inline. The timer is the picture's own, on the
-button's press events: the button's press goes no further, so the message's long press never sees
-it, and letting go once the menu has opened is not a press on the picture. Android answers a
-finger's long press with `contextmenu`, which the picture keeps from the message's menu while a
-finger presses it; a pointer's right click goes on up to the message's context menu, which offers
-the same actions (see [context menus](../context-menus.md)).
+(`Picture.src`), never the smaller copy shown inline, but Copy picture of one whose original is
+served to be saved, which copies what is shown of it (`Picture.shown`, `shownSrc`). The timer is the
+picture's own, on the button's press events: the button's press goes no further, so the message's
+long press never sees it, and letting go once the menu has opened is not a press on the picture.
+Android answers a finger's long press with `contextmenu`, which the picture keeps from the message's
+menu while a finger presses it; a pointer's right click goes on up to the message's context menu,
+which offers the same actions (see [context menus](../context-menus.md)).
 
 ### Zooming
 
@@ -105,6 +107,24 @@ See the server's [attachment previews](../../../../docs/architecture/attachment-
   (`attachmentPreviewed`, which the store applies to the record).
 - A record read from before the preview was made keeps the preview the store already holds.
 - The gallery shows the original, and its thumbnail strip the previews.
+
+### Pictures served to be saved
+
+The record's `inline` says whether `downloadUrl` serves the file for showing in place. It is false
+for an SVG, which storage serves as `application/octet-stream` because a browser opening it would
+run its scripts, and for every other type outside the server's `INLINE_TYPES`; a deployment that
+predates the field leaves it out, and is taken to serve every picture's original to be shown
+(`servedInline`).
+
+- Such a picture with a preview is shown by the preview alone, inline and in the gallery
+  (`Picture.shown`), and at the preview's size; its original is never loaded as a picture, since it
+  would not draw. Saving it saves the original, and copying it copies the preview.
+- One whose preview cannot be loaded is unavailable, with no original to fall back to.
+- One without a preview yet is not a picture: an SVG shows as text (`TextAttachment`, which takes
+  `.svg`), any other as a download chip, until `attachmentPreviewed` brings its preview.
+- `pictureSrc` (`images.ts`) is where every other view takes a picture attachment's address from:
+  thumbnails while composing and editing, pending messages' chips, and the height a message is
+  estimated at (`useMessageGroups`).
 
 ### Videos
 

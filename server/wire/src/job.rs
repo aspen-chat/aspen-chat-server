@@ -123,6 +123,8 @@ pub enum JobKind {
     MakePicturePreview,
     /// Making a video's poster.
     MakeVideoPoster,
+    /// Drawing an SVG's preview.
+    MakeSvgPreview,
     /// Posting a message held for its previews once nothing holds it.
     ReleaseHeldMessage,
     /// Posting what waits for a busy channel's mana, as it recharges (`app::mana::queue`).
@@ -141,6 +143,8 @@ pub enum JobKind {
     ForgetIcon,
     /// Storing the icons confirmed before icons were stored fitted to their box, fitted.
     ShrinkIcons,
+    /// Queueing previews of the SVGs uploaded before SVGs had them.
+    QueueSvgPreviews,
     /// Deleting the files of deleted messages kept past the deployment's retention.
     PurgeEvidence,
     /// Sizing the NATS streams to their settings and the memory NATS has.

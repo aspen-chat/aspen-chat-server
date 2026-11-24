@@ -58,6 +58,11 @@ The reasons behind the settings described in
 - **`ffmpeg` and `ffprobe` are confined, and operators are told to isolate the server too.** A
   decoder is a large body of C reading files anyone can send, so a flaw in `ffmpeg` should reach as
   little as possible.
+- **The SVG renderer and its fonts are on by default, and shipped with the images and Ultra Lite.**
+  Unlike `ffmpeg`, they are Aspen's own, built from the repository, so every deployment can draw
+  SVGs; a server without them only loses SVGs' previews, and says why. `svg_fonts` defaults to where
+  the image puts them (`/usr/share/aspen/svg-fonts`).
+  ([Previews](../../operators/configuration/previews.md#the-svg-renderer-and-its-fonts))
 
 ## Voice
 

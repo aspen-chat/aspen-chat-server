@@ -68,7 +68,7 @@ flowchart TB
   the voice server never reads the database. See [Voice](../architecture/voice/index.md).
 - Clients upload attachments straight to storage with presigned URLs, and download them from
   `public_base_url`. The API server only signs, confirms, and makes previews (with `ffmpeg` and
-  `ffprobe` as processes of their own for videos). See
+  `ffprobe` as processes of their own for videos, and `aspen-svg-render` for SVGs). See
   [Attachment previews](../architecture/attachment-previews/index.md).
 - Phones are woken through their app's relay, which alone holds the Apple and Google credentials.
   See [Push](../architecture/push.md).

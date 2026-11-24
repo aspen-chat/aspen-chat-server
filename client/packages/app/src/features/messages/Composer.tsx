@@ -56,7 +56,7 @@ import {
   useSystemDmPeer,
   useUser,
 } from "@/api/hooks";
-import { describable, isImageType, isVideoType } from "@/features/messages/images";
+import { describable, isImageType, isVideoType, pictureSrc } from "@/features/messages/images";
 import {
   AttachmentDescriptionButton,
   pendingControlClass,
@@ -90,7 +90,6 @@ import { measurePicture } from "@/features/media/measurePicture";
 import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
 import { useComposerTarget } from "@/features/messages/composerTargets";
 import { ReplyBar } from "@/features/messages/ReplyBar";
-import { mediaUrl } from "@/features/layout/safeUrl";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
 import { useDropReceiver } from "@/features/messages/dropZoneContext";
@@ -141,7 +140,7 @@ function pendingOf(attachment: Attachment): Pending {
     mimeType: attachment.mimeType,
     description: attachment.description ?? "",
     spoiler: attachment.spoiler ?? false,
-    thumbnail: isImageType(attachment.mimeType) ? (mediaUrl(attachment.downloadUrl) ?? null) : null,
+    thumbnail: pictureSrc(attachment, "original") ?? null,
     state: { kind: "ready", attachment },
   };
 }

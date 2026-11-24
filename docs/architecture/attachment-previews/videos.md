@@ -36,7 +36,7 @@ transcoded.
 | Output read from `ffprobe`                                    | A megabyte, the process killed past it                |
 | Wall time                                                     | Each run stopped after a minute                       |
 
-The resource limits are set as they start (`video::limit`, `setrlimit` between fork and exec).
+The resource limits are set as they start (`process::limit`, `setrlimit` between fork and exec).
 
 - The decoder list includes sound and subtitles because reading a file's streams opens their
   decoders too.

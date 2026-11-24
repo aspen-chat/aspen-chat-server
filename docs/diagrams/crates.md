@@ -17,7 +17,8 @@ flowchart LR
 
     subgraph beneath["Beneath app: needs nothing of it"]
         database["aspen_database<br/>PostgreSQL over TLS, the pool"]
-        previews["aspen_previews<br/>pictures and posters"]
+        previews["aspen_previews<br/>pictures, SVGs, and posters"]
+        svg_protocol["aspen_svg_render (protocol alone)<br/>what the SVG renderer speaks"]
         search_text["aspen_search_text<br/>the words a message is searched by"]
         plugin_rt["aspen_plugin_runtime<br/>wasmtime, call limits"]
         link_preview["aspen_link_preview"]
@@ -41,6 +42,7 @@ flowchart LR
     bin --> app
     app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl & ephemeral
     link_preview --> outbound
+    previews --> svg_protocol
     plugin_rt & fed_core & link_preview --> wire
     api & app --> wire & locale
     app --> schema
@@ -57,13 +59,16 @@ flowchart LR
   request bodies, and server events, so `aspen_wire` is where the server and its clients agree.
 - `aspen_wire` names `aspen_schema` for the SQL traits of the types it stores (`wire_name_traits!`
   and the rest), which is why the schema sits beneath it rather than only beneath `app`.
+- `aspen_previews` names the SVG renderer's crate without its `render` feature, for the protocol
+  alone (arguments, exit codes, the pixels it writes, and `fit`); the renderer is the program
+  `aspen-svg-render`, which it runs ([Every binary](#every-binary)).
 - The crates beneath `app` are re-exported from the `app` module that uses each one
   (`app::database`, `app::push::webpush`, `app::federation::jws`), so a path through `app` names it
   wherever it lives.
 
 ## Every binary
 
-Five binaries come out of the workspace. The crates they share are the protocol between the API
+Six binaries come out of the workspace. The crates they share are the protocol between the API
 server and the voice server, and the plumbing every server needs.
 
 ```mermaid
@@ -74,6 +79,7 @@ flowchart TB
         migrate["aspen-migrate<br/>migrations and their registry"]
         bench["aspen-bench<br/>(crate aspen_bench): load generator"]
         ul["aspen-ul<br/>a deployment in one program"]
+        svg_render["aspen-svg-render<br/>draws one SVG behind its sandbox"]
     end
 
     app["aspen_app<br/>(and everything beneath it)"]
@@ -82,6 +88,8 @@ flowchart TB
     voice_protocol["voice_protocol<br/>join tokens, control, signalling"]
     voice_media["voice_media<br/>media threads, the synthetic peer"]
     str0m[/"str0m (crates.io)<br/>WebRTC, crypto through AWS-LC"/]
+    resvg[/"resvg (crates.io)<br/>parsing and drawing SVGs"/]
+    seccompiler[/"seccompiler (crates.io)<br/>its seccomp filter"/]
     limits["aspen_limits<br/>limit format, GCRA, trusted proxies"]
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
     sockets["aspen_sockets<br/>dual-stack listeners"]
@@ -97,6 +105,7 @@ flowchart TB
     migrate --> database & search_text
     bench --> voice_protocol & voice_media & limits & bus & metrics & bench_protocol
     voice_media --> voice_protocol & sockets & str0m
+    svg_render --> resvg & seccompiler
     voice_protocol --> limits
     limits --> bus
     database --> metrics
@@ -110,6 +119,10 @@ flowchart TB
   `voice_server`'s `estimate-capacity` and the bench's simulated participants run on. str0m is drawn
   because it is the one crate outside the workspace the voice server's media is built on; see
   [Voice](../architecture/voice/voice-server.md#media-threads).
+- `aspen-svg-render` needs nothing of the workspace: the API server (and `aspen-ul`, which carries
+  it) runs it as a program, once for each SVG, under resource limits, and it installs a seccomp
+  filter on itself before reading the SVG. resvg and seccompiler are drawn as the crates outside the
+  workspace it is built on. See [SVGs](../architecture/attachment-previews/svgs.md).
 - `aspen-migrate` needs the database connection, and `aspen_search_text` for the migration that
   found the words of every message written before `search_text` existed, at the version the server
   finds them with; its migrations are its own (`migrate/src/migrations/`), and `aspen_schema` is

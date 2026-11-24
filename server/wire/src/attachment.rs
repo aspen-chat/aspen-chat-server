@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// A smaller copy of an attachment for showing it inline: a picture fitted within
-/// `aspen_previews::BOX` and encoded for the web, or the same of a video.
+/// `aspen_previews::BOX` and encoded for the web, the same of an SVG drawn at its own size, or
+/// of a video's poster.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentPreview {

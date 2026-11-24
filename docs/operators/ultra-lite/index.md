@@ -25,6 +25,7 @@ that outgrows it moves to the full one.
 | Ports     | Reachable from the internet: TCP 443 and 80, UDP and TCP 40000 (calls), UDP and TCP 3478 and UDP 40100 to 40199 (file transfers in calls).                        |
 
 Optional: `ffmpeg` and `ffprobe`, from the system's packages, for still pictures of shared videos.
+SVGs are drawn by the renderer `aspen-ul` carries, with fonts of its own.
 
 ## Installing
 

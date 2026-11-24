@@ -138,7 +138,7 @@ export function MessageContextMenu({
                   label={m.contextMenu.copyPicture}
                   icon={<CopyIcon aria-hidden="true" />}
                   onAction={() => {
-                    copyPicture(under.url).then(() => {
+                    copyPicture(under.shown).then(() => {
                       toast(m.contextMenu.copiedPicture);
                     }, failed);
                   }}

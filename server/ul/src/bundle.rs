@@ -1,7 +1,7 @@
-//! The runtime UL carries: the bundled PostgreSQL (`pgsql/`) and the web client (`web-client/`),
-//! a zstd-compressed tar appended to the binary by `scripts/package_ul.py`, which `cargo build`
-//! never needs. It is unpacked once into the data directory's `runtime/<hash>/`, where every later
-//! start finds it.
+//! The runtime UL carries: the bundled PostgreSQL (`pgsql/`), the web client (`web-client/`), and
+//! the SVG renderer with its fonts ([`SVG_RENDERER`], [`SVG_FONTS`]), a zstd-compressed tar
+//! appended to the binary by `scripts/package_ul.py`, which `cargo build` never needs. It is
+//! unpacked once into the data directory's `runtime/<hash>/`, where every later start finds it.
 //!
 //! The binary ends with a trailer: the archive's SHA-256, its length as a little-endian `u64`, and
 //! [`MAGIC`]. The archive lies just before them. A runtime directory exists only once its archive
@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
+
+/// Where in a runtime the SVG renderer is, which `scripts/package_ul.py` puts there.
+pub const SVG_RENDERER: &str = "svg-render/aspen-svg-render";
+
+/// Where in a runtime the fonts SVGs' text is drawn with are.
+pub const SVG_FONTS: &str = "svg-render/fonts";
 
 /// Ends a binary carrying a runtime; `scripts/package_ul.py` writes the same bytes.
 const MAGIC: &[u8; 8] = b"ASPENUL\x01";

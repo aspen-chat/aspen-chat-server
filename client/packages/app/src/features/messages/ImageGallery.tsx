@@ -14,7 +14,7 @@ import { TOUCH_ONLY, TOUCH_SCREEN, useMediaQuery } from "@/features/layout/useMe
 import { useSwipe } from "@/features/layout/useSwipe";
 import { swipeOutcome } from "@/features/messages/gallerySwipe";
 import { FIT, sameView, type View } from "@/features/messages/galleryZoom";
-import { pictureAlt, type Picture } from "@/features/messages/images";
+import { pictureAlt, shownSrc, type Picture } from "@/features/messages/images";
 import { rubberBand } from "@/features/messages/scrollPhysics";
 import { SpoilerCover } from "@/features/messages/SpoilerCard";
 import { useGalleryZoom } from "@/features/messages/useGalleryZoom";
@@ -380,7 +380,7 @@ function GalleryBody({
             const image = (
               <img
                 ref={isCurrent ? currentImage : undefined}
-                src={picture.src}
+                src={shownSrc(picture)}
                 alt={
                   isCurrent && !covered
                     ? pictureAlt(picture, format(m.imageAlt, { name: picture.name }))

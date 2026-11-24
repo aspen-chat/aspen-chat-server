@@ -359,6 +359,8 @@ async fn ensure_recurring(state: &GlobalServerContext) -> crate::Result<()> {
 struct Means {
     /// Whether it can run `ffmpeg` and `ffprobe`, which videos' posters are taken with.
     posters: bool,
+    /// Whether its SVG renderer passes its check (`aspen_previews::svg::available`).
+    svgs: bool,
 }
 
 impl Means {
@@ -372,7 +374,25 @@ impl Means {
                 "ffmpeg or ffprobe cannot be run, so this server makes previews of pictures only"
             );
         }
-        Self { posters }
+        let checked = if previews.make {
+            Some(aspen_previews::svg::available(previews).await)
+        } else {
+            None
+        };
+        let svgs = match checked {
+            Some(Ok(())) => true,
+            Some(Err(why)) => {
+                tracing::warn!(
+                    svg_renderer = previews.svg_renderer,
+                    svg_fonts = previews.svg_fonts,
+                    why,
+                    "the SVG renderer cannot draw, so this server makes no previews of SVGs"
+                );
+                false
+            }
+            None => false,
+        };
+        Self { posters, svgs }
     }
 }
 
@@ -385,6 +405,7 @@ fn handles(state: &GlobalServerContext, means: &Means, kind: JobKind) -> bool {
         }
         JobKind::MakePicturePreview => state.config.media.previews.make,
         JobKind::MakeVideoPoster => means.posters,
+        JobKind::MakeSvgPreview => means.svgs,
         _ => true,
     }
 }
@@ -416,7 +437,7 @@ fn max_attempts(kind: JobKind) -> i32 {
     match kind {
         JobKind::SendEmail => crate::email::outbox::MAX_ATTEMPTS + 1,
         JobKind::DeliverNotice => crate::federation::notices::MAX_ATTEMPTS,
-        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+        JobKind::MakePicturePreview | JobKind::MakeSvgPreview | JobKind::MakeVideoPoster => {
             crate::attachment::preview::MAX_ATTEMPTS
         }
         JobKind::ReleaseHeldMessage => crate::message::held::MAX_ATTEMPTS,
@@ -450,7 +471,7 @@ fn backoff(kind: JobKind, attempts: i32) -> Duration {
         JobKind::SendEmail => crate::email::outbox::retry_wait(attempts)
             .to_std()
             .unwrap_or(Duration::from_secs(60)),
-        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+        JobKind::MakePicturePreview | JobKind::MakeSvgPreview | JobKind::MakeVideoPoster => {
             Duration::from_secs(60 * 2u64.pow(doublings)).min(Duration::from_secs(3600))
         }
         JobKind::ReleaseHeldMessage | JobKind::DrainManaQueue => Duration::from_secs(30),
@@ -478,7 +499,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::MoveEvidence => crate::attachment::evidence::move_step(state, job).await,
         JobKind::SendEmail => crate::email::outbox::send_step(state, job).await,
         JobKind::QueueNewsletter => crate::email::newsletter::queue_step(state, job).await,
-        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+        JobKind::MakePicturePreview | JobKind::MakeSvgPreview | JobKind::MakeVideoPoster => {
             crate::attachment::preview::make_step(state, job).await
         }
         JobKind::ReleaseHeldMessage => crate::message::held::release_step(state, job).await,
@@ -490,6 +511,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::RecordStats => upkeep::record_stats(state, job).await,
         JobKind::ForgetIcon => crate::icon::forget_step(state, job).await,
         JobKind::ShrinkIcons => crate::icon::shrink_step(state, job).await,
+        JobKind::QueueSvgPreviews => crate::attachment::preview::queue_svgs_step(state, job).await,
         JobKind::PurgeEvidence => crate::attachment::evidence::purge_step(state, job).await,
         JobKind::FitStreams => crate::nats_memory::fit_step(state, job).await,
         JobKind::ForgetIdentityProvider => crate::identity_provider::forget_step(state, job).await,

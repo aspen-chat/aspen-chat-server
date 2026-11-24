@@ -2,7 +2,8 @@
 
 ## Size
 
-- A preview is fitted within `aspen_previews::BOX`, 1920 × 960 pixels (`aspen_previews::fit`).
+- A preview is fitted within `aspen_previews::BOX`, 1920 × 960 pixels (`aspen_previews::fit`, which
+  is `aspen_svg_render::fit`, so the SVG renderer fits drawings the same way).
 - It is never enlarged, and its aspect ratio is kept.
 - Apps show it inline at no more than 320 CSS pixels tall.
 
@@ -18,10 +19,13 @@
 
 ## When a preview is kept
 
-A preview is kept only when it is at least `MIN_SAVING_PERCENT`, ten percent, smaller than its
-original (`preview::worth_keeping`).
+A preview of an original served for showing in place is kept only when it is at least
+`MIN_SAVING_PERCENT`, ten percent, smaller than it (`preview::worth_keeping`,
+`preview::smaller_enough`). One of an original served to be saved, an SVG's among them, is kept
+whatever its size, since apps can show nothing else of it.
 
 - An original already small and web-ready is shown as it is.
 - A poster is always far smaller than its video.
+- An SVG's preview is often larger than the SVG.
 
-How each kind is made: [Pictures](pictures.md) and [Videos](videos.md).
+How each kind is made: [Pictures](pictures.md), [SVGs](svgs.md), and [Videos](videos.md).

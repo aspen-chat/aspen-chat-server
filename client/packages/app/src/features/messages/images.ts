@@ -1,3 +1,4 @@
+import type { Attachment } from "@aspen/protocol";
 import type { CSSProperties } from "react";
 import { mediaUrl } from "@/features/layout/safeUrl";
 import { linkify } from "@/features/messages/linkify";
@@ -15,9 +16,15 @@ export interface Picture {
   description?: string | null | undefined;
   /**
    * The smaller copy the server made for showing it inline, when it made one worth having; the
-   * gallery shows `src`, the original.
+   * gallery shows `src`, the original, unless `shown` says otherwise.
    */
   preview?: InlinePreview | undefined;
+  /**
+   * What is shown of it at full size and copied as a picture, when that is not `src`: the
+   * server's preview of an attachment whose original is served to be saved rather than shown
+   * (`Attachment.inline`), such as an SVG. `src` stays what is saved and opened.
+   */
+  shown?: string | undefined;
   /** Whether its uploader marked it a spoiler, to be covered until the reader reveals it. */
   spoiler?: boolean;
 }
@@ -53,6 +60,41 @@ export function isAudioType(mimeType: string): boolean {
 /** Whether a file is one a description is offered for: a picture or a video. */
 export function describable(mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+}
+
+/**
+ * Whether the deployment serves `attachment`'s original for showing in place; one that predates
+ * `Attachment.inline` serves every picture's that way.
+ */
+export function servedInline(attachment: Pick<Attachment, "inline">): boolean {
+  return attachment.inline !== false;
+}
+
+/**
+ * Where a picture attachment can be seen: its original (`"original"`) or the server's smaller
+ * copy where there is one (`"preview"`), as the caller prefers, and only the copy when the
+ * original is served to be saved (an SVG). `undefined` for one that is not a picture, that has
+ * nothing to see yet, or whose address is not one a deployment may serve (`mediaUrl`).
+ */
+export function pictureSrc(
+  attachment: Pick<Attachment, "mimeType" | "downloadUrl" | "inline" | "preview">,
+  prefer: "original" | "preview",
+): string | undefined {
+  if (!isImageType(attachment.mimeType)) {
+    return undefined;
+  }
+  const preview = attachment.preview?.url;
+  if (!servedInline(attachment)) {
+    return mediaUrl(preview);
+  }
+  return mediaUrl(
+    prefer === "preview" ? (preview ?? attachment.downloadUrl) : attachment.downloadUrl,
+  );
+}
+
+/** What of `picture` is shown at full size and copied as a picture (`Picture.shown`). */
+export function shownSrc(picture: Picture): string {
+  return picture.shown ?? picture.src;
 }
 
 /**

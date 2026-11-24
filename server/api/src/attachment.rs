@@ -47,17 +47,33 @@ pub struct Attachment {
     /// absent when it has none. Apps give it as the attachment's text alternative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// A smaller copy of a picture or video, made by the server for showing it inline, where
-    /// one was made and is worth having (`app::attachment::preview`); absent otherwise, and
-    /// until it is made, which `attachmentPreviewed` announces. The original, at `downloadUrl`,
-    /// is what is shown at full size and saved.
+    /// A smaller copy of a picture, SVG, or video, made by the server for showing it inline,
+    /// where one was made and is worth having (`app::attachment::preview`); absent otherwise,
+    /// and until it is made, which `attachmentPreviewed` announces. The original, at
+    /// `downloadUrl`, is what is saved, and what is shown at full size when it is `inline`; an
+    /// SVG's preview is drawn at the SVG's own size, fitted within the preview box, and is what
+    /// is shown of it at full size too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<AttachmentPreview>,
+    /// Whether `downloadUrl` serves the file for showing in place, as its own type: true for
+    /// the kinds browsers show without running anything (`app::attachment::INLINE_TYPES`), false
+    /// for the rest, an SVG among them, which it serves to be saved. Apps show a file that is
+    /// not inline in place only through its `preview`, and offer it to save until it has one.
+    /// Absent from a deployment that predates it, and true.
+    #[serde(default = "shown_inline_by_default")]
+    #[schema(required = false)]
+    pub inline: bool,
     /// Whether apps hide it, pictures and text alike, until each reader reveals it, as its
     /// uploader chose before sending it. Absent from a deployment that predates it, and false.
     #[serde(default)]
     #[schema(required = false)]
     pub spoiler: bool,
+}
+
+/// What `Attachment::inline` is when a deployment that predates it leaves it out: those served
+/// every picture's original for showing in place.
+fn shown_inline_by_default() -> bool {
+    true
 }
 
 pub fn attachment_to_api(
@@ -66,6 +82,7 @@ pub fn attachment_to_api(
 ) -> Attachment {
     let download_url = state.media_store.public_url(&row.storage_key);
     let preview = app::attachment::preview::of(state, &row);
+    let inline = app::attachment::shown_inline(&row.mime_type);
     Attachment {
         id: row.id,
         file_name: row.file_name,
@@ -73,6 +90,7 @@ pub fn attachment_to_api(
         download_url,
         width: row.width.and_then(|w| u32::try_from(w).ok()),
         height: row.height.and_then(|h| u32::try_from(h).ok()),
+        inline,
         description: row.description,
         preview,
         spoiler: row.spoiler,

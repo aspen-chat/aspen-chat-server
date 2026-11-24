@@ -6,7 +6,7 @@
 //! Everything it keeps is in the data directory (`--data`): `aspen-ul.toml`, what the operator
 //! says ([`config`]); `postgres/`, the cluster; `media/`, the files; `logs/`; `run/`, the
 //! database's socket and the control socket commands reach the bus through; and `runtime/`, the
-//! bundled PostgreSQL and web client, unpacked from the binary ([`bundle`]).
+//! bundled PostgreSQL, web client, and SVG renderer, unpacked from the binary ([`bundle`]).
 
 use aspen_locale::{_rust_i18n_try_translate, t};
 
@@ -57,7 +57,8 @@ struct Opt {
     #[arg(long, default_value = "/var/lib/aspen-ul")]
     data: PathBuf,
     /// A runtime to use instead of the one this binary carries: a directory holding the bundled
-    /// PostgreSQL (`pgsql/`) and the web client (`web-client/`), for development.
+    /// PostgreSQL (`pgsql/`), the web client (`web-client/`), and the SVG renderer and its fonts
+    /// (`svg-render/`), for development. Without `svg-render/`, SVGs get no previews.
     #[arg(long)]
     runtime: Option<PathBuf>,
     #[command(subcommand)]
@@ -457,6 +458,9 @@ fn server_config(
          event_retained_mib = 32\n\
          [web_client]\n\
          dir = {web}\n\
+         [media.previews]\n\
+         svg_renderer = {svg_renderer}\n\
+         svg_fonts = {svg_fonts}\n\
          [metrics]\n\
          enabled = false\n\
          {directory}",
@@ -464,6 +468,8 @@ fn server_config(
         database = quoted(&database.url(postgres::DATABASE)),
         pool = sizes.pool,
         web = quoted(&runtime.join("web-client").display().to_string()),
+        svg_renderer = quoted(&runtime.join(bundle::SVG_RENDERER).display().to_string()),
+        svg_fonts = quoted(&runtime.join(bundle::SVG_FONTS).display().to_string()),
     );
     aspen_app::aspen_config::load_config_sources(vec![
         Box::new(::config::File::from_str(

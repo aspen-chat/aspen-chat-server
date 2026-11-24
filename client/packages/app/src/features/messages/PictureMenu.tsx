@@ -4,7 +4,7 @@ import { Dialog, Menu, Popover } from "react-aria-components";
 import { MenuAction, menuClass, menuPopoverClass } from "@/features/layout/menu";
 import { OnceOpen } from "@/features/layout/OnceOpen";
 import { toast } from "@/features/layout/toast";
-import type { Picture } from "@/features/messages/images";
+import { shownSrc, type Picture } from "@/features/messages/images";
 import { OpenMessageActionsContext } from "@/features/messages/messageActionsContext";
 import {
   canCopyPictures,
@@ -19,7 +19,8 @@ import { useMessages } from "@/i18n/context";
  * (above it when there is no room beneath) offering to view it in the gallery, download it, and,
  * where the clipboard takes a picture, copy it, and last, where the message has a sheet of its
  * actions, More options, which opens that sheet. Every action is on the original picture
- * (`Picture.src`), never on the smaller copy shown inline. A pointer's right click offers the
+ * (`Picture.src`), never on the smaller copy shown inline, but copying one whose original is
+ * served to be saved, which copies what is shown of it (`Picture.shown`). A pointer's right click offers the
  * same in the message's context menu (`MessageContextMenu`). Built from when it first opens, as
  * every picture of every row has one.
  */
@@ -77,7 +78,7 @@ export function PictureMenu({
                 label={m.contextMenu.copyPicture}
                 icon={<CopyIcon aria-hidden="true" />}
                 onAction={() => {
-                  copyPicture(picture.src).then(() => {
+                  copyPicture(shownSrc(picture)).then(() => {
                     toast(m.contextMenu.copiedPicture);
                   }, failed);
                 }}

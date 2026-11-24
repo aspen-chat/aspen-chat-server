@@ -16,7 +16,8 @@ straight to storage on a signed URL, then confirms the upload.
 6. The copy names only the object it weighed, by its `ETag` (`x-amz-copy-source-if-match`). So a
    second upload to the same URL between the weighing and the copy is weighed afresh rather than
    copied unweighed.
-7. Confirming a picture or video queues its preview (see [Making previews](making-previews.md)).
+7. Confirming a picture, SVG, or video queues its preview (see
+   [Making previews](making-previews.md)).
 8. Confirming sets going any message that was sent before the upload ended and waited only for it
    (see [Sent before its files arrive](sent-before-uploaded.md)).
 
@@ -39,7 +40,10 @@ The `Content-Type` the URL is signed for is:
 **Why:** the anonymous-read path serves objects with the type they were stored with, and a browser
 opening an HTML page, an SVG, or XML from it would run what it holds.
 
-The record keeps the declared type. Apps show it, and it decides whether a preview is made.
+The record keeps the declared type. Apps show it, and it decides whether a preview is made. The
+record's `inline` says which of the two the original is served as (`app::attachment::shown_inline`),
+so apps show a picture served to be saved, an SVG among them, by its preview alone
+([SVGs](svgs.md#what-apps-show)).
 
 ## Limits
 

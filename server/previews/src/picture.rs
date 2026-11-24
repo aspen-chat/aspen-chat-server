@@ -96,6 +96,23 @@ pub fn fitted(bytes: &[u8], max_pixels: u64, bounds: (u32, u32)) -> Result<Pictu
         image = resized;
     }
 
+    encode(&image)
+}
+
+/// Pixels of 8-bit RGBA, alpha not premultiplied, as a preview: without the alpha channel when
+/// every pixel is opaque, as a picture's preview is, and encoded as WebP; or why it is not.
+pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Picture, &'static str> {
+    let image = image::RgbaImage::from_raw(width, height, rgba).ok_or("pixels of another size")?;
+    let image = DynamicImage::ImageRgba8(image);
+    if opaque(&image) {
+        encode(&DynamicImage::ImageRgb8(image.into_rgb8()))
+    } else {
+        encode(&image)
+    }
+}
+
+/// `image`, 8-bit RGB or RGBA, encoded as a preview is: lossy WebP at [`QUALITY`].
+fn encode(image: &DynamicImage) -> Result<Picture, &'static str> {
     let mut config = webp::WebPConfig::new().map_err(|_| "could not be encoded")?;
     config.quality = QUALITY;
     config.method = 4;
@@ -103,18 +120,19 @@ pub fn fitted(bytes: &[u8], max_pixels: u64, bounds: (u32, u32)) -> Result<Pictu
     // colour would otherwise smear.
     config.use_sharp_yuv = 1;
     config.alpha_quality = 100;
-    let (layout, raw) = match &image {
+    let (layout, raw) = match image {
         DynamicImage::ImageRgba8(buffer) => (webp::PixelLayout::Rgba, buffer.as_raw()),
         DynamicImage::ImageRgb8(buffer) => (webp::PixelLayout::Rgb, buffer.as_raw()),
-        _ => unreachable!("converted to 8-bit RGB or RGBA above"),
+        _ => return Err("not 8-bit RGB or RGBA"),
     };
-    let encoded = webp::Encoder::new(raw, layout, target_width, target_height)
+    let (width, height) = (image.width(), image.height());
+    let encoded = webp::Encoder::new(raw, layout, width, height)
         .encode_advanced(&config)
         .map_err(|_| "could not be encoded")?;
     Ok(Picture {
         webp: encoded.to_vec(),
-        width: target_width,
-        height: target_height,
+        width,
+        height,
     })
 }
 

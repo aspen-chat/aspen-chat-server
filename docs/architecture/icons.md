@@ -32,7 +32,7 @@ An icon is stored as it is shown, never larger (`icon::as_stored`):
   within that box, and encoded as WebP, as attachments' previews are (see
   [Pictures](attachment-previews/pictures.md)).
 - The WebP takes the picture's place when it is at least a tenth smaller
-  (`attachment::preview::worth_keeping`). Otherwise the picture is kept as it was uploaded.
+  (`attachment::preview::smaller_enough`). Otherwise the picture is kept as it was uploaded.
 - A WebP that already fits is never encoded again.
 - A picture that moves (an animated GIF, APNG, or WebP), or whose colours cannot be brought into
   sRGB, is kept as it was uploaded.

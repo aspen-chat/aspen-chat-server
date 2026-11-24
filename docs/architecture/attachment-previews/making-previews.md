@@ -5,25 +5,30 @@
 Confirming an upload whose MIME type is a picture's or a video's queues its preview as a job (see
 [Jobs](../jobs/index.md)):
 
-- The job is `makePicturePreview` or `makeVideoPoster`, keyed by the attachment.
+- The job is `makePicturePreview`, `makeSvgPreview` (declared `image/svg+xml`), or
+  `makeVideoPoster`, keyed by the attachment.
 - It is written in the transaction that confirms the upload (`preview::queue`).
 - Its payload holds `holdUntil`: until when messages holding the attachment wait for it (see
   [Held messages](held-messages.md)), and `account`: the account the upload is charged to, a bot's
   owner for a bot (`upload_quota::charged_account`).
 - An account has at most `preview::MAX_PENDING_PER_ACCOUNT` (20) previews of each kind waiting,
   counted through the index `job_preview_account` under a lock on the account's row. An upload past
-  that gets no preview and is shown as its original, so someone uploading many pictures that are
-  slow to decode cannot keep everyone else's previews waiting behind theirs. Posters are counted
-  apart from pictures, since they may wait days for a server that can run `ffmpeg`.
-- What was just uploaded is interactive. What the migration queued for the pictures and videos
-  uploaded before previews were made is bulk.
+  that gets no preview and is shown as its original (an SVG as its text), so someone uploading many
+  pictures that are slow to decode cannot keep everyone else's previews waiting behind theirs. Each
+  kind is counted apart, since posters and SVGs may wait days for a server that can run `ffmpeg` or
+  the SVG renderer.
+- What was just uploaded is interactive. What the migrations queued for the pictures and videos
+  uploaded before previews were made, and for the SVGs uploaded before SVGs had them
+  (`queueSvgPreviews`), is bulk.
 
 ## Which servers make them
 
 - Only servers whose `[media.previews]` has `make` on, and whose `[jobs]` has `run` on, claim
   preview jobs.
 - Only those that can run `ffmpeg` claim `makeVideoPoster`.
-- Each makes at most `concurrency` previews at once. The job runner keeps that bound for the two
+- Only those whose SVG renderer passes its check when the runner starts claim `makeSvgPreview`
+  ([SVGs](svgs.md#which-servers-draw-them)).
+- Each makes at most `concurrency` previews at once. The job runner keeps that bound for the three
   kinds together, beside its own places (`jobs::bounded`).
 
 ## Outcomes
@@ -70,7 +75,7 @@ it was made.
 
 ## Metrics
 
-All are labelled by `kind` (`picture` or `video`).
+All are labelled by `kind` (`picture`, `svg`, or `video`).
 
 | Metric                                      |
 | ------------------------------------------- |

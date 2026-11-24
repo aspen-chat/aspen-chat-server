@@ -143,4 +143,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261116_101740_shrink_icons::M,
     &migrations::m20261119_172748_used_once::M,
     &migrations::m20261119_173448_attempt_count::M,
+    &migrations::m20261124_055144_svg_previews::M,
 ];

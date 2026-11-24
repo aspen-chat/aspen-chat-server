@@ -18,9 +18,8 @@ import {
 } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { secondaryButtonClass } from "@/features/invites/dialog";
-import { mediaUrl } from "@/features/layout/safeUrl";
 import { takeBackIn, useHasComposer } from "@/features/messages/composerTargets";
-import { isImageType } from "@/features/messages/images";
+import { isImageType, pictureSrc } from "@/features/messages/images";
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { SCHEDULED_TIME_FORMAT } from "@/features/messages/scheduleTimes";
@@ -335,10 +334,7 @@ function PerhapsElsewhere({ attachmentId }: { attachmentId: string }) {
 function ArrivedFile({ attachmentId }: { attachmentId: string }) {
   const m = useMessages();
   const attachment = useAttachment(attachmentId);
-  const picture =
-    attachment !== undefined && isImageType(attachment.mimeType)
-      ? mediaUrl(attachment.preview?.url ?? attachment.downloadUrl)
-      : undefined;
+  const picture = attachment === undefined ? undefined : pictureSrc(attachment, "preview");
   return (
     <li className={chipClass}>
       {picture !== undefined ? (

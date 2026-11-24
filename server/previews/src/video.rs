@@ -12,6 +12,7 @@
 //! writes is read only up to `max_picture_bytes`. Decoding one frame takes about a second,
 //! however long the video.
 
+use crate::process::{Limits, confined, limit};
 use crate::{Outcome, PreviewConfig};
 use serde::Deserialize;
 use std::path::Path;
@@ -35,15 +36,15 @@ const DECODERS: &str = "h264,hevc,vp8,vp9,av1,libdav1d,mpeg4,mpeg2video,mpeg1vid
     vorbis,libvorbis,flac,alac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,\
     pcm_f32le,pcm_mulaw,pcm_alaw,amrnb,amrwb,wmav2,mov_text";
 
-/// The most files `ffmpeg` or `ffprobe` may hold open: the video, its pipes, and its own.
-const MAX_OPEN_FILES: u64 = 64;
-
 /// How far into a video its poster is taken, in seconds, past the black or faded first frames
 /// many begin with; a shorter video's is taken from its middle.
 pub const POSTER_AT: f64 = 1.0;
 
 /// How long `ffprobe` or `ffmpeg` may take over one video.
 const TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The most files `ffmpeg` or `ffprobe` may hold open: the video, its pipes, and its own.
+const MAX_OPEN_FILES: u64 = 64;
 
 /// The transfer characteristics of HDR video, whose frame would look washed out in SDR without
 /// tone mapping, which not every `ffmpeg` build has.
@@ -68,24 +69,17 @@ async fn runs(program: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// A command for `program` with nothing of this server's environment but where to find
-/// programs, which a `program` named without a path needs.
-fn confined(program: &str) -> Command {
-    let mut command = Command::new(program);
-    command.env_clear();
-    if let Some(path) = std::env::var_os("PATH") {
-        command.env("PATH", path);
-    }
-    command
-}
-
-/// [`confined`], also under the limits [`limit`] sets, and taking only what [`DECODERS`]
-/// decode, of at most `max_picture_pixels`, on one thread.
+/// [`confined`], also under its [`limit`]s, and taking only what [`DECODERS`] decode, of at most
+/// `max_picture_pixels`, on one thread.
 fn decoding(program: &str, config: &PreviewConfig) -> Command {
     let mut command = confined(program);
     limit(
         &mut command,
-        config.ffmpeg_memory_mib.saturating_mul(1024 * 1024),
+        Limits {
+            memory: config.ffmpeg_memory_mib.saturating_mul(1024 * 1024),
+            cpu: TIMEOUT,
+            open_files: MAX_OPEN_FILES,
+        },
     );
     command
         .args(["-codec_whitelist", DECODERS])
@@ -96,40 +90,6 @@ fn decoding(program: &str, config: &PreviewConfig) -> Command {
         .args(["-threads", "1"]);
     command
 }
-
-/// Sets resource limits on `command`'s process as it starts: `memory` bytes of address space,
-/// [`TIMEOUT`] of CPU time (it is killed past it), no file written (its output is a pipe), no
-/// core dump, and [`MAX_OPEN_FILES`] open files.
-#[cfg(unix)]
-fn limit(command: &mut Command, memory: u64) {
-    let cpu = TIMEOUT.as_secs();
-    let limits = [
-        (libc::RLIMIT_AS, memory, memory),
-        (libc::RLIMIT_CPU, cpu, cpu + 1),
-        (libc::RLIMIT_FSIZE, 0, 0),
-        (libc::RLIMIT_CORE, 0, 0),
-        (libc::RLIMIT_NOFILE, MAX_OPEN_FILES, MAX_OPEN_FILES),
-    ];
-    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
-    // calls are allowed; it calls only setrlimit, which is, on values made before the fork.
-    unsafe {
-        command.pre_exec(move || {
-            for (resource, soft, hard) in limits {
-                let limit = libc::rlimit {
-                    rlim_cur: soft as libc::rlim_t,
-                    rlim_max: hard as libc::rlim_t,
-                };
-                if libc::setrlimit(resource, &limit) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
-    }
-}
-
-#[cfg(not(unix))]
-fn limit(_command: &mut Command, _memory: u64) {}
 
 /// The frame `at` seconds into the video at `path`, upright, as a PNG of at most
 /// `max_picture_bytes`.

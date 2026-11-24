@@ -1,7 +1,7 @@
 import type { Message, RecordStore } from "@aspen/protocol";
 import { useLayoutEffect, useMemo, useState, type RefObject } from "react";
 import type { WindowPart } from "@/features/messages/blocked";
-import { isImageType, isVideoType } from "@/features/messages/images";
+import { isVideoType, pictureSrc, servedInline } from "@/features/messages/images";
 import {
   estimateHeight,
   GROUP_HEIGHT_SHARE,
@@ -104,10 +104,15 @@ function contentsOf(message: Message, store: RecordStore): MessageContents {
     const attachment = store.attachment(id);
     if (attachment === undefined) {
       pictures.push({});
-    } else if (isImageType(attachment.mimeType) || isVideoType(attachment.mimeType)) {
+    } else if (
+      isVideoType(attachment.mimeType) ||
+      pictureSrc(attachment, "preview") !== undefined
+    ) {
+      // A picture shown by its preview alone (`servedInline`) takes the preview's size.
+      const size = servedInline(attachment) ? attachment : attachment.preview;
       pictures.push({
-        ...(attachment.width == null ? {} : { width: attachment.width }),
-        ...(attachment.height == null ? {} : { height: attachment.height }),
+        ...(size?.width == null ? {} : { width: size.width }),
+        ...(size?.height == null ? {} : { height: size.height }),
       });
     } else {
       files += 1;

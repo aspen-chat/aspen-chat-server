@@ -6,7 +6,8 @@
 #     --build-arg ASPEN_COMMIT=$(git rev-parse --short=12 HEAD)
 #   docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 #
-# `api` holds aspen-chat-server, aspen-migrate, and the web client; `voice` holds voice_server.
+# `api` holds aspen-chat-server, aspen-migrate, the web client, and aspen-svg-render with the fonts
+# it draws SVG previews' text in; `voice` holds voice_server.
 # Both hold curl, for asking a server's health from inside its container. Neither holds
 # configuration: each reads `aspen.toml` or `voice_server.toml` from its working directory,
 # /etc/aspen, and `ASPEN_` variables from its environment.
@@ -25,7 +26,7 @@ FROM debian:bookworm AS build
 ARG MIN_CA_CERTIFICATES
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
-        pkg-config libssl-dev libpq-dev \
+        pkg-config libssl-dev libpq-dev python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && dpkg --compare-versions "$(dpkg-query -Wf '${Version}' ca-certificates)" \
         ge "$MIN_CA_CERTIFICATES"
@@ -50,8 +51,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=16; fi \
     && cargo build --locked --release -p aspen-chat-server -p aspen-migrate -p voice_server \
+        -p aspen-svg-render \
     && mkdir -p /out/bin \
-    && cp target/release/aspen-chat-server target/release/aspen-migrate target/release/voice_server /out/bin/ \
+    && cp target/release/aspen-chat-server target/release/aspen-migrate target/release/voice_server \
+        target/release/aspen-svg-render /out/bin/ \
     && /out/bin/aspen-chat-server --gen-openapi-schema \
     && /out/bin/voice_server --gen-signal-schema
 # The crates' sources, which the attributions page reads their licences from, are in cargo's
@@ -67,6 +70,11 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     && ASPEN_BUILD_COMMIT="$ASPEN_COMMIT" ASPEN_BUILD_MODIFIED="$ASPEN_MODIFIED" \
         pnpm --filter @aspen/app build \
     && cp -r packages/app/dist /out/web
+# The fonts SVG previews' text is drawn in, from the web client's own (scripts/svg_fonts.py).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m venv /tmp/fonttools \
+    && /tmp/fonttools/bin/pip install -r client/scripts/noto_emoji.requirements.txt \
+    && /tmp/fonttools/bin/python scripts/svg_fonts.py --out /out/svg-fonts
 
 FROM debian:bookworm-slim AS runtime
 ARG MIN_CA_CERTIFICATES
@@ -92,8 +100,11 @@ FROM runtime AS api
 RUN useradd --system --uid 10001 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen \
     && install -d -o aspen -g aspen -m 0700 /etc/aspen
 WORKDIR /etc/aspen
-COPY --from=build /out/bin/aspen-chat-server /out/bin/aspen-migrate /usr/local/bin/
+COPY --from=build /out/bin/aspen-chat-server /out/bin/aspen-migrate /out/bin/aspen-svg-render \
+    /usr/local/bin/
 COPY --from=build /out/web /srv/aspen/web
+# Where `[media.previews] svg_fonts` looks by default.
+COPY --from=build /out/svg-fonts /usr/share/aspen/svg-fonts
 # The environment overrides `aspen.toml`, so whichever one a deployment gives this image, the
 # server serves the web client built with it.
 ENV ASPEN_WEB_CLIENT__DIR=/srv/aspen/web

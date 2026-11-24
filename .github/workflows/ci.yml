@@ -100,12 +100,51 @@ jobs:
             cmp plugins/forum/views/bridge.js "$bridge"
           done
 
+  # The fonts SVG previews' text is drawn in, from the web client's Fontsource packages
+  # (`scripts/svg_fonts.py`), for the tests that draw SVGs and for Ultra Lite's packages. Its
+  # dependencies are installed without their scripts: the fonts need none, and the code
+  # generator, which installing runs, would need the schemas or cargo.
+  svg-fonts:
+    name: SVG previews' fonts — built
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        working-directory: client
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r client/scripts/noto_emoji.requirements.txt
+      - run: python3 scripts/svg_fonts.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
+          retention-days: 1
+
   rust-test:
     name: Rust (x86-64) — tests
+    needs: svg-fonts
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      # Where the SVG renderer's tests look for them.
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
       - name: System packages
         run: |
           sudo apt-get update
@@ -147,7 +186,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate -p aspen-ul
+      - run: >-
+          cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate -p aspen-ul
+          -p aspen-svg-render
       - name: Write the API and signalling schemas
         run: |
           target/debug/aspen-chat-server --gen-openapi-schema
@@ -162,7 +203,9 @@ jobs:
       # Packed first, since an artifact keeps no file modes; already compressed, so the upload
       # does not compress it again.
       - name: Pack the servers
-        run: tar -C target/debug --zstd -cf servers-debug.tar.zst aspen-chat-server voice_server aspen-migrate aspen-ul
+        run: >-
+          tar -C target/debug --zstd -cf servers-debug.tar.zst aspen-chat-server voice_server
+          aspen-migrate aspen-ul aspen-svg-render
       - uses: actions/upload-artifact@v7
         with:
           name: servers-debug
@@ -278,13 +321,17 @@ jobs:
   # the full one, whose services are containers of the check's own.
   ultra-lite:
     name: Ultra Lite — starts and serves, channel mana, and leaving it
-    needs: [servers, ul-postgres]
+    needs: [servers, ul-postgres, svg-fonts]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/debug-servers
       - uses: ./.github/actions/ul-postgres
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
       - name: Starts and serves
         run: python3 scripts/smoke_servers.py --bin target/debug --ul
       - name: Channel mana spends, queues, drains by rank, and tells viewers
@@ -1167,13 +1214,16 @@ jobs:
         with:
           shared-key: arm64-bookworm
           save-if: false
-      - run: cargo build --locked --release -p aspen-chat-server -p voice_server -p aspen-migrate
+      - run: >-
+          cargo build --locked --release -p aspen-chat-server -p voice_server -p aspen-migrate
+          -p aspen-ul -p aspen-svg-render
       - name: Check the binaries (architecture, glibc, start-up, jemalloc's page size)
         run: python3 scripts/baseline_build.py --arch aarch64 check --dir target/release
       - name: Package
         run: |
           mkdir dist
-          cp target/release/aspen-chat-server target/release/voice_server target/release/aspen-migrate dist/
+          cp target/release/aspen-chat-server target/release/voice_server target/release/aspen-migrate \
+            target/release/aspen-svg-render dist/
           tar -C dist -czf aspen-aarch64-bookworm.tar.gz .
       - uses: actions/upload-artifact@v7
         with:
@@ -1182,6 +1232,7 @@ jobs:
 
   arm64-native-test:
     name: ARM64 (Debian 12) — test natively
+    needs: svg-fonts
     runs-on: ubuntu-24.04-arm
     container: debian:bookworm
     timeout-minutes: 60
@@ -1211,6 +1262,10 @@ jobs:
         with:
           shared-key: arm64-bookworm
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
       - run: cargo test --locked --release --workspace
 
   arm64-cross:
@@ -1236,11 +1291,12 @@ jobs:
         run: |
           mkdir dist
           out=$(python3 scripts/baseline_build.py --arch aarch64 out)
-          for binary in aspen-chat-server voice_server aspen-migrate; do
+          for binary in aspen-chat-server voice_server aspen-migrate aspen-svg-render; do
             cp "$out/$binary" dist/
           done
-          # Packed with its runtime by `ul-aarch64`.
-          cp "$out/aspen-ul" aspen-ul-binary
+          # Packed with its runtime, with the SVG renderer, by `ul-aarch64`.
+          mkdir ul-binary
+          cp "$out/aspen-ul" "$out/aspen-svg-render" ul-binary/
           tar -C dist -czf aspen-aarch64-bookworm-cross.tar.gz .
       - uses: actions/upload-artifact@v7
         with:
@@ -1249,11 +1305,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ul-binary-aarch64
-          path: aspen-ul-binary
+          path: ul-binary
           retention-days: 1
 
   x86_64-baseline:
     name: x86-64 (Debian 12) — build against the baseline, start, and serve
+    needs: svg-fonts
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -1275,12 +1332,17 @@ jobs:
         run: |
           mkdir dist
           out=$(python3 scripts/baseline_build.py --arch x86_64 out)
-          for binary in aspen-chat-server voice_server aspen-migrate; do
+          for binary in aspen-chat-server voice_server aspen-migrate aspen-svg-render; do
             cp "$out/$binary" dist/
           done
-          # Packed with its runtime by `ul-x86_64`.
-          cp "$out/aspen-ul" aspen-ul-binary
+          # Packed with its runtime, with the SVG renderer, by `ul-x86_64`.
+          mkdir ul-binary
+          cp "$out/aspen-ul" "$out/aspen-svg-render" ul-binary/
           tar -C dist -czf aspen-x86_64-bookworm.tar.gz .
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
       - name: Start the services, then the servers, and use them
         run: python3 scripts/smoke_servers.py --bin dist --start-services
       - uses: actions/upload-artifact@v7
@@ -1290,12 +1352,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ul-binary-x86_64
-          path: aspen-ul-binary
+          path: ul-binary
           retention-days: 1
 
   arm64-smoke:
     name: ARM64 — servers start and serve (${{ matrix.build }})
-    needs: [arm64-native, arm64-cross]
+    needs: [arm64-native, arm64-cross, svg-fonts]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -1309,15 +1371,20 @@ jobs:
           name: ${{ matrix.build }}
       - name: Unpack
         run: mkdir dist && tar -C dist -xzf "${{ matrix.build }}.tar.gz"
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: target/svg-fonts
       - name: Start the services, then the servers, and use them
         run: python3 scripts/smoke_servers.py --bin dist --start-services
 
   # Ultra Lite as it is released (`scripts/package_ul.py`): the baseline build of aspen-ul with
-  # the bundled PostgreSQL and the web client appended, installed and run as an operator runs it
-  # on a Debian 12 machine under systemd (`scripts/check_ul.py`), and kept as an artifact.
+  # the bundled PostgreSQL, the web client, and the SVG renderer and its fonts appended,
+  # installed and run as an operator runs it on a Debian 12 machine under systemd
+  # (`scripts/check_ul.py`), and kept as an artifact.
   ul-x86_64:
     name: Ultra Lite (x86-64) — packaged, installed, and run
-    needs: [x86_64-baseline, web-client, ul-postgres]
+    needs: [x86_64-baseline, web-client, ul-postgres, svg-fonts]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1330,14 +1397,20 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: ul-binary-x86_64
+          path: ul-binary
       - uses: actions/download-artifact@v8
         with:
           name: web-client
           path: web-client
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: svg-fonts
       - name: Package
         run: |
-          chmod +x aspen-ul-binary
-          python3 scripts/package_ul.py --arch x86_64 --binary aspen-ul-binary --web-client web-client \
+          chmod +x ul-binary/*
+          python3 scripts/package_ul.py --arch x86_64 --binary ul-binary/aspen-ul --web-client web-client \
+            --svg-fonts svg-fonts \
             --out aspen-ul-x86_64
       - name: Install it on Debian 12 under systemd and run it
         run: python3 scripts/check_ul.py --ul aspen-ul-x86_64
@@ -1351,7 +1424,7 @@ jobs:
   # compiler, so both are built), and checked on an ARM machine by `ul-aarch64-check`.
   ul-aarch64:
     name: Ultra Lite (64-bit ARM) — packaged
-    needs: [arm64-cross, web-client]
+    needs: [arm64-cross, web-client, svg-fonts]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -1368,14 +1441,20 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: ul-binary-aarch64
+          path: ul-binary
       - uses: actions/download-artifact@v8
         with:
           name: web-client
           path: web-client
+      - uses: actions/download-artifact@v8
+        with:
+          name: svg-fonts
+          path: svg-fonts
       - name: Package
         run: |
-          chmod +x aspen-ul-binary
-          python3 scripts/package_ul.py --arch aarch64 --binary aspen-ul-binary --web-client web-client \
+          chmod +x ul-binary/*
+          python3 scripts/package_ul.py --arch aarch64 --binary ul-binary/aspen-ul --web-client web-client \
+            --svg-fonts svg-fonts \
             --out aspen-ul-aarch64
       - uses: actions/cache/save@v6
         if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'

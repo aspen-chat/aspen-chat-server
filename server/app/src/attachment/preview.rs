@@ -1,10 +1,12 @@
 //! Previews: what readers' apps show inline in place of an original sized for a camera rather
-//! than a message list, a smaller copy of a picture, or a video's poster.
+//! than a message list, or served to be saved rather than shown: a smaller copy of a picture, an
+//! SVG drawn as one, or a video's poster.
 //!
-//! Confirming a picture or video queues a job making its preview ([`queue`], in the transaction
-//! that confirms it): `makePicturePreview` or `makeVideoPoster`, keyed by the attachment
-//! (`app::jobs`). Only servers whose `[media.previews]` has `make` on run them, and only those
-//! that can run `ffmpeg` make posters; on each, at most `concurrency` run at once. Until the
+//! Confirming a picture, SVG, or video queues a job making its preview ([`queue`], in the
+//! transaction that confirms it): `makePicturePreview`, `makeSvgPreview`, or `makeVideoPoster`,
+//! keyed by the attachment (`app::jobs`). Only servers whose `[media.previews]` has `make` on run
+//! them, only those that can run `ffmpeg` make posters, and only those whose SVG renderer passes
+//! its check draw SVGs ([`svg::make`]); on each, at most `concurrency` run at once. Until the
 //! preview is made, or found not worth making, or fails, or until [`HOLD`] has passed since the
 //! upload (the job's `holdUntil`), messages holding the attachment wait for it
 //! (`app::message::held`). A preview no server has made within [`GIVEN_UP_AFTER`] is not made.
@@ -26,9 +28,11 @@
 //!
 //! A preview is kept only when it is at least [`MIN_SAVING_PERCENT`] smaller than the original
 //! ([`worth_keeping`]): an original already small and web-ready is shown as it is, saving the
-//! storage of a copy no smaller. A kept preview is stored at [`storage_key`], recorded on the
-//! attachment row, and announced by `attachmentPreviewed` ([`announce`]); the original stays
-//! what is shown at full size, opened in the gallery, and saved.
+//! storage of a copy no smaller. One of an original served to be saved (an SVG) is kept whatever
+//! its size, being all apps can show of it. A kept preview is stored at [`storage_key`], recorded
+//! on the attachment row, and announced by `attachmentPreviewed` ([`announce`]); the original
+//! stays what is saved, and what is shown at full size and opened in the gallery when it is
+//! served for showing in place.
 //!
 //! Who may see a preview is exactly who may see its attachment: it is served on the same
 //! anonymous-read path, under a key naming the same unguessable id, and it reaches readers only
@@ -53,6 +57,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub mod picture;
+pub mod svg;
 pub mod video;
 
 /// How much smaller than its original a preview must be to be kept, in percent.
@@ -71,7 +76,11 @@ pub const GIVEN_UP_AFTER: Duration = Duration::from_secs(7 * 24 * 3600);
 pub const MAX_ATTEMPTS: i32 = 6;
 
 /// The kinds of job that make previews, whose payloads are [`Hold`]s.
-pub const KINDS: [JobKind; 2] = [JobKind::MakePicturePreview, JobKind::MakeVideoPoster];
+pub const KINDS: [JobKind; 3] = [
+    JobKind::MakePicturePreview,
+    JobKind::MakeSvgPreview,
+    JobKind::MakeVideoPoster,
+];
 
 /// How many previews of each kind one account's uploads may have waiting to be made at once,
 /// its bots' included. An upload past it gets no preview, and is shown as its original, so no
@@ -95,12 +104,19 @@ pub struct Hold {
 /// The kind of job that makes a preview of an attachment of `mime_type`, as its uploader named
 /// it, where a preview may be made of one.
 fn kind_of(mime_type: &str) -> Option<JobKind> {
-    match super::essence(mime_type).split_once('/')?.0 {
+    let essence = super::essence(mime_type);
+    if essence == SVG {
+        return Some(JobKind::MakeSvgPreview);
+    }
+    match essence.split_once('/')?.0 {
         "image" => Some(JobKind::MakePicturePreview),
         "video" => Some(JobKind::MakeVideoPoster),
         _ => None,
     }
 }
+
+/// The type SVGs are declared as, whose previews `aspen-svg-render` draws.
+pub const SVG: &str = "image/svg+xml";
 
 /// Whether an attachment of `mime_type`, as its uploader named it, is one a preview may be made
 /// of. The bytes decide in the end: a picture that is not one is left as it is.
@@ -114,11 +130,19 @@ pub fn storage_key(id: AttachmentId) -> String {
     crate::media_store::PublicPrefix::AttachmentPreviews.key(id.0)
 }
 
-/// Whether a preview of `preview_bytes` is worth showing in place of an original of
-/// `original_bytes`: at least [`MIN_SAVING_PERCENT`] smaller.
-pub fn worth_keeping(preview_bytes: u64, original_bytes: u64) -> bool {
-    u128::from(preview_bytes) * 100
+/// Whether a copy of `copy_bytes` saves enough over an original of `original_bytes` to be
+/// shown in its place: at least [`MIN_SAVING_PERCENT`] smaller.
+pub fn smaller_enough(copy_bytes: u64, original_bytes: u64) -> bool {
+    u128::from(copy_bytes) * 100
         <= u128::from(original_bytes) * u128::from(100 - MIN_SAVING_PERCENT)
+}
+
+/// Whether a preview of `preview_bytes` is worth showing in place of an original of
+/// `original_bytes`, of `mime_type` as its uploader declared it: always when the original is
+/// not served for showing in place (`super::shown_inline`), since the preview is then all apps
+/// can show of it; otherwise when it is [`smaller_enough`].
+pub fn worth_keeping(mime_type: &str, preview_bytes: u64, original_bytes: u64) -> bool {
+    !super::shown_inline(mime_type) || smaller_enough(preview_bytes, original_bytes)
 }
 
 /// An attachment's preview as readers receive it, where it has one.
@@ -163,7 +187,8 @@ pub async fn queue(
     let account = crate::upload_quota::charged_account(conn, uploader).await?;
     let Pending { pending } = diesel::sql_query(
         "SELECT count(*) AS pending FROM (SELECT 1 FROM job \
-         WHERE kind IN ('makePicturePreview', 'makeVideoPoster') AND failed_at IS NULL \
+         WHERE kind IN ('makePicturePreview', 'makeVideoPoster', 'makeSvgPreview') \
+         AND failed_at IS NULL \
          AND kind = $1 AND payload->>'account' = $2 LIMIT $3) AS waiting",
     )
     .bind::<diesel::sql_types::Text, _>(kind)
@@ -196,6 +221,75 @@ fn attachment_of(job: &Claimed) -> crate::Result<AttachmentId> {
         .ok_or_else(|| crate::Error::PreviewUnmade("a preview job names no attachment".into()))
 }
 
+/// How many attachments one step of `queueSvgPreviews` looks through, in id order.
+const QUEUE_SVGS_BATCH: i64 = 1000;
+
+/// How far `queueSvgPreviews` has come: every attachment up to `after`, in id order, has had
+/// its preview queued if it is an SVG.
+#[derive(Serialize, Deserialize)]
+struct QueueSvgsProgress {
+    after: AttachmentId,
+}
+
+#[derive(QueryableByName)]
+struct Looked {
+    #[diesel(sql_type = PgUuid)]
+    id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    wanted: bool,
+}
+
+/// One step of the `queueSvgPreviews` job, which a migration queues once: looks through the
+/// next [`QUEUE_SVGS_BATCH`] attachments in id order and queues a bulk `makeSvgPreview` for
+/// each that is an SVG, confirmed, not evidence, and without a preview, as was every SVG
+/// uploaded before SVGs had previews. One queued already is left as it is.
+pub async fn queue_svgs_step(
+    state: &GlobalServerContext,
+    job: &Claimed,
+) -> crate::Result<jobs::Outcome> {
+    let after = job
+        .progress::<QueueSvgsProgress>()?
+        .map_or(Uuid::nil(), |progress| progress.after.0);
+    let mut conn = state.connection_pool.get().await?;
+    let looked: Vec<Looked> = diesel::sql_query(concat!(
+        "SELECT id, (ready_at IS NOT NULL AND evidence_at IS NULL \
+         AND preview_storage_key IS NULL AND ",
+        super::essence_sql!("mime_type"),
+        " = $3) AS wanted FROM attachment WHERE id > $1 ORDER BY id LIMIT $2"
+    ))
+    .bind::<PgUuid, _>(after)
+    .bind::<diesel::sql_types::BigInt, _>(QUEUE_SVGS_BATCH)
+    .bind::<diesel::sql_types::Text, _>(SVG)
+    .load(conn.as_mut())
+    .await?;
+    let hold = Hold {
+        hold_until: Utc::now(),
+        account: None,
+    };
+    let queued = looked
+        .iter()
+        .filter(|row| row.wanted)
+        .map(|row| {
+            NewJob::new(JobKind::MakeSvgPreview, JobClass::Bulk, &hold)
+                .map(|job| job.keyed(row.id.to_string()))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    let any = !queued.is_empty();
+    jobs::enqueue_many(conn.as_mut(), queued).await?;
+    drop(conn);
+    if any {
+        jobs::wake(state).await;
+    }
+    match looked.last() {
+        Some(last) if looked.len() as i64 == QUEUE_SVGS_BATCH => Ok(jobs::Outcome::Progress(
+            serde_json::to_value(QueueSvgsProgress {
+                after: AttachmentId(last.id),
+            })?,
+        )),
+        _ => Ok(jobs::Outcome::Done),
+    }
+}
+
 /// One preview job: makes the attachment's preview and records what became of it.
 pub async fn make_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<jobs::Outcome> {
     let id = attachment_of(job)?;
@@ -224,6 +318,10 @@ pub async fn make_step(state: &GlobalServerContext, job: &Claimed) -> crate::Res
             "picture",
             picture::make(state, config, &row.storage_key, original_bytes).await,
         ),
+        JobKind::MakeSvgPreview => (
+            "svg",
+            svg::make(state, config, &row.storage_key, original_bytes).await,
+        ),
         other => {
             return Err(crate::Error::PreviewUnmade(format!(
                 "{other:?} is not a kind of preview job"
@@ -233,7 +331,9 @@ pub async fn make_step(state: &GlobalServerContext, job: &Claimed) -> crate::Res
     metrics::histogram!(aspen_metrics::api::ATTACHMENT_PREVIEW_DURATION, "kind" => kind)
         .record(started.elapsed().as_secs_f64());
     match made {
-        Outcome::Made(made) if worth_keeping(made.bytes.len() as u64, original_bytes) => {
+        Outcome::Made(made)
+            if worth_keeping(&row.mime_type, made.bytes.len() as u64, original_bytes) =>
+        {
             tracing::debug!(
                 attachment = %id.0,
                 original_bytes,
@@ -444,12 +544,27 @@ mod tests {
 
     #[test]
     fn a_preview_is_kept_when_a_tenth_smaller() {
-        assert!(worth_keeping(90, 100));
-        assert!(!worth_keeping(91, 100));
-        assert!(!worth_keeping(100, 100));
-        assert!(worth_keeping(0, 1));
-        assert!(!worth_keeping(1, 1));
-        assert!(worth_keeping(u64::MAX / 2, u64::MAX));
+        assert!(smaller_enough(90, 100));
+        assert!(!smaller_enough(91, 100));
+        assert!(!smaller_enough(100, 100));
+        assert!(smaller_enough(0, 1));
+        assert!(!smaller_enough(1, 1));
+        assert!(smaller_enough(u64::MAX / 2, u64::MAX));
+        assert!(worth_keeping("image/png", 90, 100));
+        assert!(!worth_keeping("image/png", 91, 100));
+    }
+
+    #[test]
+    fn a_preview_of_what_is_not_shown_in_place_is_always_kept() {
+        for saved in [
+            SVG,
+            "IMAGE/SVG+XML; charset=utf-8",
+            "image/tiff",
+            "image/heic",
+        ] {
+            assert!(worth_keeping(saved, 100, 100), "{saved}");
+            assert!(worth_keeping(saved, u64::MAX, 1), "{saved}");
+        }
     }
 
     #[test]
@@ -463,6 +578,9 @@ mod tests {
         }
         for video in ["video/mp4", "Video/MP4;codecs=avc1"] {
             assert_eq!(kind_of(video), Some(JobKind::MakeVideoPoster), "{video}");
+        }
+        for svg in [SVG, "Image/SVG+XML", "image/svg+xml; charset=utf-8"] {
+            assert_eq!(kind_of(svg), Some(JobKind::MakeSvgPreview), "{svg}");
         }
         for neither in [
             "application/pdf",
