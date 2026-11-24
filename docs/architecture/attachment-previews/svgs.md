@@ -1,9 +1,9 @@
 # SVGs
 
 An SVG's preview is the SVG drawn as a picture (`app::attachment::preview::svg`,
-`aspen_previews::svg`). Its original is stored and served as `application/octet-stream`, to be
-saved (see [Stored type](uploads.md#stored-type)), so the preview is all apps show of it, inline
-and in the gallery.
+`aspen_previews::svg`). Its original is stored and served as `application/octet-stream`, to be saved
+(see [Stored type](uploads.md#stored-type)), so the preview is all apps show of it, inline and in
+the gallery.
 
 ## Drawing
 
@@ -36,20 +36,20 @@ Nothing outside itself:
 
 ## Limits
 
-| Limit                       | Value                                                    | Where                                                    |
-| --------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| Size of the original        | `max_svg_bytes` (8 MiB), and as much once SVGZ unpacks   | `svg::make`, `render::unpack`                            |
-| XML nodes                   | A million                                                | `protocol::MAX_NODES`                                    |
-| Nesting                     | usvg's 1024 levels                                       | `usvg::DEFAULT_MAX_DEPTH`                                |
-| Embedded pictures           | `max_picture_pixels` each                                | `render::embeds_too_many_pixels`                         |
-| Address space               | `svg_memory_mib` (1 GiB), the mapped fonts among it      | `RLIMIT_AS`, set as it starts (`process::limit`)         |
-| CPU time                    | Ten seconds, then `SIGXCPU`, and a second later killed   | `RLIMIT_CPU`, `svg::CPU_TIME`                            |
-| Wall time                   | Twenty seconds, then killed                              | `svg::DEADLINE`                                          |
-| Files written, core dumps   | None                                                     | `RLIMIT_FSIZE`, `RLIMIT_CORE`                            |
-| Open files                  | 16                                                       | `RLIMIT_NOFILE`                                          |
-| Environment                 | None but `PATH`                                          | `process::confined`                                      |
-| Pixels read back            | The box's worth, the process killed past it              | `svg::preview`                                           |
-| Size drawn                  | Fitted within the preview box                            | `aspen_svg_render::fit`                                  |
+| Limit                       | Value                                                     | Where                                                    |
+| --------------------------- | --------------------------------------------------------- | -------------------------------------------------------- |
+| Size of the original        | `max_svg_bytes` (8 MiB), and as much once SVGZ unpacks    | `svg::make`, `render::unpack`                            |
+| XML nodes                   | A million                                                 | `protocol::MAX_NODES`                                    |
+| Nesting                     | usvg's 1024 levels                                        | `usvg::DEFAULT_MAX_DEPTH`                                |
+| Embedded pictures           | `max_picture_pixels` each                                 | `render::embeds_too_many_pixels`                         |
+| Address space               | `svg_memory_mib` (1 GiB), the mapped fonts among it       | `RLIMIT_AS`, set as it starts (`process::limit`)         |
+| CPU time                    | Ten seconds, then `SIGXCPU`, and a second later killed    | `RLIMIT_CPU`, `svg::CPU_TIME`                            |
+| Wall time                   | Twenty seconds, then killed                               | `svg::DEADLINE`                                          |
+| Files written, core dumps   | None                                                      | `RLIMIT_FSIZE`, `RLIMIT_CORE`                            |
+| Open files                  | 16                                                        | `RLIMIT_NOFILE`                                          |
+| Environment                 | None but `PATH`                                           | `process::confined`                                      |
+| Pixels read back            | The box's worth, the process killed past it               | `svg::preview`                                           |
+| Size drawn                  | Fitted within the preview box                             | `aspen_svg_render::fit`                                  |
 | System calls once sandboxed | Reading stdin, writing stdout and stderr, memory, exiting | `aspen_svg_render::sandbox`, a seccomp filter of its own |
 
 The sandbox is a seccomp filter the renderer installs on itself (`seccompiler`), with no new
@@ -61,16 +61,16 @@ executable. It exists only on Linux; elsewhere the renderer refuses to run.
 
 ## What each ending means
 
-| The renderer                                    | The preview                                                                  |
-| ----------------------------------------------- | ---------------------------------------------------------------------------- |
-| Drew it (exit 0)                                | Kept                                                                         |
-| Could not read it (exit 2)                      | None: not an SVG                                                             |
-| Was asked for more than its limits (exit 3)     | None                                                                         |
-| Cannot draw anything here (exit 4)              | Tried again later, like a storage failure: its fonts or sandbox are missing  |
-| Was killed past its CPU time or deadline        | None                                                                         |
-| Ran out of memory or crashed                    | None                                                                         |
-| Was killed by its sandbox (`SIGSYS`)            | None, and a warning: drawing needs a system call the filter lacks, a bug     |
-| Could not be started                            | Tried again later                                                            |
+| The renderer                                | The preview                                                                 |
+| ------------------------------------------- | --------------------------------------------------------------------------- |
+| Drew it (exit 0)                            | Kept                                                                        |
+| Could not read it (exit 2)                  | None: not an SVG                                                            |
+| Was asked for more than its limits (exit 3) | None                                                                        |
+| Cannot draw anything here (exit 4)          | Tried again later, like a storage failure: its fonts or sandbox are missing |
+| Was killed past its CPU time or deadline    | None                                                                        |
+| Ran out of memory or crashed                | None                                                                        |
+| Was killed by its sandbox (`SIGSYS`)        | None, and a warning: drawing needs a system call the filter lacks, a bug    |
+| Could not be started                        | Tried again later                                                           |
 
 ## Fonts
 
@@ -79,8 +79,8 @@ family but `monospace`, Intel One Mono for `monospace`, then, for what those lac
 Color Emoji, the Noto face of every script the app falls back to, and the five regional CJK faces,
 in that order. They are files of a directory (`svg_fonts`), which `scripts/svg_fonts.py` writes from
 the web client's own fonts: the families `client/packages/app/fallbackFonts.json` names, which the
-app's stylesheets are written from too, as TrueType and OpenType from the Fontsource packages' WOFF2,
-which the renderer cannot read. Their file names put them in that order, which is the order a
+app's stylesheets are written from too, as TrueType and OpenType from the Fontsource packages'
+WOFF2, which the renderer cannot read. Their file names put them in that order, which is the order a
 character a face lacks is looked for in the others. Each family's licence is under `licenses/`.
 
 The renderer maps every font before it enters its sandbox, and a directory without fonts stops it
@@ -94,11 +94,11 @@ have it, draws whole.
 
 ## Which servers draw them
 
-The job is `makeSvgPreview` (see [Making previews](making-previews.md)). A server's job runner checks
-its renderer when it starts (`svg::available`, the renderer's `--check`: its fonts open, its sandbox
-is entered, and it draws text of its own there), and only a server whose renderer passes claims
-`makeSvgPreview`. One whose renderer fails says why in its log and leaves SVGs to the servers that
-can draw them; with none, SVGs wait seven days and are given up, and apps show them as text.
+The job is `makeSvgPreview` (see [Making previews](making-previews.md)). A server's job runner
+checks its renderer when it starts (`svg::available`, the renderer's `--check`: its fonts open, its
+sandbox is entered, and it draws text of its own there), and only a server whose renderer passes
+claims `makeSvgPreview`. One whose renderer fails says why in its log and leaves SVGs to the servers
+that can draw them; with none, SVGs wait seven days and are given up, and apps show them as text.
 
 The API image and Ultra Lite carry the renderer and its fonts (`/usr/local/bin/aspen-svg-render` and
 `/usr/share/aspen/svg-fonts`; `svg-render/` in Ultra Lite's runtime).
@@ -112,11 +112,10 @@ with no preview.
 ## What apps show
 
 The record says the original is not served for showing in place (`Attachment.inline`, false for an
-SVG and every type outside `INLINE_TYPES`). Apps show such a picture by its preview alone, inline and
-in the gallery, and copy the preview when asked to copy it as a picture; saving it saves the
+SVG and every type outside `INLINE_TYPES`). Apps show such a picture by its preview alone, inline
+and in the gallery, and copy the preview when asked to copy it as a picture; saving it saves the
 original. Until it has a preview, an SVG shows as the text it is (the app's text attachments include
-`.svg`), and any other picture whose original is not served inline (TIFF, HEIC) as a file to
-save. See the
-client's [attachments](../../../client/docs/architecture/message-rendering/attachments.md).
+`.svg`), and any other picture whose original is not served inline (TIFF, HEIC) as a file to save.
+See the client's [attachments](../../../client/docs/architecture/message-rendering/attachments.md).
 
 [Design notes](design-notes.md#svgs)
