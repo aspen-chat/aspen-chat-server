@@ -214,7 +214,7 @@ See [Device credentials](device-credentials.md).
 - **Networks have a ceiling of their own, everyone a high one.** An address is cheap to change
   within a network one holds (an IPv6 /48 is 65536 of the /64s an address counts as), so the sign-in
   endpoints and redeeming a credential also count by network, at four addresses' worth. Everyone's
-  redemptions together are limited only to bound what Valkey keeps of used challenges: a limit low
+  redemptions together are limited only to bound the rows kept of used challenges: a limit low
   enough to matter would let anyone with enough networks spend it, and every new install needs a
   credential before it can sign in. A difficulty that rises under load would raise the cost of
   spending it further; the fixed difficulty and the high ceiling are what there is.

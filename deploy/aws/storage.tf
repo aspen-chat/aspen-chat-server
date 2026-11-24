@@ -4,10 +4,8 @@ module "media" {
   name            = var.name
   domain          = "media.${var.domain}"
   route53_zone_id = var.route53_zone_id
-  bucket          = var.media_bucket
-  # A bucket taken over comes with its read path's record. A bucket of this deployment's own
-  # takes the name with the deployment's.
-  public_dns = var.public_dns || var.media_bucket != null
+  # The read path takes its name with the deployment's.
+  public_dns = var.public_dns
 
   providers = {
     aws           = aws

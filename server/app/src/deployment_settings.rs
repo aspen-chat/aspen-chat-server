@@ -30,7 +30,6 @@ use crate::federation::{Domain, FederationPolicy, Gate, MigrationRules};
 use crate::icon::Icon;
 use crate::t;
 use aspen_schema::{deployment_settings, icon, user};
-use async_nats::jetstream::kv::{Config as KvConfig, Operation, Store};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -656,9 +655,9 @@ pub async fn update(
                 // failure that does leaves them to the next `fitStreams`.
                 let sizes = crate::nats_memory::Wanted::from(&wanted);
                 if sizes != crate::nats_memory::Wanted::from(&before) {
-                    crate::nats_memory::fit(state.nats(), monitor, sizes, false).await?;
+                    crate::nats_memory::fit(state.bus(), monitor, sizes, false).await?;
                 }
-                ring(state.nats(), revision).await?;
+                ring(state.bus(), revision).await?;
                 Ok::<_, crate::Error>((before, DeploymentSettings { revision, ..wanted }))
             }
             .scope_boxed()
@@ -769,20 +768,15 @@ fn validate_display_name(name: &str) -> crate::Result<String> {
 }
 
 /// Opens the bucket, creating it on first use.
-async fn bucket(context: &async_nats::jetstream::Context) -> crate::Result<Store> {
-    if let Ok(store) = context.get_key_value(BUCKET).await {
-        return Ok(store);
-    }
-    context
-        .create_key_value(KvConfig {
-            bucket: BUCKET.to_string(),
+async fn bucket(bus: &aspen_bus::Bus) -> crate::Result<aspen_bus::Bucket> {
+    Ok(bus
+        .bucket(aspen_bus::BucketConfig {
+            name: BUCKET.to_string(),
             description: "The revision of the deployment's settings (crate::deployment_settings)"
                 .to_string(),
-            history: 1,
-            ..Default::default()
+            max_age: None,
         })
-        .await
-        .map_err(crate::Error::from)
+        .await?)
 }
 
 /// Has every server read the settings again when `icon` is the deployment's, whose picture was
@@ -802,14 +796,14 @@ pub(crate) async fn icon_stored_anew(
             .await
             .optional()?;
     if let Some(revision) = revision {
-        ring(state.nats(), revision).await?;
+        ring(state.bus(), revision).await?;
     }
     Ok(())
 }
 
 /// Tells every server that the settings reached `revision`.
-async fn ring(context: &async_nats::jetstream::Context, revision: i64) -> crate::Result<()> {
-    bucket(context)
+async fn ring(bus: &aspen_bus::Bus, revision: i64) -> crate::Result<()> {
+    bucket(bus)
         .await?
         .put(KEY, revision.to_string().into())
         .await?;
@@ -830,14 +824,15 @@ pub fn spawn_watcher(state: GlobalServerContext) {
 }
 
 async fn follow(state: &GlobalServerContext) -> crate::Result<()> {
-    let store = bucket(&state.nats_context).await?;
+    let store = bucket(&state.bus).await?;
     let mut updates = store.watch(KEY).await?;
     // Read once the watch is in place, so no change falls between the two.
     catch_up(state, 0).await?;
     while let Some(update) = updates.next().await {
         let entry = update?;
-        if entry.operation != Operation::Put {
-            continue;
+        match entry.operation {
+            aspen_bus::Operation::Put => {}
+            aspen_bus::Operation::Delete | aspen_bus::Operation::Purge => continue,
         }
         let Some(revision) = std::str::from_utf8(&entry.value)
             .ok()

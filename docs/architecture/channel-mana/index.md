@@ -33,9 +33,9 @@ limits and a crowd by the channel's mana. [Why it is built this way](design-note
 | Voice and plugin channels          | None    |                      |
 
 A pool is a Valkey hash, `mana:{channel}`, of `level` and `tick` (the tick it is as of: 200 ms each
-since 1970). One Lua script (`mana::POOL`) brings it up to date and spends from it in one step, on
-Valkey's clock, so nothing runs while a channel is quiet and two servers cannot both spend its last
-mana.
+since 1970). One Lua script (`Ephemeral::mana_pool`, in `aspen_ephemeral`) brings it up to date and
+spends from it in one step, on Valkey's clock, so nothing runs while a channel is quiet and two
+servers cannot both spend its last mana.
 
 - **Units:** levels are in thousandths of mana, so every rate a second divides evenly into 5 Hz
   ticks: 50 mana a second is 10,000 thousandths a tick.
@@ -199,7 +199,7 @@ wait, so they are never in the queue.
 ### Thirds
 
 While anything waits, what the pool holds is not spent by whoever asks first but credited to the
-first three authors in queue order (`mana::share`, the `SHARE` script):
+first three authors in queue order (`mana::share`, the `Ephemeral::mana_allot` script):
 
 | Waiting       | First            | Second    | Third     |
 | ------------- | ---------------- | --------- | --------- |
@@ -310,10 +310,10 @@ hour (`GET /channels/{channel}/mana/top-senders`, `mana::read_top_senders`).
   sorted set of that minute's (`mana:{channel}:sent:{minute}`), kept 61 minutes. Posting at once,
   with Bypass, and paying for a waiting row all count; what is refused or dropped spends nothing, so
   counts nothing. A thread counts its own, as its pool is its own.
-- **Read:** a second script sums the last 60 minutes' sets into `mana:{channel}:top`, kept five
-  seconds, and answers its first 100 (`mana::TOP_SENDERS`), the most first, each with their mana.
-  However many people have the list open, a channel's hour is summed at most every five seconds, and
-  the sum's work grows with how many sent in the hour.
+- **Read:** a second script (`Ephemeral::mana_top`) sums the last 60 minutes' sets into
+  `mana:{channel}:top`, kept five seconds, and answers its first 100 (`mana::TOP_SENDERS`), the most
+  first, each with their mana. However many people have the list open, a channel's hour is summed at
+  most every five seconds, and the sum's work grows with how many sent in the hour.
 - **Who sees it:** anyone who may read the channel (`channel_access`); `include=users` sideloads the
   senders, few of whom a channel's readers may know in a raid. Where the channel has no pool the
   list is empty, and while Valkey cannot be read it is empty too, as mana that cannot be counted is.

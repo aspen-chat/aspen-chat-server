@@ -50,8 +50,11 @@ and writes it into its working directory before starting the server.
   IP and the host's network. ECS still runs its container, so it is released the way the API servers
   are. On the host's network the instance metadata service would answer the voice server with the
   machine role's credentials, so the voice image runs as a user of its own (10002), which every
-  machine running it refuses that address from boot
-  (`deploy/aws-single/machine/voice-imds.service`).
+  machine running it refuses that address from boot (`deploy/aws/machine/voice-imds.service`).
+- **The load balancer asks `GET /health`, not `GET /health/ready`.** It needs to know a server is
+  there. Were it to ask whether the server reaches its database, a database outage would take every
+  server out at once, and people would get the load balancer's error in place of the server's own,
+  which says what is wrong.
 - **Signalling goes through the load balancer**, which already holds a certificate for every name
   under the domain. A voice server then needs no certificate of its own to renew.
 - **The servers are in public subnets.** The API servers must reach the internet directly (link
@@ -87,49 +90,19 @@ and writes it into its working directory before starting the server.
 - **Voice servers ignore newer machine images** until replaced by name. Otherwise whichever apply
   came after AWS published an image would replace every voice server and end its calls.
 
-## One machine on AWS
+## Moving Ultra Lite to AWS
 
-`deploy/aws-single` trades staying up for cost: it is a box, on one EC2 machine, with its files in
-S3.
-
-- **What costs money in the larger configuration is mostly what keeps it up**: a second API server,
-  the load balancer, and managed PostgreSQL and Valkey. A deployment of a few dozen people that may
-  be down for some minutes needs none of them.
-- **The box, not containers of its own.** Everything a deployment on one machine needs (Caddy, the
-  two places for the API server, upgrades that do not stop it, backups, `doctor`) is the box's
-  already, and tried on any machine. The configuration makes the machine, its addresses, its volume,
-  and the bucket, and hands the box the answers `init` would ask for.
-- **A release is still a `tofu apply`.** It runs `aspen-release` on the machine through Session
-  Manager, which takes the tool from the release's own image and makes the box or upgrades it. No
-  port but the deployment's is open, and no key to the machine exists.
-- **box.json is the configuration after the first release.** The variables give only what the box
-  cannot change later (the domain, the bucket, the addresses) and the release. Everything else is
-  changed on the box, as on any other, so there is one way to change a setting rather than two that
-  disagree.
-- **The box is on a volume of its own**, so replacing the machine keeps the database, the passwords,
-  and the certificates (Let's Encrypt issues only so many for a name each week). Docker waits for
-  the volume's mount: a container started without it would make an empty database on the machine's
-  own disk.
-- **Backups are snapshots of that volume.** One taken while PostgreSQL runs restores the way a
-  database that lost power does, which PostgreSQL is built to survive.
-- **Storage stays in S3 behind CloudFront.** It costs by use, which at this size is cents, keeping
-  attachments on the machine would put them on the one disk that can be lost, and a deployment that
-  moves to the larger configuration takes the bucket over where it is.
-- **Ubuntu, for Docker with Compose from its own packages.** The box needs Compose 2.20 or later,
-  which Amazon Linux does not package.
-
-## Moving a box to the larger configuration
-
-- **A box is exported whole, by the box** (`aspen-box export`): the database, people's files, and
-  what the next deployment must know (its voice servers' names). The box knows where its database
-  and its files are, wherever they are kept; the migration script needs to know only the directory.
-- **From `deploy/aws-single`, only the database is copied.** Its files are in a bucket the larger
-  deployment takes over where it is. Everything else a deployment keeps is in one of the two, or is
-  not worth keeping (Valkey, NATS).
+- **Ultra Lite is exported whole, by itself** (`aspen-ul export`): the database, people's files, and
+  what the next deployment must know (its address and its voice server's name). It knows where its
+  database and files are; the migration script needs to know only the directory.
 - **A dump and a restore, with the old deployment stopped.** Someone on one machine has accepted
   being down for a release, and a small database copies in less time than that. Replicating instead
   would need a network path between the two deployments and a database that takes no schema change
   meanwhile, for minutes saved once.
+- **The files are uploaded by the server's own command** (`aspen-chat-server storage import`, run
+  from the API image), which sets each object's type and disposition as the server would have. A
+  copy of the files alone would lose them, since an object's key has no extension to tell its type
+  by.
 - **The restore runs before the new deployment's first release**, while it has a database and no
   servers: the state an apply without `image_tag` leaves. The release then finds the old
   deployment's tables and brings them up to date, exactly as an upgrade does.
@@ -142,95 +115,13 @@ S3.
   sharing a volume. Neither server's image has `pg_restore`, and an image of our own for one use
   would have to be built and published at every release to be there when wanted. Its role allows the
   one object.
-- **The larger deployment imports the bucket and the distribution, and makes the rest of the storage
-  anew** (its certificate, access control). Those two cannot be made twice: the bucket holds the
-  files, and `media.<domain>` belongs to one distribution at a time. The bucket's policy names the
-  distribution, so both deployments read through it while they overlap.
-- **The old configuration forgets what was taken over instead of destroying it** (`tofu state rm`,
-  from the list the media module gives as `handed_over`). A `removed` block cannot do it: the module
-  still declares those resources for deployments that are staying.
-- **The name changes hands in the release's apply** (`public_dns`), the read path's with it when the
-  files were copied rather than taken over. Until then the larger deployment exists beside the old
-  one without the name, so everything slow (the database, the certificates, the load balancer) is
-  made while the old one still serves.
-- **The old data volume is forgotten too, not deleted.** It is the old database, and the way back if
-  the move turns out badly a day later.
-- **The script does what is not an apply, and prints the apply to run.** Plans that import or take
-  over a name are the ones a person should read.
+- **The name changes hands in the release's apply** (`public_dns`), the read path's with it. Until
+  then the larger deployment exists beside the old one without the name, so everything slow (the
+  database, the certificates, the load balancer) is made while the old one still serves.
+- **The script does what is not an apply, and prints the apply to run.** Plans that take over a name
+  are the ones a person should read.
 
-## The box
+## The templates
 
-`deploy/box` is the one-machine deployment with nothing of any provider in it, for the people Aspen
-most wants to reach: a small rented server, or a small computer at home.
-
-- **One tool that asks a few questions, rather than files to edit.** It makes every password, writes
-  every file, and starts things in the order they need. What it was told is one JSON file, which is
-  also how a setting is changed later.
-- **Python's standard library and Docker Compose, and nothing to install.** A small computer's
-  system has both, or one package away. A compiled tool would need building for each architecture
-  before it could help anyone start.
-- **Every container on the machine's network, every service on loopback.** The voice server's media
-  is a range of UDP and TCP ports, which Docker publishes one process a port. With everything beside
-  it, no service is reachable from another machine whatever the firewall says, which matters most
-  where there is no firewall but a home router.
-- **Nothing on loopback trusts a caller for being there.** Loopback is shared with the voice server,
-  which reads media, DTLS, and STUN from anyone on the internet, so a flaw there must not reach the
-  rest: Valkey asks for a password, Caddy's admin API, which could rewrite the whole proxy, is a
-  socket inside Caddy's own container that `caddy reload` run there reaches, and PostgreSQL, NATS,
-  and Garage each ask for credentials of their own.
-- **Two places for the API server, one running.** An upgrade, or a changed `aspen.toml`, starts the
-  server in the other place and stops the first once the second answers; Caddy gives a request that
-  finds one gone to the other. A small deployment then has no outage for a release, and a release
-  that does not start changes nothing. The cost is a second server's memory for the seconds both
-  run.
-- **What routes requests asks `GET /health`; what starts a server asks `GET /health/ready`.** Caddy
-  and the load balancer need to know a server is there. Were they to ask whether it reaches its
-  database, a database outage would take every server out at once, and people would get a proxy's
-  error in place of the server's own, which says what is wrong. An upgrade waits for readiness
-  instead, before it stops the server it replaces.
-- **Garage for files kept on the machine**, since it is one small process that keeps to a few
-  megabytes idle, and it makes its own bucket and key pair from its environment. Its S3 API and its
-  read path share `media.<domain>`: paths under the bucket's name are the S3 API, which answers only
-  what the server signed, and the four public prefixes are the read path. One name to make a record
-  for, not two.
-- **Uploads' CORS is answered by Caddy**, with any origin allowed, as on S3. Setting it in the store
-  would take an S3 client the box otherwise has no use for.
-- **`doctor` is where the know-how goes.** Most of what goes wrong with a first deployment is
-  outside the servers: a record that points elsewhere, a port not forwarded, a certificate not yet
-  issued, storage that serves too much. It checks each, and gives the record to write or the command
-  to run. What it cannot see from inside the network (whether media ports are reachable) it says it
-  has not checked, and how to.
-- **The templates hold placeholders alone.** OpenTofu and Python each fill `${name}` and nothing
-  more, so one set of files serves the box and both AWS configurations. A template with conditions
-  or loops could be rendered by only one of them.
-- **The box makes no DNS records.** A provider's API is often closed to the people the box is for
-  (an account of few domains, an address that changes and so cannot be allow-listed), which is when
-  it would be most wanted. `init` prints the records and `doctor` checks them.
-- **A voice server elsewhere is a box of its own, told everything in one file.** The deployment's
-  box registers it and makes its NATS user, so the other machine needs no access to the deployment's
-  database or secrets: only its own NATS password, its id, and the authority to trust NATS by.
-- **NATS opens to the network only while a voice server elsewhere needs it**, and then only over TLS
-  from an authority the box makes for itself. A certificate from a public authority would need its
-  name renewed for a port no browser asks for; the voice servers are told the authority in their
-  join file instead. The box's own servers reach NATS over loopback, also over TLS then, since NATS
-  asks it of every client or none.
-- **The tool is a package of modules, launched by one small script**, and is copied into every `api`
-  image. A machine with Docker and no checkout takes it out of the release it will run, so the tool
-  and the images always match.
-- **A database elsewhere is the same box with one service fewer.** PostgreSQL is in a Compose
-  profile, like the bundled storage, and the servers' dependence on it is one that may be absent.
-  Nothing else about the box changes, so someone can start with everything on the machine and move
-  the database out later with a backup and a restore.
-- **Its certificate is checked unless the address asks otherwise.** On the machine the database is
-  on loopback; elsewhere every query crosses a network, where an unchecked connection can be read
-  and asked for its password. The default is the safe one, and `doctor` says so when the address has
-  chosen another.
-- **PostgreSQL's tools run from its image, told where the database is by their environment.**
-  Neither server's image has `pg_dump` or `psql`, and the PostgreSQL image is the one piece sure to
-  match the version asked for. The password is in the container's environment, never in an argument,
-  which every user of the machine can read.
-- **The version is checked before a release meets the database.** A migration failing on a function
-  PostgreSQL 17 lacks says nothing a person can act on.
-- **`restore` never empties a database kept elsewhere.** It drops and remakes the box's own, which
-  is the box's to drop. Elsewhere it restores in one transaction, which a database with tables in it
-  refuses whole.
+- **The templates hold placeholders alone.** OpenTofu fills `${name}` and nothing more, so what a
+  file holds is read from its template, and a program of any language can fill one the same way.

@@ -16,7 +16,6 @@ use aspen_schema::federated_deployment;
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use fred::prelude::KeysInterface as _;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -198,22 +197,23 @@ pub async fn receive<T: Statement>(
         ));
     }
     // Used once: the id is remembered until the statement could no longer be accepted anyway.
-    let remembered: Option<String> = state
-        .valkey
-        .set(
-            format!("federation:statement:{}:{from}:{}", T::TYPE, claims.id()),
-            1,
-            Some(fred::types::Expiration::EX(
-                expires_at
-                    .saturating_sub(now)
-                    .saturating_add(CLOCK_SKEW.num_seconds())
-                    .max(1),
-            )),
-            Some(fred::types::SetOptions::NX),
-            false,
+    let remembered = {
+        let mut conn = state.connection_pool.get().await?;
+        crate::used_once::claim(
+            conn.as_mut(),
+            crate::used_once::Purpose::FederationStatement,
+            &[
+                T::TYPE.as_bytes(),
+                from.as_str().as_bytes(),
+                claims.id().as_bytes(),
+            ],
+            expires_at
+                .saturating_sub(now)
+                .saturating_add(CLOCK_SKEW.num_seconds()),
         )
-        .await?;
-    if remembered.is_none() {
+        .await?
+    };
+    if !remembered {
         return Err(invalid(
             Some(&from),
             t!("statementReused", domain = from.as_str()),
@@ -244,17 +244,16 @@ async fn contact_sender<T: Statement>(
 ) -> crate::Result<(T, FederatedDeployment)> {
     let signature = || invalid(Some(from), t!("statementSignature", domain = from.as_str()));
     let gate = format!("federation:statement-contact:{from}");
-    let first: Option<String> = state
-        .valkey
+    let first = state
+        .ephemeral
         .set(
             &gate,
             1,
-            Some(fred::types::Expiration::EX(CONTACT_INTERVAL_SECONDS)),
-            Some(fred::types::SetOptions::NX),
-            false,
+            Some(aspen_ephemeral::Expiry::Seconds(CONTACT_INTERVAL_SECONDS)),
+            Some(aspen_ephemeral::Condition::Absent),
         )
         .await?;
-    if first.is_none() {
+    if !first {
         let mut conn = state.connection_pool.get().await?;
         let known: Option<FederatedDeployment> = federated_deployment::table
             .find(from)
@@ -299,14 +298,13 @@ async fn contact_sender<T: Statement>(
     let (listed, outcome, claims) = match contacted {
         Err(crate::Error::DeploymentUnreachable(detail)) => {
             tracing::info!(domain = %from, %detail, "could not contact the sender of a statement");
-            let backed_off: Result<(), _> = state
-                .valkey
+            let backed_off = state
+                .ephemeral
                 .set(
                     &gate,
                     1,
-                    Some(fred::types::Expiration::EX(UNREACHED_INTERVAL_SECONDS)),
+                    Some(aspen_ephemeral::Expiry::Seconds(UNREACHED_INTERVAL_SECONDS)),
                     None,
-                    false,
                 )
                 .await;
             if let Err(error) = backed_off {

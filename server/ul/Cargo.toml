@@ -1,0 +1,52 @@
+[package]
+name = "aspen-ul"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Aspen Ultra Lite: a whole deployment in one program on one machine, its PostgreSQL bundled and supervised, the bus and short-lived store in its memory, its files in a directory, and its voice server inside it."
+
+[[bin]]
+name = "aspen-ul"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+aspen_api = { version = "0.1.0", path = "../api" }
+aspen_app = { version = "0.1.0", path = "../app" }
+aspen-chat-server = { version = "0.1.0", path = ".." }
+aspen-migrate = { version = "0.1.0", path = "../../migrate" }
+aspen_bus = { version = "0.1.0", path = "../../bus" }
+aspen_ephemeral = { version = "0.1.0", path = "../ephemeral" }
+aspen_sockets = { version = "0.1.0", path = "../../sockets" }
+axum = { version = "0.8.4", features = ["macros", "ws"] }
+clap = { version = "4.5.37", features = ["derive"] }
+config = { version = "0.15.14", features = ["toml"] }
+ctrlc = { version = "3.4.6", features = ["termination"] }
+diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres"] }
+diesel-async = { version = "0.7.4", features = ["postgres"] }
+libc = "0.2"
+serde = { version = "1.0.219", features = ["derive"] }
+tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
+tokio = { version = "1.51.1", features = ["full"] }
+tower = { version = "0.5.2", features = ["util"] }
+tracing = "0.1.41"
+tracing-panic = "0.1.2"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+url = "2.5.8"
+uuid = { version = "1.16.0", features = ["serde", "v7"] }
+voice_protocol = { version = "0.1.0", path = "../../voice_protocol" }
+voice_server = { version = "0.1.0", path = "../../voice_server" }
+tar = { version = "0.4.46", default-features = false }
+ruzstd = "0.9.1"
+sha2 = "0.10.9"
+hex = "0.4.3"
+instant-acme = { version = "0.8.5", default-features = false, features = ["aws-lc-rs", "hyper-rustls", "rcgen"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+x509-parser = "0.18.1"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
+serde_json = "1"
+time = { version = "0.3.47", features = ["macros"] }
+aspen_locale = { version = "0.1.0", path = "../locale" }
+rust-i18n = "3.1.5"
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls"] }

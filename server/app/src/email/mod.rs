@@ -38,6 +38,7 @@ use crate::context::GlobalServerContext;
 use crate::two_factor::Caller;
 use crate::{CHACHA_RNG, t};
 use crate::{EventScope, UserId, publish_event};
+use aspen_ephemeral::Expiry;
 use aspen_schema::{user, user_email};
 use aspen_wire::message_enum::server_event::{ServerEvent, UserEvent};
 use base64::Engine;
@@ -46,8 +47,6 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::prelude::KeysInterface;
-use fred::types::Expiration;
 use lettre::message::Mailbox;
 use lettre::transport::smtp::client::{Certificate, Identity, Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, Tokio1Executor};
@@ -464,7 +463,7 @@ pub async fn remove_address(state: &GlobalServerContext, caller: &Caller) -> cra
         .scope_boxed()
     })
     .await?;
-    let _: i64 = state.valkey.del(verification_key(user_id)).await?;
+    state.ephemeral.del(verification_key(user_id)).await?;
     wake(state).await;
     Ok(())
 }
@@ -583,18 +582,20 @@ async fn queue_verification(
     address: &str,
 ) -> crate::Result<()> {
     let code = code(6);
-    let ttl = Some(Expiration::EX(VERIFICATION_LIFETIME.as_secs() as i64));
-    let _: () = state
-        .valkey
+    let ttl = Some(Expiry::Seconds(VERIFICATION_LIFETIME.as_secs() as i64));
+    state
+        .ephemeral
         .set(
-            verification_key(user_id),
+            &verification_key(user_id),
             format!("{}:{}", state.code_key.digest(&code), address),
             ttl,
             None,
-            false,
         )
         .await?;
-    let _: i64 = state.valkey.del(verification_attempts_key(user_id)).await?;
+    state
+        .ephemeral
+        .del(verification_attempts_key(user_id))
+        .await?;
     // The code goes to the address it verifies, whatever the account holds when it is sent.
     outbox::queue(
         conn,
@@ -639,20 +640,20 @@ pub async fn verify(
 ) -> crate::Result<EmailAccount> {
     ensure_can_have_address(state, caller)?;
     let user_id = caller.user;
-    let stored: Option<String> = state.valkey.get(verification_key(user_id)).await?;
+    let stored: Option<String> = state.ephemeral.get(&verification_key(user_id)).await?;
     let Some((digest, address)) = stored.as_deref().and_then(|s| s.split_once(':')) else {
         return Err(crate::Error::Validation(t!("emailCodeExpired")));
     };
     // Counted before it is checked, so codes sent all at once are checked no more than
     // `VERIFICATION_ATTEMPTS` times.
     let attempts = crate::two_factor::count_attempt(
-        &state.valkey,
+        &state.ephemeral,
         &verification_attempts_key(user_id),
         VERIFICATION_LIFETIME.as_secs() as i64,
     )
     .await?;
     if attempts > VERIFICATION_ATTEMPTS {
-        let _: i64 = state.valkey.del(verification_key(user_id)).await?;
+        state.ephemeral.del(verification_key(user_id)).await?;
         return Err(crate::Error::TooManyAttempts);
     }
     let matches: bool = digest
@@ -661,7 +662,7 @@ pub async fn verify(
         .into();
     if !matches {
         if attempts >= VERIFICATION_ATTEMPTS {
-            let _: i64 = state.valkey.del(verification_key(user_id)).await?;
+            state.ephemeral.del(verification_key(user_id)).await?;
             return Err(crate::Error::TooManyAttempts);
         }
         return Err(crate::Error::VerificationFailed);
@@ -701,8 +702,8 @@ pub async fn verify(
             .scope_boxed()
         })
         .await?;
-    let _: i64 = state
-        .valkey
+    state
+        .ephemeral
         .del(vec![
             verification_key(user_id),
             verification_attempts_key(user_id),

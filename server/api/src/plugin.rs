@@ -480,7 +480,7 @@ pub async fn update_admin_plugin(
     )
     .await?;
     drop(conn);
-    plugin::registry::announce(&state.nats_context.client(), None).await?;
+    plugin::registry::announce(&state.bus, None).await?;
     Ok(Json(AdminPlugin::new(updated, app::locale::current())))
 }
 
@@ -519,7 +519,7 @@ pub async fn order_plugins(
         .map_err(app::Error::from)?;
     install::order(conn.as_mut(), &request.plugins).await?;
     drop(conn);
-    plugin::registry::announce(&state.nats_context.client(), None).await?;
+    plugin::registry::announce(&state.bus, None).await?;
     Ok(NoContent)
 }
 

@@ -10,7 +10,6 @@ use crate::context::GlobalServerContext;
 use aspen_schema::push_subscription;
 use diesel::QueryDsl as _;
 use diesel_async::RunQueryDsl;
-use fred::prelude::KeysInterface as _;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -140,7 +139,7 @@ async fn deliver(
 ) {
     let key = failing_key(subscription);
     // Valkey being out of reach suspends no one.
-    let failing: Option<i64> = state.valkey.get(&key).await.unwrap_or(None);
+    let failing: Option<i64> = state.ephemeral.get(&key).await.unwrap_or(None);
     if failing.is_some_and(|failing| failing >= SUSPEND_AFTER) {
         outcome("suspended");
         return;
@@ -149,7 +148,7 @@ async fn deliver(
         Ok(Delivery::Accepted) => {
             outcome("accepted");
             if failing.is_some() {
-                let _: Result<(), _> = state.valkey.del(&key).await;
+                let _ = state.ephemeral.del(&key).await;
             }
         }
         Ok(Delivery::Gone) => {
@@ -172,12 +171,12 @@ async fn deliver(
                 "the push that went unanswered"
             );
             let counted = async {
-                let _: i64 = state.valkey.incr(&key).await?;
-                let _: () = state
-                    .valkey
-                    .expire(&key, SUSPENSION.as_secs() as i64, None)
+                let _: i64 = state.ephemeral.incr(&key).await?;
+                state
+                    .ephemeral
+                    .expire(&key, SUSPENSION.as_secs() as i64)
                     .await?;
-                Ok::<_, fred::error::Error>(())
+                Ok::<_, aspen_ephemeral::Error>(())
             }
             .await;
             if let Err(e) = counted {

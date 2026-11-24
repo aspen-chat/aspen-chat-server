@@ -59,12 +59,9 @@ use tracing::{error, warn};
 pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Result<()> {
     use futures_util::StreamExt;
     use voice_protocol::control::{TokenKeyRequest, is_voice_inbox};
-    let client = state.nats_context.client();
-    let mut requests = client
-        .queue_subscribe(
-            voice_protocol::control::TOKEN_KEY_SUBJECT,
-            "aspen_api".to_string(),
-        )
+    let mut requests = state
+        .bus
+        .queue_subscribe(voice_protocol::control::TOKEN_KEY_SUBJECT, "aspen_api")
         .await?;
     let key = state.join_token_key.public();
     let lookups = std::sync::Arc::new(tokio::sync::Semaphore::new(REGISTRATION_LOOKUPS));
@@ -83,7 +80,7 @@ pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Resu
                 );
                 continue;
             }
-            let (state, client, mut answer) = (state.clone(), client.clone(), key.clone());
+            let (state, mut answer) = (state.clone(), key.clone());
             let lookup = asking_server.zip(lookups.clone().try_acquire_owned().ok());
             // Each answer is its own task, so one waiting for a database connection holds up
             // no other voice server.
@@ -109,7 +106,7 @@ pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Resu
                         return;
                     }
                 };
-                if let Err(e) = client.publish(reply, answer.into()).await {
+                if let Err(e) = state.bus.publish(reply, answer.into()).await {
                     error!(error = %e, "could not answer a voice server asking for the join token key");
                 }
             });

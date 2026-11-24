@@ -116,8 +116,7 @@ pub async fn kick_everywhere(
             reason: Some(KickReason::AccessLost),
         })?;
         state
-            .nats()
-            .client()
+            .bus()
             .publish(command_subject(server.0), payload.into())
             .await
             .map_err(crate::Error::VoiceCommand)?;
@@ -170,8 +169,7 @@ async fn command_participant(
         .await?;
     let payload = serde_json::to_vec(&command(session.id))?;
     state
-        .nats_context
-        .client()
+        .bus
         .publish(command_subject(session.voice_server.0), payload.into())
         .await
         .map_err(crate::Error::VoiceCommand)?;
@@ -445,8 +443,7 @@ async fn send_command(
 ) -> crate::Result<()> {
     let payload = serde_json::to_vec(command)?;
     state
-        .nats()
-        .client()
+        .bus()
         .publish(command_subject(server.0), payload.into())
         .await
         .map_err(crate::Error::VoiceCommand)?;
@@ -919,8 +916,7 @@ async fn close_room(
 ) -> crate::Result<()> {
     let payload = serde_json::to_vec(&VoiceCommand::Close { session: session.0 })?;
     state
-        .nats_context
-        .client()
+        .bus
         .publish(command_subject(server.0), payload.into())
         .await
         .map_err(crate::Error::VoiceCommand)

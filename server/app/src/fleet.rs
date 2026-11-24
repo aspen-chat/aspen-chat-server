@@ -13,11 +13,9 @@
 use crate::VoiceServerId;
 use crate::context::GlobalServerContext;
 use aspen_schema::voice_server;
-use async_nats::jetstream::kv::{Config as KvConfig, Store};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
@@ -72,21 +70,15 @@ pub struct ApiServerHeartbeat {
 }
 
 /// Opens the bucket, creating it on first use.
-async fn bucket(context: &async_nats::jetstream::Context) -> crate::Result<Store> {
-    if let Ok(store) = context.get_key_value(BUCKET).await {
-        return Ok(store);
-    }
-    context
-        .create_key_value(KvConfig {
-            bucket: BUCKET.to_string(),
+async fn bucket(bus: &aspen_bus::Bus) -> crate::Result<aspen_bus::Bucket> {
+    Ok(bus
+        .bucket(aspen_bus::BucketConfig {
+            name: BUCKET.to_string(),
             description: "API server heartbeats and unregistered voice servers (crate::fleet)"
                 .to_string(),
-            history: 1,
-            max_age: BUCKET_MAX_AGE,
-            ..Default::default()
+            max_age: Some(BUCKET_MAX_AGE),
         })
-        .await
-        .map_err(crate::Error::from)
+        .await?)
 }
 
 fn host_name() -> String {
@@ -107,7 +99,7 @@ pub fn spawn_heartbeat(state: GlobalServerContext) {
         let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
         let mut last = request_counts();
         let mut last_at = std::time::Instant::now();
-        let mut store: Option<Store> = None;
+        let mut store: Option<aspen_bus::Bucket> = None;
         loop {
             interval.tick().await;
             let now = request_counts();
@@ -136,7 +128,7 @@ pub fn spawn_heartbeat(state: GlobalServerContext) {
             last = now;
             last_at = std::time::Instant::now();
             if store.is_none() {
-                match bucket(&state.nats_context).await {
+                match bucket(&state.bus).await {
                     Ok(opened) => store = Some(opened),
                     Err(e) => {
                         tracing::warn!("could not open the fleet bucket: {e}");
@@ -152,7 +144,7 @@ pub fn spawn_heartbeat(state: GlobalServerContext) {
                     continue;
                 }
             };
-            if let Err(e) = store.put(format!("api.{instance}"), bytes.into()).await {
+            if let Err(e) = store.put(&format!("api.{instance}"), bytes.into()).await {
                 tracing::warn!("could not write the heartbeat: {e}");
             }
         }
@@ -164,11 +156,9 @@ async fn read_entries<T: serde::de::DeserializeOwned>(
     state: &GlobalServerContext,
     prefix: &str,
 ) -> crate::Result<Vec<T>> {
-    let store = bucket(&state.nats_context).await?;
-    let mut keys = store.keys().await?;
+    let store = bucket(&state.bus).await?;
     let mut entries = Vec::new();
-    while let Some(key) = keys.next().await {
-        let Ok(key) = key else { continue };
+    for key in store.keys().await? {
         if !key.starts_with(prefix) {
             continue;
         }
@@ -212,9 +202,9 @@ pub async fn note_unregistered_voice_server(
     let entry = UnregisteredVoiceServer { id, reported_at };
     let written = async {
         let bytes = serde_json::to_vec(&entry)?;
-        bucket(&state.nats_context)
+        bucket(&state.bus)
             .await?
-            .put(format!("{UNREGISTERED_PREFIX}{}", id.0), bytes.into())
+            .put(&format!("{UNREGISTERED_PREFIX}{}", id.0), bytes.into())
             .await?;
         Ok::<_, crate::Error>(())
     };

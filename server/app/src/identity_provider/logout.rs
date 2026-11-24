@@ -296,21 +296,19 @@ async fn remember_once(
     provider: &Provider,
     jti: &str,
 ) -> Result<(), LogoutError> {
-    use fred::interfaces::KeysInterface as _;
-    let key =
-        crate::ephemeral_token::token_key("auth:oidc:logout", &format!("{}:{jti}", provider.id.0));
-    let first: Option<String> = state
-        .valkey
-        .set(
-            key,
-            "1",
-            Some(fred::types::Expiration::EX(USED_FOR_SECONDS)),
-            Some(fred::types::SetOptions::NX),
-            false,
-        )
+    let mut conn = state
+        .connection_pool
+        .get()
         .await
         .map_err(crate::Error::from)?;
-    if first.is_none() {
+    let first = crate::used_once::claim(
+        conn.as_mut(),
+        crate::used_once::Purpose::LogoutToken,
+        &[provider.id.0.as_bytes(), jti.as_bytes()],
+        USED_FOR_SECONDS,
+    )
+    .await?;
+    if !first {
         return Err(refused("it was already used"));
     }
     Ok(())

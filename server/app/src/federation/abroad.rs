@@ -384,17 +384,13 @@ pub async fn sign_in(
 /// kept in Valkey, shared by every server, for two days; an arrival refused later still counts,
 /// which errs toward fewer.
 async fn count_arrival(state: &GlobalServerContext, home: &Domain) -> crate::Result<()> {
-    use fred::prelude::KeysInterface as _;
     let max = state.config.federation.max_arrivals_per_home_per_day;
     let key = format!(
         "federation:arrivals:{home}:{}",
         Utc::now().format("%Y-%m-%d")
     );
-    let arrived: u64 = state.valkey.incr(&key).await?;
-    let _: bool = state
-        .valkey
-        .expire(&key, ARRIVALS_KEPT_SECONDS, None)
-        .await?;
+    let arrived: u64 = state.ephemeral.incr(&key).await?;
+    state.ephemeral.expire(&key, ARRIVALS_KEPT_SECONDS).await?;
     if arrived > max {
         tracing::warn!(%home, max, "refused a first arrival over the day's limit for its home");
         return Err(crate::Error::FederationRefused(t!(

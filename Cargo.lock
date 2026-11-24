@@ -312,12 +312,13 @@ dependencies = [
  "aspen_api",
  "aspen_app",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_limits",
  "aspen_metrics",
  "aspen_schema",
  "aspen_sockets",
  "aspen_wire",
- "async-nats",
+ "axum",
  "chrono",
  "clap",
  "console-subscriber",
@@ -372,6 +373,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspen-ul"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aspen-chat-server",
+ "aspen-migrate",
+ "aspen_api",
+ "aspen_app",
+ "aspen_bus",
+ "aspen_ephemeral",
+ "aspen_locale",
+ "aspen_sockets",
+ "axum",
+ "clap",
+ "config",
+ "ctrlc",
+ "diesel",
+ "diesel-async",
+ "hex",
+ "instant-acme",
+ "libc",
+ "rcgen",
+ "reqwest",
+ "rust-i18n",
+ "rustls",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tikv-jemallocator",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tracing",
+ "tracing-panic",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "voice_protocol",
+ "voice_server",
+ "x509-parser 0.18.1",
+]
+
+[[package]]
 name = "aspen_api"
 version = "0.1.0"
 dependencies = [
@@ -415,9 +462,11 @@ dependencies = [
  "argon2",
  "askama",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_config_values",
  "aspen_database",
  "aspen_email_templates",
+ "aspen_ephemeral",
  "aspen_federation_core",
  "aspen_limits",
  "aspen_link_preview",
@@ -499,6 +548,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aspen_bench_protocol",
+ "aspen_bus",
  "aspen_limits",
  "aspen_metrics",
  "async-nats",
@@ -530,6 +580,21 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "aspen_bus"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "bytes",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -567,6 +632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspen_ephemeral"
+version = "0.1.0"
+dependencies = [
+ "fred",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "aspen_federation_core"
 version = "0.1.0"
 dependencies = [
@@ -586,7 +661,7 @@ dependencies = [
 name = "aspen_limits"
 version = "0.1.0"
 dependencies = [
- "async-nats",
+ "aspen_bus",
  "bytes",
  "futures-util",
  "ipnet",
@@ -2875,6 +2950,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filetime"
+version = "0.2.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1255e7a9f1902190d4c10a75f2f7f495d3d3ce13e9ba26e6c48683a0f4dbed7"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3104,7 +3189,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.1",
+ "windows-link 0.2.1",
  "windows-result 0.4.1",
 ]
 
@@ -3502,6 +3587,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
+ "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -3538,7 +3624,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.9",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -3812,6 +3898,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "instant-acme"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f05ad37c421b962354c358d347d4a6130151df9407978372d3ad7f0c8f71a64"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "httpdate",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4621,7 +4733,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.16",
  "http",
@@ -4862,6 +4974,16 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
+ "serde_core",
+]
 
 [[package]]
 name = "pem-rfc7468"
@@ -5365,7 +5487,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.9",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5404,7 +5526,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.9",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -5590,6 +5712,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
  "aws-lc-rs",
+ "pem",
  "rustls-pki-types",
  "time",
  "x509-parser 0.18.1",
@@ -6004,6 +6127,15 @@ name = "rustversion"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eded382c5f5f786b989652c49544c4877d9f015cc22e145a5ea8ea66c2921cd2"
+
+[[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "ryu"
@@ -6777,6 +6909,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7462,6 +7604,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "twox-hash"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7718,6 +7866,7 @@ name = "voice_server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aspen_bus",
  "aspen_config_values",
  "aspen_limits",
  "aspen_metrics",

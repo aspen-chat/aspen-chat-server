@@ -141,3 +141,5 @@ pub mod m20261111_143412_moderation_log_operator;
 pub mod m20261111_145810_held_message_list_by_id;
 pub mod m20261116_034814_voice_participant_held;
 pub mod m20261116_101740_shrink_icons;
+pub mod m20261119_172748_used_once;
+pub mod m20261119_173448_attempt_count;

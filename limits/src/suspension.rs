@@ -13,7 +13,7 @@
 //! bucket also discards records older than `BUCKET_MAX_AGE`. While one is in force every server
 //! logs a warning each minute.
 
-use async_nats::jetstream::kv::{Config as KvConfig, Operation, Store};
+use aspen_bus::{Bucket, BucketConfig, Bus, Operation};
 use futures_util::StreamExt;
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
@@ -189,25 +189,18 @@ impl SuspensionState {
 }
 
 /// Opens the bucket, creating it on first use.
-pub async fn bucket(client: async_nats::Client) -> Result<Store, String> {
-    let context = async_nats::jetstream::new(client);
-    if let Ok(store) = context.get_key_value(BUCKET).await {
-        return Ok(store);
-    }
-    context
-        .create_key_value(KvConfig {
-            bucket: BUCKET.to_string(),
-            description: "Rate limit suspensions (aspen_limits::suspension)".to_string(),
-            history: 1,
-            max_age: BUCKET_MAX_AGE,
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| format!("could not create the {BUCKET} bucket: {e}"))
+pub async fn bucket(bus: &Bus) -> Result<Bucket, String> {
+    bus.bucket(BucketConfig {
+        name: BUCKET.to_string(),
+        description: "Rate limit suspensions (aspen_limits::suspension)".to_string(),
+        max_age: Some(BUCKET_MAX_AGE),
+    })
+    .await
+    .map_err(|e| format!("could not open the {BUCKET} bucket: {e}"))
 }
 
 /// The record in the bucket, whether or not it is still in force.
-pub async fn read(store: &Store) -> Result<Option<Suspension>, String> {
+pub async fn read(store: &Bucket) -> Result<Option<Suspension>, String> {
     let value = store
         .get(KEY)
         .await
@@ -219,16 +212,15 @@ pub async fn read(store: &Store) -> Result<Option<Suspension>, String> {
         .transpose()
 }
 
-pub async fn write(store: &Store, record: &Suspension) -> Result<(), String> {
+pub async fn write(store: &Bucket, record: &Suspension) -> Result<(), String> {
     let bytes = serde_json::to_vec(record).map_err(|e| e.to_string())?;
     store
         .put(KEY, bytes.into())
         .await
-        .map(|_| ())
         .map_err(|e| format!("could not write the suspension: {e}"))
 }
 
-pub async fn clear(store: &Store) -> Result<(), String> {
+pub async fn clear(store: &Bucket) -> Result<(), String> {
     store
         .purge(KEY)
         .await
@@ -238,12 +230,12 @@ pub async fn clear(store: &Store) -> Result<(), String> {
 /// Keeps `state` current from the bucket for as long as the process runs, reconnecting after
 /// failures, and logs while a suspension is in force and when it ends. `server` names this
 /// process in the log.
-pub fn watch(client: async_nats::Client, state: SuspensionState, server: &'static str) {
+pub fn watch(bus: Bus, state: SuspensionState, server: &'static str) {
     {
         let state = state.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = follow(client.clone(), &state).await {
+                if let Err(e) = follow(&bus, &state).await {
                     tracing::warn!(error = e, "rate limit suspension watch failed; retrying");
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -279,8 +271,8 @@ pub fn watch(client: async_nats::Client, state: SuspensionState, server: &'stati
     });
 }
 
-async fn follow(client: async_nats::Client, state: &SuspensionState) -> Result<(), String> {
-    let store = bucket(client).await?;
+async fn follow(bus: &Bus, state: &SuspensionState) -> Result<(), String> {
+    let store = bucket(bus).await?;
     state.set(read(&store).await?);
     let mut updates = store
         .watch(KEY)

@@ -82,18 +82,19 @@ server, the voice server, and SeaweedFS, each at a name of its own on port 443:
 | `https://media.$HOST` | SeaweedFS's filer, downloads       |
 
 Plain HTTP on port 80 is sent on to HTTPS at the same name and path, but for requests under `/api/`,
-which are refused as a box's Caddy refuses them (`docs/operators/installing/4-api-server.md`, Plain
-HTTP). Caddy does not start when another program holds a port it listens on: `ASPEN_DEV_HTTP_PORT`
-moves it from 80, as `ASPEN_DEV_HTTPS_PORT` moves it from 443.
+which are refused as the operator guide asks of a proxy
+(`docs/operators/installing/4-api-server.md`, Plain HTTP). Caddy does not start when another program
+holds a port it listens on: `ASPEN_DEV_HTTP_PORT` moves it from 80, as `ASPEN_DEV_HTTPS_PORT` moves
+it from 443.
 
 The filer lists directories and takes uploads and deletes from anyone, so Caddy lets through to it
 only `GET` and `HEAD` of a single file under the bucket's four prefixes clients read
-(`attachments/`, `attachment-previews/`, `icons/`, `link-preview-images/`), as the box does
+(`attachments/`, `attachment-previews/`, `icons/`, `link-preview-images/`), as a read path must
 (`docs/operators/installing/storage-read-path.md`), and answers everything else, the files of
 deleted messages under `evidence/` among them, with 404. `scripts/check_media_prefixes.py`, which CI
-runs, fails when that list, the box's, or AWS's differs from the prefixes the server stores public
-objects under (`PublicPrefix` in `server/app/src/media_store.rs`, the one list every key of a public
-object is built from).
+runs, fails when that list or AWS's differs from the prefixes the server stores public objects under
+(`PublicPrefix` in `server/app/src/media_store.rs`, the one list every key of a public object is
+built from).
 
 1. Issue a certificate for the host and the names under it, and start Caddy:
 

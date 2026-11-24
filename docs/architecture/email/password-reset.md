@@ -65,6 +65,8 @@ step. So however many are started, one account holds one reset's state in Valkey
 
 - Once an account has been mailed five codes in the hour, asking answers `tooManyAttempts` whatever
   the address. This is read before the address is compared, so the answer still tells nothing of it.
+  The count is kept in PostgreSQL (`attempt_count`), so no restart of a server or of Valkey lifts
+  it, while a reset's own counts live and end with the reset in Valkey.
 - Each address and code given is counted against the reset before it is checked. So a burst sent at
   once is checked no more than five times, even with the rate limits suspended.
 - A new password too short is refused before the code is tried.

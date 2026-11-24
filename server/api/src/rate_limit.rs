@@ -373,7 +373,7 @@ impl Failures {
         let _ = state
             .rate_limiter
             .check(
-                &state.valkey,
+                &state.ephemeral,
                 &self.route,
                 Stage::Failures,
                 &self.identity(),
@@ -398,7 +398,7 @@ impl Failures {
             state
                 .rate_limiter
                 .check(
-                    &state.valkey,
+                    &state.ephemeral,
                     &self.route,
                     Stage::Failures,
                     &self.identity(),
@@ -412,7 +412,7 @@ impl Failures {
         state
             .rate_limiter
             .refund(
-                &state.valkey,
+                &state.ephemeral,
                 &self.route,
                 Stage::Failures,
                 &self.identity(),
@@ -490,7 +490,7 @@ async fn admit(
     };
     refuse(
         limiter
-            .check(&state.valkey, route, Stage::Request, &identity)
+            .check(&state.ephemeral, route, Stage::Request, &identity)
             .await,
     )?;
     let token = parts
@@ -508,7 +508,7 @@ async fn admit(
         if unsigned {
             refuse(
                 limiter
-                    .peek(&state.valkey, route, Stage::RejectedTokens, &identity)
+                    .peek(&state.ephemeral, route, Stage::RejectedTokens, &identity)
                     .await,
             )?;
         }
@@ -521,7 +521,7 @@ async fn admit(
             Ok(None) => {
                 if unsigned {
                     let _ = limiter
-                        .check(&state.valkey, route, Stage::RejectedTokens, &identity)
+                        .check(&state.ephemeral, route, Stage::RejectedTokens, &identity)
                         .await;
                 }
                 parts.extensions.insert(ResolvedSession(None));
@@ -539,7 +539,7 @@ async fn admit(
     {
         refuse(
             limiter
-                .check(&state.valkey, route, Stage::Session, &identity)
+                .check(&state.ephemeral, route, Stage::Session, &identity)
                 .await,
         )?;
         // A signed-in request's failures are its user's, never its address's.
@@ -549,7 +549,7 @@ async fn admit(
         };
         refuse(
             limiter
-                .peek(&state.valkey, route, Stage::Failures, &failing)
+                .peek(&state.ephemeral, route, Stage::Failures, &failing)
                 .await,
         )?;
         parts.extensions.insert(Failures {
@@ -580,12 +580,12 @@ async fn admit(
     identity.bot = false;
     refuse(
         limiter
-            .check(&state.valkey, route, Stage::Anonymous, &identity)
+            .check(&state.ephemeral, route, Stage::Anonymous, &identity)
             .await,
     )?;
     refuse(
         limiter
-            .peek(&state.valkey, route, Stage::Failures, &identity)
+            .peek(&state.ephemeral, route, Stage::Failures, &identity)
             .await,
     )?;
     parts.extensions.insert(Failures {
@@ -628,7 +628,7 @@ pub async fn limit_session(
     refuse(
         state
             .rate_limiter
-            .check(&state.valkey, &route, Stage::Session, &identity)
+            .check(&state.ephemeral, &route, Stage::Session, &identity)
             .await,
     )
 }
@@ -650,7 +650,7 @@ pub async fn limit_event_stream(
     let route = aspen_app::rate_limit::route_key(EVENT_STREAM_ROUTE.0, EVENT_STREAM_ROUTE.1);
     state
         .rate_limiter
-        .check(&state.valkey, &route, Stage::Session, &identity)
+        .check(&state.ephemeral, &route, Stage::Session, &identity)
         .await
 }
 
@@ -673,7 +673,7 @@ pub async fn within_limits(
     for stage in [Stage::Request, Stage::Anonymous] {
         let decision = state
             .rate_limiter
-            .check(&state.valkey, &route, stage, &identity)
+            .check(&state.ephemeral, &route, stage, &identity)
             .await;
         if decision != Decision::Allowed {
             return false;
@@ -699,14 +699,14 @@ pub async fn limit_sign_in(
     refuse(
         state
             .rate_limiter
-            .check(&state.valkey, SIGN_IN_ROUTE, Stage::Username, &identity)
+            .check(&state.ephemeral, SIGN_IN_ROUTE, Stage::Username, &identity)
             .await,
     )?;
     refuse(
         state
             .rate_limiter
             .peek(
-                &state.valkey,
+                &state.ephemeral,
                 SIGN_IN_ROUTE,
                 Stage::UsernameFailures,
                 &identity,
@@ -727,7 +727,7 @@ pub async fn note_wrong_password(state: &GlobalServerContext, subject: &str, ip:
     let _ = state
         .rate_limiter
         .check(
-            &state.valkey,
+            &state.ephemeral,
             SIGN_IN_ROUTE,
             Stage::UsernameFailures,
             &identity,

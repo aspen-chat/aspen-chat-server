@@ -20,20 +20,20 @@
 //! foreign users, and the system account cannot. What `start` shows confirms that the username
 //! exists, which registration does already; the address stays hidden behind its mask. Each step
 //! is rate limited by address and per reset, starting one by everyone together too, and one
-//! account is mailed at most [`MAX_SENT`] codes an hour, however many resets ask.
+//! account is mailed at most [`MAX_SENT`] codes an hour, however many resets ask, counted in
+//! PostgreSQL (`app::attempt_count`) so that no restart lifts the cap.
 
 use super::outbox::{self, Mail};
 use crate::UserId;
 use crate::context::GlobalServerContext;
 use crate::{CHACHA_RNG, t};
+use aspen_ephemeral::{Expiry, Ttl};
 use aspen_schema::{user, user_email};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use fred::prelude::KeysInterface;
-use fred::types::Expiration;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -128,31 +128,29 @@ pub async fn start(state: &GlobalServerContext, username: &str) -> crate::Result
         user: user_id,
         code: None,
     };
-    let _: () = state
-        .valkey
+    state
+        .ephemeral
         .set(
-            key(&id),
+            &key(&id),
             serde_json::to_string(&reset)?,
-            Some(Expiration::EX(LIFETIME_SECONDS)),
+            Some(Expiry::Seconds(LIFETIME_SECONDS)),
             None,
-            false,
         )
         .await?;
     // One reset per account: this one becomes the live one, in one step, and the one it
     // replaces ends. Starts racing each other each end the one they replaced, so only the last
     // to take its place lives.
     let replaced: Option<String> = state
-        .valkey
-        .set(
-            live_key(user_id),
+        .ephemeral
+        .set_previous(
+            &live_key(user_id),
             key(&id),
-            Some(Expiration::EX(LIFETIME_SECONDS)),
+            Some(Expiry::Seconds(LIFETIME_SECONDS)),
             None,
-            true,
         )
         .await?;
     if let Some(replaced) = replaced {
-        let _: i64 = state.valkey.del(keys_of(replaced)).await?;
+        state.ephemeral.del(keys_of(replaced)).await?;
     }
     Ok(Started {
         id,
@@ -161,7 +159,7 @@ pub async fn start(state: &GlobalServerContext, username: &str) -> crate::Result
 }
 
 async fn read(state: &GlobalServerContext, id: &str) -> crate::Result<Reset> {
-    let raw: Option<String> = state.valkey.get(key(id)).await?;
+    let raw: Option<String> = state.ephemeral.get(&key(id)).await?;
     let raw = raw.ok_or(crate::Error::PasswordResetExpired)?;
     Ok(serde_json::from_str(&raw)?)
 }
@@ -171,7 +169,7 @@ async fn read(state: &GlobalServerContext, id: &str) -> crate::Result<Reset> {
 /// number, or `TooManyAttempts`, ending the reset, once that many have been checked.
 async fn attempt(state: &GlobalServerContext, id: &str, what: &str) -> crate::Result<i64> {
     let attempts =
-        crate::two_factor::count_attempt(&state.valkey, &misses_key(id, what), LIFETIME_SECONDS)
+        crate::two_factor::count_attempt(&state.ephemeral, &misses_key(id, what), LIFETIME_SECONDS)
             .await?;
     if attempts > ATTEMPTS {
         end(state, id).await?;
@@ -195,7 +193,7 @@ async fn wrong_code(
 }
 
 async fn end(state: &GlobalServerContext, id: &str) -> crate::Result<()> {
-    let _: i64 = state.valkey.del(keys_of(key(id))).await?;
+    state.ephemeral.del(keys_of(key(id))).await?;
     Ok(())
 }
 
@@ -219,21 +217,19 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
     attempt(state, id, "address").await?;
     // Read before the address is compared, so whether the account has been mailed its fill
     // decides the answer and the address does not.
-    let sent_key = format!("email:reset-sent:{}", reset.user.0);
-    let sent: Option<i64> = state.valkey.get(&sent_key).await?;
-    if sent.unwrap_or(0) >= MAX_SENT {
+    use crate::attempt_count::{self, Kind};
+    if attempt_count::read(conn.as_mut(), reset.user, Kind::ResetCodesSent).await? >= MAX_SENT {
         return Err(crate::Error::TooManyAttempts);
     }
     if !super::same_address(address, &on_file) {
         return Ok(());
     }
-    let sent: i64 = state.valkey.incr(&sent_key).await?;
-    if sent == 1 {
-        let _: bool = state
-            .valkey
-            .expire(&sent_key, SENT_WINDOW_SECONDS, None)
-            .await?;
-    }
+    let [sent] = attempt_count::add(
+        conn.as_mut(),
+        reset.user,
+        [(Kind::ResetCodesSent, SENT_WINDOW_SECONDS)],
+    )
+    .await?;
     if sent > MAX_SENT {
         // Another reset took the last one between the read and now.
         return Ok(());
@@ -243,15 +239,18 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
         user: reset.user,
         code: Some(state.code_key.digest(&code)),
     };
-    let ttl: i64 = state.valkey.ttl(key(id)).await?;
-    let _: () = state
-        .valkey
+    // A reset whose key has gone, or never expires, is written to last a second.
+    let ttl = match state.ephemeral.ttl(&key(id)).await? {
+        Ttl::Left(left) => i64::try_from(left.as_secs()).unwrap_or(i64::MAX).max(1),
+        Ttl::NoKey | Ttl::NoExpiry => 1,
+    };
+    state
+        .ephemeral
         .set(
-            key(id),
+            &key(id),
             serde_json::to_string(&updated)?,
-            Some(Expiration::EX(ttl.max(1))),
+            Some(Expiry::Seconds(ttl)),
             None,
-            false,
         )
         .await?;
     outbox::queue(

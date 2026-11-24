@@ -42,19 +42,13 @@ variable "route53_zone_id" {
 }
 
 variable "public_dns" {
-  description = "Whether `domain` points at this deployment. False while it is made ready beside the deployment it replaces, which keeps the name until the move (README.md#moving-a-box-here)."
+  description = "Whether `domain` points at this deployment. False while it is made ready beside the deployment it replaces, which keeps the name until the move (README.md#moving-ultra-lite-here)."
   type        = bool
   default     = true
 }
 
-variable "media_bucket" {
-  description = "The bucket of the deployment this one replaced, kept and imported rather than copied (README.md#moving-a-box-here). Null makes a bucket of this deployment's own. Once set it stays set: it is the bucket's name."
-  type        = string
-  default     = null
-}
-
 variable "image_tag" {
-  description = "The release to run, a tag of both images. Null runs no servers: a deployment made ready beside the one it replaces, before its database is copied (README.md#moving-a-box-here)."
+  description = "The release to run, a tag of both images. Null runs no servers: a deployment made ready beside the one it replaces, before its database is copied (README.md#moving-ultra-lite-here)."
   type        = string
   default     = null
 }

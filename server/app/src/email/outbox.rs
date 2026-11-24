@@ -241,7 +241,7 @@ async fn throttle(state: &GlobalServerContext, mailer: &Mailer) {
         return;
     };
     loop {
-        match crate::rate_limit::take(&state.valkey, SEND_RATE_KEY, rate).await {
+        match crate::rate_limit::take(&state.ephemeral, SEND_RATE_KEY, rate).await {
             Ok(None) => return,
             Ok(Some(wait)) => tokio::time::sleep(wait).await,
             Err(e) => {

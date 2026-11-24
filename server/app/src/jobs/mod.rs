@@ -230,10 +230,9 @@ pub async fn checkpoint(
 /// logged: the runners look every [`POLL`] anyway.
 pub async fn wake_from(config: &crate::aspen_config::AspenConfig) {
     let woken = async {
-        let client =
-            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
-        client.publish(WAKE_SUBJECT, bytes::Bytes::new()).await?;
-        client.flush().await?;
+        let bus = config.connect_bus().await?;
+        bus.publish(WAKE_SUBJECT, bytes::Bytes::new()).await?;
+        bus.flush().await?;
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     };
     match tokio::time::timeout(Duration::from_secs(2), woken).await {
@@ -246,12 +245,7 @@ pub async fn wake_from(config: &crate::aspen_config::AspenConfig) {
 /// Wakes every runner to look for jobs at once, rather than at its next look: for a job
 /// someone is waiting on, published once what saved it has committed.
 pub async fn wake(state: &GlobalServerContext) {
-    if let Err(e) = state
-        .nats_context
-        .client()
-        .publish(WAKE_SUBJECT, bytes::Bytes::new())
-        .await
-    {
+    if let Err(e) = state.bus.publish(WAKE_SUBJECT, bytes::Bytes::new()).await {
         tracing::warn!("could not wake the job runners: {e}");
     }
 }
@@ -632,7 +626,7 @@ fn groups(state: &GlobalServerContext, means: &Means) -> Vec<Group> {
 fn listen_for_wakes(state: GlobalServerContext, woken: Arc<Notify>) {
     tokio::spawn(async move {
         loop {
-            match state.nats_context.client().subscribe(WAKE_SUBJECT).await {
+            match state.bus.subscribe(WAKE_SUBJECT).await {
                 Ok(mut wakes) => {
                     while wakes.next().await.is_some() {
                         woken.notify_one();

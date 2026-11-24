@@ -6,8 +6,9 @@
 Clients read objects under a few prefixes of the bucket without credentials
 (docs/operators/installing/storage-read-path.md). The server lists them once, as `PublicPrefix`
 (`server/app/src/media_store.rs`), under which it builds every public object's key, and each read
-path repeats them: the box's Caddy (`deploy/box/caddy/media.tmpl`), the bucket policy on AWS
-(`deploy/aws/modules/media/main.tf`), and the development Caddy (`scripts/caddy/Caddyfile`). A
+path repeats them: the bucket policy on AWS (`deploy/aws/modules/media/main.tf`) and the
+development Caddy (`scripts/caddy/Caddyfile`). Ultra Lite serves its files itself, by the server's
+own list. A
 prefix the server writes and a read path lacks is a kind of file nobody can download there, and one
 a read path has beyond the server's is served without the server meaning it. The development
 Caddy also names the bucket, in the path SeaweedFS's filer serves it at, which is
@@ -25,7 +26,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER_LIST = REPO / "server" / "app" / "src" / "media_store.rs"
-BOX_CADDY = REPO / "deploy" / "box" / "caddy" / "media.tmpl"
 DEV_CADDY = REPO / "scripts" / "caddy" / "Caddyfile"
 COMPOSE = REPO / "docker-compose.yaml"
 TOFU = REPO / "deploy" / "aws" / "modules" / "media" / "main.tf"
@@ -101,7 +101,6 @@ def main() -> int:
     try:
         server = server_prefixes()
         copies = {
-            named(BOX_CADDY): caddy_prefixes(BOX_CADDY, ""),
             named(DEV_CADDY): caddy_prefixes(DEV_CADDY, f"/buckets/{development_bucket()}"),
         }
         copies[named(TOFU)] = tofu_prefixes(TOFU)

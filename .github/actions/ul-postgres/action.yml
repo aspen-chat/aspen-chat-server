@@ -1,0 +1,15 @@
+# The PostgreSQL the CI workflow's `ul-postgres` job built, unpacked where
+# `scripts/package_ul.py` builds it, so the checks' `--ul` and a package of x86-64 find it there.
+name: Ultra Lite's PostgreSQL
+description: Unpacks the ul-postgres artifact into target/ul/x86_64.
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ul-postgres
+    - name: Unpack
+      shell: bash
+      run: |
+        tar --zstd -xf ul-postgres.tar.zst
+        rm ul-postgres.tar.zst

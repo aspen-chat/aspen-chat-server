@@ -172,6 +172,9 @@ or what an operator must open, route, or back up updates it in the same commit.
      `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be
      reachable from every client and allow their origins (`public_url`'s, and the desktop and mobile
      apps') by CORS.
+   - `[media.directory]` — the files in a directory of this machine instead (`path`), for a
+     deployment of one API server, which serves them itself at `public_base_url`, an origin of their
+     own that is never `public_url`'s (`app::media_store::Directory`, `api::media`)
    - `[media] max_attachment_bytes` — the largest attachment anyone may upload (256 MiB by default),
      which upload URLs are signed for; files a browser could run are stored and served as
      `application/octet-stream` (`app::attachment::INLINE_TYPES`)
@@ -311,6 +314,20 @@ or what an operator must open, route, or back up updates it in the same commit.
    compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB
    pages aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
 
+   `scripts/package_ul.py --arch ARCH` makes Ultra Lite as it is released, one file in
+   `target/ul/<arch>/aspen-ul`: the baseline build of `aspen-ul` with its runtime appended, the
+   bundled PostgreSQL (built from source against the same sysroot once per version, into
+   `target/ul/<arch>/`; `--postgres-version` bundles another) and the built web client. `--binary`
+   packs a binary already built, a debug one for development; it also needs `make`, `patchelf`, and
+   `zstd` (see Ultra Lite). `--postgres-only` builds the PostgreSQL alone and prints where it is,
+   which a build of `aspen-ul` runs with `--runtime` (a directory holding it as `pgsql/` and a web
+   client as `web-client/`). `scripts/check_ul.py --ul target/ul/<arch>/aspen-ul` checks a package
+   as an operator runs it, on a Debian 12 machine under systemd in a container of its own: install,
+   init with a certificate, the plain HTTP redirect, restarts and a crash, backup and restore, an
+   upgrade to another runtime, and export.
+   `scripts/check_ul_export.py --ul BIN [--runtime DIR] --bin target/debug` checks that a deployment
+   leaves Ultra Lite whole, into a full deployment on services of its own.
+
 6. Run two deployments that federate, for developing federation:
 
    ```
@@ -356,7 +373,13 @@ or what an operator must open, route, or back up updates it in the same commit.
    drops the database. `scripts/stack.py` is the deployment both this and the next check run
    against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the
    standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name
-   so they find its running services.
+   so they find its running services. With `--ul`, this check, `check_permissions.py`,
+   `check_mana.py`, and `check_calls.py` run against Ultra Lite instead (`stack.UlStack`):
+   `aspen-ul` from `--bin`, run with the PostgreSQL `scripts/package_ul.py --postgres-only` built
+   for this machine (`--ul-postgres` names another), keeping its files in its data directory, and
+   needing no service. A check of what only one kind of deployment has says so and checks nothing
+   there (the permissions check's Valkey losing presence keys, the smoke check's
+   `estimate-capacity`).
 
    Check that changes to access reach everything already open:
 
@@ -451,28 +474,17 @@ docker build -f deploy/docker/Dockerfile --target api -t aspen-api .
 docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 ```
 
-`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, `curl`, and the box's tool
-(`/usr/share/aspen`), and no ffmpeg; `voice` holds `voice_server` and `curl`. Both read their
-configuration from `/etc/aspen`. `deploy/box/aspen-box` (Python 3.9's standard library alone,
-`deploy/box/aspen_box/`) runs a whole small deployment on one Linux machine with Docker Compose:
-every service on loopback behind Caddy, PostgreSQL and storage each bundled (storage as Garage) or
-kept elsewhere, voice servers on other machines (each a box of its own, `init-voice`, reaching NATS
-over TLS from the box's own authority), upgrades that start the new API server beside the old,
-backups, `export` (the database and people's files, for a deployment that replaces the box), and
-`doctor`, which checks the machine, DNS, certificates, what plain HTTP is answered with, and the
-storage's read path and says what to fix; `scripts/check_box.py` checks all of it against built
-images. `deploy/aws/` is an OpenTofu configuration for a whole deployment on AWS, and
-`deploy/aws-single/` runs the box on one AWS machine with its files in S3, releasing through Session
-Manager; both are prototypes that have been planned (`tofu test` in each, which needs no account)
-and never applied. All three write `aspen.toml`, `voice_server.toml`, and NATS's configuration from
-`deploy/templates/`, which hold only `${name}` placeholders so that OpenTofu and `aspen-box` fill
-them alike: a setting a deployment cannot start without is added there and to each caller.
-`deploy/aws/migrate.py` moves a box to the larger configuration: a box from `aws-single` hands over
-its bucket and read path (`media_bucket`, the media module's `handed_over`), any other has its files
-copied from its export, and both have their database restored from a dump, so whatever a deployment
-keeps outside PostgreSQL and the bucket must be added to `aspen-box export` and that move. See
-`deploy/README.md`, and `docs/architecture/operations/deploying-from-files-design-notes.md` for why
-it is the way it is.
+`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, and `curl`, and no ffmpeg; `voice`
+holds `voice_server` and `curl`. Both read their configuration from `/etc/aspen`. `deploy/aws/` is
+an OpenTofu configuration for a whole deployment on AWS, a prototype that has been planned
+(`tofu test`, which needs no account) and never applied. It writes `aspen.toml`,
+`voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold only `${name}`
+placeholders: a setting a deployment cannot start without is added there and to `deploy/aws`.
+`deploy/aws/migrate.py` moves an Ultra Lite deployment there, its database restored from its
+export's dump and its files uploaded by `storage import`, so whatever a deployment keeps outside
+PostgreSQL and its files must be added to `aspen-ul export` and that move. A whole deployment on one
+machine is Ultra Lite (above, and see Ultra Lite). See `deploy/README.md`, and
+`docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
 
 ### Continuous integration
 
@@ -493,20 +505,27 @@ for the simulator with the extension's Web Push check, and on a pull request an 
 `main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
 for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
-debug servers; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list
-of the public media prefixes against the server's, `media_store::PublicPrefix`), and
-`scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
-container on GitHub's arm64 runner, and the workspace's tests in another; the baseline build script
-on x86-64 for both architectures; and `scripts/smoke_servers.py` against all three builds, the ARM
-ones on an arm64 runner, each kept as an artifact; `scripts/check_permissions.py`,
-`scripts/check_nats_memory.py`, `scripts/check_mana.py`, and `scripts/check_calls.py` run against
-the debug servers, each on a runner of its own, the first split across three (`--shard`) and
-building and installing the example plugins, the last calling between Chromium and Firefox through
-Playwright. Lints, tests, and checks run on runners of their own, so a run takes about as long as
-its longest job, and Rust caches are saved from `main` alone: the repository's caches share 10 GB,
-and every pull request reads `main`'s. Every job runs the toolchain `rust-toolchain.toml` pins,
-which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever
-the repository is built. Clippy warnings fail the build.
+debug servers; the AWS configuration's `tofu test` and `scripts/check_media_prefixes.py` (every list
+of the public media prefixes against the server's, `media_store::PublicPrefix`); both images built,
+each server started in its own; an ARM build in a `debian:bookworm` container on GitHub's arm64
+runner, and the workspace's tests in another; the baseline build script on x86-64 for both
+architectures; and `scripts/smoke_servers.py` against all three builds, the ARM ones on an arm64
+runner, each kept as an artifact; `scripts/check_permissions.py`, `scripts/check_nats_memory.py`,
+`scripts/check_mana.py`, and `scripts/check_calls.py` run against the debug servers, each on a
+runner of its own, the first split across three (`--shard`) and building and installing the example
+plugins, the last calling between Chromium and Firefox through Playwright; Ultra Lite's debug build
+run through the permissions and calls checks too (`--ul`), and through `scripts/smoke_servers.py`,
+`scripts/check_mana.py`, and `scripts/check_ul_export.py` in a job of their own, with the bundled
+PostgreSQL built once (`ul-postgres`) and unpacked where `package_ul.py` builds it
+(`.github/actions/ul-postgres`); and Ultra Lite packaged for both architectures from the baseline
+builds and the built web client (`web-client`), each package run through `scripts/check_ul.py` on a
+runner of its architecture and kept as an artifact. A tag `v*` runs the whole workflow and then
+publishes the two packages and their `SHA256SUMS` as the tag's GitHub release (`release`). Lints,
+tests, and checks run on runners of their own, so a run takes about as long as its longest job, and
+Rust caches, and the bundled PostgreSQL's build, are saved from `main` alone: the repository's
+caches share 10 GB, and every pull request reads `main`'s. Every job runs the toolchain
+`rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so
+rustup installs both wherever the repository is built. Clippy warnings fail the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or
@@ -524,7 +543,7 @@ commit, or an annotated tag to follow to it with `git/tags/<sha>`.
 `.github/workflows/images.yml` publishes both images to the GitHub Container Registry
 (`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner
 of its architecture: every push to `main` as `main` and its commit's first twelve characters, and
-every tag `v*` as itself. The box and both AWS configurations run them by tag.
+every tag `v*` as itself. The AWS configuration runs them by tag.
 
 `.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its
 fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and
@@ -559,8 +578,9 @@ Operator subcommands read the same configuration, log to stderr, and exit:
 `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, `settings show|set`, and
 `documents show|set|withdraw`, described under Administration, `communities unowned|set-owner`,
 under Roles and permissions, `jobs list|retry|cancel`, under Jobs,
-`attachments purge --message|--attachment`, under Reports, `voice-servers list|add|set|remove`,
-under Voice, `identity-providers list|add|set|remove`, under Identity providers,
+`attachments purge --message|--attachment`, under Reports, `storage import`, under Ultra Lite,
+`voice-servers list|add|set|remove`, under Voice, `identity-providers list|add|set|remove`, under
+Identity providers,
 `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`,
 under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`,
 under Plugins.
@@ -807,10 +827,13 @@ The server is split into three layers, each a crate of its own:
   `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/schema.rs` from
   `server/schema/`.
 
-`server/src/` is the `aspen-chat-server` binary itself: `main.rs`, the listener's connection limits
-(`connections`), and the operator subcommands (`operator`). Beneath `app` are crates that need
-nothing of it, each re-exported from the `app` module that uses it, so a path through `app` names it
-wherever it lives:
+`server/src/` is the `aspen-chat-server` package: its process (`main.rs`: the allocator, command
+line, logging, and runtime) and a library the process runs and other processes can share, the
+listener (`serve`, with its connection limits in `connections`) and the operator subcommands
+(`run_command`, `operator`). `server/ul/` is `aspen-ul`, a deployment in one program, which runs
+that library, the API, and the voice server inside one process (see Ultra Lite). Beneath `app` are
+crates that need nothing of it, each re-exported from the `app` module that uses it, so a path
+through `app` names it wherever it lives:
 
 - `aspen_wire` (`server/wire/`): what the server and its clients exchange, the IDs, and the SQL
   trait macros (`wire_name_traits!` and the rest).
@@ -834,6 +857,17 @@ wherever it lives:
   machine without a family leaves out.
 - `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections
   made with them, and the warning for NATS reached without TLS.
+- `aspen_bus` (`bus/`): the message bus behind Aspen's own types (subjects, streams and their
+  consumers, key-value buckets), which `GlobalServerContext::bus` and `app::events::Publishing` hand
+  out, shared with the voice server, `aspen_limits`, and `aspen-bench`; NATS JetStream is
+  `aspen_bus::Bus::Nats`, and of their code only what connects names `async_nats`; `Bus::Memory`
+  holds the same in the process, for a deployment of one API server.
+- `aspen_ephemeral` (`server/ephemeral/`): the short-lived state every API server shares behind
+  Aspen's own types (keys that expire, counters, sets, pipelines, and each Lua script as a method of
+  its own: rate limit buckets, channel mana, attention, attempt counts, badges), which
+  `GlobalServerContext::ephemeral` hands out; Valkey is `aspen_ephemeral::Ephemeral::Valkey`, and of
+  `app` only `context`, which builds the client, names `fred`; `Ephemeral::Memory` holds the same in
+  the process, bounded in bytes, for a deployment of one API server.
 - `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview`
   (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link
   previews.
@@ -940,6 +974,8 @@ a NATS stream or subject, or a client package updates them in the same commit.
   queue without expiring, and failed ones kept for their author
 - `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides,
   ranking, bans, large communities, and member search
+- `docs/architecture/ul/index.md` — Ultra Lite (`aspen-ul`): a whole deployment in one program, its
+  bundled PostgreSQL, the in-process bus, store, and voice server, and its data directory
 - `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`,
   its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's
   community's
@@ -1413,6 +1449,11 @@ when reviewing.
     that exists, a field present and null), never the absence of a log phrase or of an error.
     Confirm the setup did what the scenario needs before judging the outcome, and refuse an input
     the check does not know (a scenario name, a status) rather than pass on it.
+14. **What correctness or security needs kept lives in PostgreSQL.** Valkey is never durable: it
+    restarts, fails over, and is emptied, so it holds only what may vanish, counters that may reset
+    and records whose loss means a retry. A record that keeps something from being used twice, or a
+    count whose loss hands a guesser a fresh allowance, is a row (`app::used_once`,
+    `app::attempt_count`), with an index on when it ends and a sweep.
 
 ## Comments document the current code, not its history
 

@@ -24,6 +24,16 @@ verification, and what a request without a session is counted by.
 - [Device credentials](device-credentials.md): the puzzle a client solves to be counted as a device
   of its own before signing in, and who a request counts as.
 
+## What is used only once
+
+A redeemed device challenge, an identity provider's logout token, and a statement from another
+deployment (a sign-in assertion among them) are each accepted once. Each is claimed in `used_once`
+(`app::used_once::claim`), one `INSERT … ON CONFLICT` keyed by its purpose and a digest of what
+names it, until it could no longer be accepted anyway, stamped on the database's clock. These live
+in PostgreSQL, not Valkey, because losing one would let it be used again: Valkey keeps only what may
+vanish at a restart. A claim past its `until` refuses nothing, and `sweepExpired` deletes it (see
+[Kinds of job](../jobs/kinds.md#sweepexpired)).
+
 Why things are the way they are: [design notes](design-notes.md).
 
 ## Key files
@@ -37,4 +47,5 @@ Why things are the way they are: [design notes](design-notes.md).
 | Device links                       | `app::device_link`                                                                  |
 | Identity providers                 | `app::identity_provider`, `api::identity_provider`                                  |
 | Device credentials                 | `app::device_credential`, `aspen_limits::puzzle`, `api::rate_limit::limit_requests` |
+| What is used only once             | `app::used_once`                                                                    |
 | Email addresses and password reset | see [Email](../email/index.md)                                                      |

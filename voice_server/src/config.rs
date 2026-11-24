@@ -590,7 +590,21 @@ impl VoiceServerConfig {
 }
 
 pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
-    sources()?
+    finish(sources()?)
+}
+
+/// The config written in `text`, TOML, with no `voice_server.toml` and no environment, for a
+/// process that writes its voice server's configuration itself (`aspen-ul`).
+pub fn load_config_text(text: &str) -> Result<VoiceServerConfig, config::ConfigError> {
+    finish(
+        config::Config::builder()
+            .add_source(config::File::from_str(text, config::FileFormat::Toml))
+            .build()?,
+    )
+}
+
+fn finish(built: config::Config) -> Result<VoiceServerConfig, config::ConfigError> {
+    built
         .try_deserialize::<VoiceServerConfig>()
         .and_then(|mut config| {
             // Merged here rather than as one more config source, which would merge a limit

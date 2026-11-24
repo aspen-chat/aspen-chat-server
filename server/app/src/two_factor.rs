@@ -25,7 +25,6 @@ use data_encoding::BASE32_NOPAD;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::{KeysInterface, LuaInterface};
 use hmac::{Hmac, Mac};
 use rand::RngExt;
 use sha1::Sha1;
@@ -201,38 +200,11 @@ pub const HAS_SECOND_FACTOR_SQL: &str = "(EXISTS (SELECT 1 FROM totp_secret t \
 // Failure counting
 // ---------------------------------------------------------------------------------------------
 
-fn failures_key(user_id: UserId) -> String {
-    format!("auth:failures:{}", user_id.0)
-}
-
-fn daily_failures_key(user_id: UserId) -> String {
-    format!("auth:failures-daily:{}", user_id.0)
-}
-
-/// Counts one attempt and answers how many the window holds now, starting the window with the
-/// first. One script, so the count and its expiry are set together and a lost connection never
-/// leaves a count that does not expire.
-const COUNT_ATTEMPT: &str = "
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return count
-";
-
-/// Takes back an attempt `COUNT_ATTEMPT` counted, unless its window has ended meanwhile (which
-/// would leave a count without an expiry).
-const UNCOUNT_ATTEMPT: &str = "
-if redis.call('EXISTS', KEYS[1]) == 1 then
-  redis.call('DECR', KEYS[1])
-end
-return 0
-";
-
 /// Runs `check`, which answers whether a presented secret was right, under the failure limits:
 /// refused outright once either is reached, a wrong answer counted, a right one clearing the
 /// quarter hour's count. When a wrong answer reaches the daily limit, the account's address is
-/// told (`outbox::Mail::SignInLocked`), once.
+/// told (`outbox::Mail::SignInLocked`), once. The counts are in PostgreSQL
+/// (`app::attempt_count`), so no restart lifts them.
 pub async fn limited<F>(
     state: &GlobalServerContext,
     user_id: UserId,
@@ -241,11 +213,7 @@ pub async fn limited<F>(
 where
     F: AsyncFnOnce() -> crate::Result<bool>,
 {
-    let windows = Windows {
-        short: failures_key(user_id),
-        daily: daily_failures_key(user_id),
-    };
-    match limited_in(&state.valkey, &windows, check).await? {
+    match limited_in(&state.connection_pool, user_id, check).await? {
         Attempt::Checked(right) => Ok(right),
         Attempt::Refused { locked_now } => {
             if locked_now {
@@ -259,14 +227,6 @@ where
     }
 }
 
-/// The counts one user's attempts are kept in.
-struct Windows {
-    /// `MAX_FAILURES` in `FAILURE_WINDOW_SECONDS`.
-    short: String,
-    /// `DAILY_MAX_FAILURES` in `DAILY_WINDOW_SECONDS`.
-    daily: String,
-}
-
 enum Attempt {
     /// Checked, and whether it was right.
     Checked(bool),
@@ -278,41 +238,42 @@ enum Attempt {
 /// Counts one attempt at the count `key`, whose window of `window_seconds` starts with its first
 /// attempt, and answers how many the window holds now. Counting before checking, as every guess
 /// of a secret here does, means attempts sent all at once are checked no more often than the
-/// limit allows.
+/// limit allows. The count and its expiry are set together, so a lost connection never leaves a
+/// count that does not expire. Used for counts that live and die with a short-lived record of
+/// their own in Valkey (a password reset's misses, an address's verification tries); an
+/// account's own limits are `attempt_count`'s.
 pub async fn count_attempt(
-    valkey: &fred::clients::Client,
+    ephemeral: &aspen_ephemeral::Ephemeral,
     key: &str,
     window_seconds: i64,
 ) -> crate::Result<i64> {
-    Ok(valkey
-        .eval(COUNT_ATTEMPT, key.to_string(), window_seconds)
-        .await?)
+    Ok(ephemeral.count_attempt(key, window_seconds).await?)
 }
 
-/// Takes back an attempt [`count_attempt`] counted, as for a right answer that is not the last
-/// the window allows.
-pub async fn uncount_attempt(valkey: &fred::clients::Client, key: &str) -> crate::Result<()> {
-    let _: i64 = valkey
-        .eval(UNCOUNT_ATTEMPT, key.to_string(), Vec::<String>::new())
-        .await?;
-    Ok(())
-}
-
-/// `limited` on the counts `windows`. The attempt is counted before `check` runs, so however
-/// many arrive at once, no more than `MAX_FAILURES` are checked in a quarter hour, or
+/// `limited` on `user`'s counts. The attempt is counted before `check` runs, so however many
+/// arrive at once, no more than `MAX_FAILURES` are checked in a quarter hour, or
 /// `DAILY_MAX_FAILURES` in a day, without one succeeding. A right answer clears the quarter
 /// hour's count and is taken off the day's, which keeps its wrong ones; an attempt that could
-/// not be checked (an error, not a wrong answer) is taken back off both.
+/// not be checked (an error, not a wrong answer) is taken back off both. No connection is held
+/// while `check` runs, which may need one of its own.
 async fn limited_in<F>(
-    valkey: &fred::clients::Client,
-    windows: &Windows,
+    pool: &crate::database::Pool,
+    user: UserId,
     check: F,
 ) -> crate::Result<Attempt>
 where
     F: AsyncFnOnce() -> crate::Result<bool>,
 {
-    let short = count_attempt(valkey, &windows.short, FAILURE_WINDOW_SECONDS).await?;
-    let daily = count_attempt(valkey, &windows.daily, DAILY_WINDOW_SECONDS).await?;
+    use crate::attempt_count::{self, Kind};
+    let [short, daily] = attempt_count::add(
+        pool.get().await?.as_mut(),
+        user,
+        [
+            (Kind::SignInFailures, FAILURE_WINDOW_SECONDS),
+            (Kind::SignInFailuresDaily, DAILY_WINDOW_SECONDS),
+        ],
+    )
+    .await?;
     if short > MAX_FAILURES || daily > DAILY_MAX_FAILURES {
         return Ok(Attempt::Refused {
             locked_now: daily == DAILY_MAX_FAILURES + 1,
@@ -320,14 +281,19 @@ where
     }
     match check().await {
         Ok(true) => {
-            let _: i64 = valkey.del(&windows.short).await?;
-            uncount_attempt(valkey, &windows.daily).await?;
+            let mut conn = pool.get().await?;
+            attempt_count::clear(conn.as_mut(), user, Kind::SignInFailures).await?;
+            attempt_count::take_back(conn.as_mut(), user, &[Kind::SignInFailuresDaily]).await?;
             Ok(Attempt::Checked(true))
         }
         Ok(false) => Ok(Attempt::Checked(false)),
         Err(e) => {
-            uncount_attempt(valkey, &windows.short).await?;
-            uncount_attempt(valkey, &windows.daily).await?;
+            attempt_count::take_back(
+                pool.get().await?.as_mut(),
+                user,
+                &[Kind::SignInFailures, Kind::SignInFailuresDaily],
+            )
+            .await?;
             Err(e)
         }
     }
@@ -992,36 +958,43 @@ pub async fn overview(
 mod tests {
     use super::*;
 
-    /// Uses the Valkey of `docker-compose.yaml`, or `VALKEY_URL`.
-    async fn test_valkey() -> fred::clients::Client {
-        use fred::interfaces::ClientLike;
-        let url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        let client = fred::clients::Client::new(
-            fred::prelude::Config::from_url(&url).unwrap(),
-            None,
-            None,
-            None,
-        );
-        client
-            .init()
-            .await
-            .expect("Valkey from docker-compose.yaml");
-        client
+    /// A pool on the database `DATABASE_URL` names and a user made in it for the test, which
+    /// `forget` deletes with its counts; none without a database, and the test checks nothing.
+    async fn test_user() -> Option<(crate::database::Pool, UserId)> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let database: crate::database::Database = url.parse().unwrap();
+        let pool = database.pool(Some(40), None).unwrap();
+        let user = UserId(uuid::Uuid::now_v7());
+        diesel::sql_query(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+               VALUES ($1, $2, '', now(), now())"#,
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user.0)
+        .bind::<diesel::sql_types::Text, _>(format!("attempts-{}", user.0.simple()))
+        .execute(pool.get().await.unwrap().as_mut())
+        .await
+        .unwrap();
+        Some((pool, user))
     }
 
-    fn test_windows() -> Windows {
-        let id = uuid::Uuid::now_v7();
-        Windows {
-            short: format!("auth:failures:test:{id}"),
-            daily: format!("auth:failures-daily:test:{id}"),
-        }
-    }
-
-    async fn clear(valkey: &fred::clients::Client, windows: &Windows) {
-        let _: i64 = valkey
-            .del(vec![windows.short.clone(), windows.daily.clone()])
+    async fn forget(pool: &crate::database::Pool, user: UserId) {
+        diesel::delete(user::table.find(user.0))
+            .execute(pool.get().await.unwrap().as_mut())
             .await
             .unwrap();
+    }
+
+    async fn count(
+        pool: &crate::database::Pool,
+        user: UserId,
+        kind: crate::attempt_count::Kind,
+    ) -> i64 {
+        crate::attempt_count::read(pool.get().await.unwrap().as_mut(), user, kind)
+            .await
+            .unwrap()
     }
 
     /// What `limited` answers for an attempt.
@@ -1034,12 +1007,14 @@ mod tests {
 
     #[tokio::test]
     async fn attempts_arriving_at_once_are_checked_no_more_than_the_limit_allows() {
-        let valkey = test_valkey().await;
-        let windows = test_windows();
+        use crate::attempt_count::Kind;
+        let Some((pool, user)) = test_user().await else {
+            return;
+        };
         let checked = std::sync::atomic::AtomicI64::new(0);
         let attempts = (0..3 * MAX_FAILURES).map(|_| async {
             answer(
-                limited_in(&valkey, &windows, async || {
+                limited_in(&pool, user, async || {
                     checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                     Ok(false)
@@ -1057,53 +1032,113 @@ mod tests {
             MAX_FAILURES
         );
         assert_eq!(refused as i64, 2 * MAX_FAILURES);
-        let ttl: i64 = valkey.ttl(&windows.short).await.unwrap();
-        assert!(ttl > 0 && ttl <= FAILURE_WINDOW_SECONDS);
-        let ttl: i64 = valkey.ttl(&windows.daily).await.unwrap();
-        assert!(ttl > FAILURE_WINDOW_SECONDS && ttl <= DAILY_WINDOW_SECONDS);
-        clear(&valkey, &windows).await;
+        assert_eq!(
+            count(&pool, user, Kind::SignInFailures).await,
+            3 * MAX_FAILURES
+        );
+        assert_eq!(
+            count(&pool, user, Kind::SignInFailuresDaily).await,
+            3 * MAX_FAILURES
+        );
+        #[derive(diesel::QueryableByName)]
+        struct Left {
+            #[diesel(sql_type = diesel::sql_types::Double)]
+            seconds: f64,
+        }
+        let left: Vec<Left> = diesel::sql_query(
+            r#"SELECT extract(epoch FROM until - now())::float8 AS seconds FROM attempt_count
+               WHERE "user" = $1 ORDER BY kind"#,
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user.0)
+        .load(pool.get().await.unwrap().as_mut())
+        .await
+        .unwrap();
+        // signInFailures, then signInFailuresDaily.
+        assert!(left[0].seconds > 0.0 && left[0].seconds <= FAILURE_WINDOW_SECONDS as f64);
+        assert!(
+            left[1].seconds > FAILURE_WINDOW_SECONDS as f64
+                && left[1].seconds <= DAILY_WINDOW_SECONDS as f64
+        );
+        forget(&pool, user).await;
     }
 
     #[tokio::test]
     async fn a_right_answer_clears_the_count_and_an_error_is_not_counted() {
-        let valkey = test_valkey().await;
-        let windows = test_windows();
+        use crate::attempt_count::Kind;
+        let Some((pool, user)) = test_user().await else {
+            return;
+        };
         let attempt = async |right: crate::Result<bool>| {
-            answer(limited_in(&valkey, &windows, async || right).await)
+            answer(limited_in(&pool, user, async || right).await)
         };
         assert!(!attempt(Ok(false)).await.unwrap());
         assert!(attempt(Err(crate::Error::Busy)).await.is_err());
-        let count: Option<i64> = valkey.get(&windows.short).await.unwrap();
-        assert_eq!(count, Some(1));
+        assert_eq!(count(&pool, user, Kind::SignInFailures).await, 1);
         assert!(attempt(Ok(true)).await.unwrap());
-        let count: Option<i64> = valkey.get(&windows.short).await.unwrap();
-        assert_eq!(count, None);
+        assert_eq!(count(&pool, user, Kind::SignInFailures).await, 0);
         // The day keeps its wrong answer, and not the right one.
-        let count: Option<i64> = valkey.get(&windows.daily).await.unwrap();
-        assert_eq!(count, Some(1));
-        clear(&valkey, &windows).await;
+        assert_eq!(count(&pool, user, Kind::SignInFailuresDaily).await, 1);
+        forget(&pool, user).await;
     }
 
     #[tokio::test]
     async fn the_daily_limit_holds_however_the_quarter_hours_fall() {
-        let valkey = test_valkey().await;
-        let windows = test_windows();
+        use crate::attempt_count::Kind;
+        let Some((pool, user)) = test_user().await else {
+            return;
+        };
         let mut locks = 0;
         for _ in 0..DAILY_MAX_FAILURES + 5 {
             // A new quarter hour each time.
-            let _: i64 = valkey.del(&windows.short).await.unwrap();
-            match limited_in(&valkey, &windows, async || Ok(false))
-                .await
-                .unwrap()
-            {
+            crate::attempt_count::clear(
+                pool.get().await.unwrap().as_mut(),
+                user,
+                Kind::SignInFailures,
+            )
+            .await
+            .unwrap();
+            match limited_in(&pool, user, async || Ok(false)).await.unwrap() {
                 Attempt::Checked(right) => assert!(!right),
                 Attempt::Refused { locked_now } => locks += i32::from(locked_now),
             }
         }
-        let count: i64 = valkey.get(&windows.daily).await.unwrap();
-        assert_eq!(count, DAILY_MAX_FAILURES + 5);
+        assert_eq!(
+            count(&pool, user, Kind::SignInFailuresDaily).await,
+            DAILY_MAX_FAILURES + 5
+        );
         assert_eq!(locks, 1);
-        clear(&valkey, &windows).await;
+        forget(&pool, user).await;
+    }
+
+    #[tokio::test]
+    async fn a_window_that_has_ended_starts_again() {
+        use crate::attempt_count::Kind;
+        let Some((pool, user)) = test_user().await else {
+            return;
+        };
+        for _ in 0..MAX_FAILURES + 1 {
+            let _ = limited_in(&pool, user, async || Ok(false)).await.unwrap();
+        }
+        assert!(matches!(
+            limited_in(&pool, user, async || Ok(false)).await.unwrap(),
+            Attempt::Refused { .. }
+        ));
+        // The quarter hour ends, though the sweep has not deleted its row.
+        diesel::sql_query(
+            r#"UPDATE attempt_count SET until = now() - interval '1 second'
+               WHERE "user" = $1 AND kind = 'signInFailures'"#,
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user.0)
+        .execute(pool.get().await.unwrap().as_mut())
+        .await
+        .unwrap();
+        assert_eq!(count(&pool, user, Kind::SignInFailures).await, 0);
+        assert!(matches!(
+            limited_in(&pool, user, async || Ok(false)).await.unwrap(),
+            Attempt::Checked(false)
+        ));
+        assert_eq!(count(&pool, user, Kind::SignInFailures).await, 1);
+        forget(&pool, user).await;
     }
 
     /// RFC 6238 appendix B, SHA-1 rows, truncated to six digits.

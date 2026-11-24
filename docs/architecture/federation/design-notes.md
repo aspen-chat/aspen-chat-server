@@ -83,7 +83,8 @@ Why federation works as it does. The how is in the [Federation pages](index.md).
   it.** See [Signing in abroad](signing-in-abroad.md#verifying-it).
 - **An assertion that calls a bot a person, or a person a bot, is refused.** The gate checked is the
   one for the kind the assertion claims.
-- **Assertion ids are remembered in Valkey until they expire.** So each is used once.
+- **Statement ids are remembered in PostgreSQL until they expire.** So each is used once, even
+  across a restart of Valkey or the server: a replayed assertion would sign its holder in again.
 - **First arrivals per home per day are capped.** So a home that mints accounts cannot fill this
   deployment with them.
 - **A later name this deployment would not allow leaves the held name.** So a rule this deployment

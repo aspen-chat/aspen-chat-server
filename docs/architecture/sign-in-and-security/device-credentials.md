@@ -30,7 +30,7 @@ be.
 | Difficulty          | `[rate_limits] device_puzzle_bits`, 20 by default (about a million hashes), at most 28                               |
 | Challenge lifetime  | Five minutes (`CHALLENGE_LIFETIME`)                                                                                  |
 | Credential lifetime | Ninety days (`LIFETIME`)                                                                                             |
-| Uses of a challenge | One credential. Its use is remembered in Valkey (`device-challenge:*`) until it expires.                             |
+| Uses of a challenge | One credential. Its use is remembered in PostgreSQL (`used_once`) until it expires.                                  |
 | Refusals            | `400` `deviceChallengeInvalid`, whose `detail` says why: not this deployment's, expired, already used, or not solved |
 
 - **Stateless tokens:** a challenge and a credential are each their content and an HMAC-SHA-256
@@ -150,7 +150,7 @@ A suspension of the address limits (`limits suspend`) also skips `device`, `ip_f
 ## Scripts and the benchmark
 
 - **Python:** `scripts/device_credential.py` earns one credential per deployment. `stack.py`,
-  `dev_federation.py` and `check_box.py` present it on requests without a token. Scripts that wait
+  `dev_federation.py`, and `check_ul.py` present it on requests without a token. Scripts that wait
   for a server ask `GET /health`.
 - **Benchmark:** a run that suspends the limits earns none, since its suspension waives them. One
   that does not earns one for each source address of its profile, or one without them, and the users

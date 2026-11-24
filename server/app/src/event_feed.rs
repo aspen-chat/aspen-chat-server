@@ -71,9 +71,7 @@ use crate::permissions::{Permission, Permissions};
 use crate::typing::{Audience, EphemeralEvent, Relay, TYPING_SUBJECT};
 use crate::visibility::{CommunityModel, ModelChange, member_roles};
 use crate::{ASPEN_NATS_STREAM_NAME, CategoryId, ChannelId, CommunityId, RoleId, UserId};
-use async_nats::jetstream;
-use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
-use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};
+use aspen_bus::{Bus, Ordered, Start};
 use chrono::{DateTime, Utc};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::StreamExt;
@@ -93,20 +91,19 @@ pub const MAX_EVENT_AGE: Duration = Duration::from_secs(60);
 
 /// The stream every event is published to, which holds the last [`MAX_EVENT_AGE`] of them and at
 /// most `max_bytes`, its oldest going first past either (`app::nats_memory` chooses the size).
-pub fn stream_config(max_bytes: u64) -> jetstream::stream::Config {
-    jetstream::stream::Config {
+pub fn stream_config(max_bytes: u64) -> aspen_bus::StreamConfig {
+    aspen_bus::StreamConfig {
         name: ASPEN_NATS_STREAM_NAME.to_string(),
         subjects: vec![format!("{}.>", crate::events::SUBJECT_ROOT)],
-        discard: jetstream::stream::DiscardPolicy::Old,
-        max_messages: 1_000_000_000,
-        max_bytes: i64::try_from(max_bytes).unwrap_or(i64::MAX),
+        retention: aspen_bus::Retention::Limits,
+        storage: aspen_bus::Storage::Memory,
         max_age: MAX_EVENT_AGE,
-        storage: jetstream::stream::StorageType::Memory,
-        consumer_limits: Some(jetstream::stream::ConsumerLimits {
+        max_bytes,
+        max_messages: Some(1_000_000_000),
+        consumer_limits: Some(aspen_bus::ConsumerLimits {
             max_ack_pending: 1000,
             inactive_threshold: Duration::from_secs(60),
         }),
-        ..Default::default()
     }
 }
 
@@ -565,11 +562,11 @@ impl EventFeed {
         }
     }
 
-    /// Starts the dispatcher on `context`'s event stream, routing through `shards` tasks.
+    /// Starts the dispatcher on `bus`'s event stream, routing through `shards` tasks.
     /// `queue_size` bounds each connection's queue, `retained_bytes` the events kept for
     /// catching connections up, and `caps` how many streams each user and address may hold.
     pub fn start(
-        context: jetstream::Context,
+        bus: Bus,
         queue_size: usize,
         shards: usize,
         retained_bytes: usize,
@@ -587,7 +584,7 @@ impl EventFeed {
         let held: Arc<[mpsc::Sender<ShardCommand>]> = shards.clone().into();
         let seen = Arc::new(AtomicU64::new(0));
         tokio::spawn(dispatch(
-            context,
+            bus,
             shards,
             retained_bytes,
             registrations_rx,
@@ -1123,7 +1120,7 @@ impl Retained {
         self.last_sequence != 0 && self.last_sequence.checked_add(1) != Some(sequence)
     }
 
-    /// Takes the stream message at `sequence` as seen though it held no event (`Skipped::At`),
+    /// Takes the stream message at `sequence` as seen though it held no event (`Skipped`),
     /// so the event after it is not taken for one that follows a gap.
     fn skip(&mut self, sequence: u64) {
         self.last_sequence = sequence;
@@ -1881,32 +1878,12 @@ fn remove_from<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Vec<u64>>, key: K, 
     }
 }
 
-/// Opens the server's consumer, from `policy`. Returns it with how many events it has to
-/// deliver before it reaches the end of the stream.
-async fn open(
-    context: &jetstream::Context,
-    policy: DeliverPolicy,
-) -> Result<(Ordered, u64), crate::Error> {
-    let stream = context.get_stream(ASPEN_NATS_STREAM_NAME).await?;
-    let consumer = stream
-        .create_consumer(OrderedConfig {
-            deliver_policy: policy,
-            replay_policy: ReplayPolicy::Instant,
-            max_batch: 1000,
-            max_bytes: 8 * 1024 * 1024,
-            max_expires: Duration::from_secs(5),
-            ..Default::default()
-        })
-        .await?;
-    let pending = consumer.cached_info().num_pending;
-    Ok((consumer.messages().await?, pending))
-}
-
-/// `open`, retried until NATS answers.
-async fn reopen(context: &jetstream::Context, policy: DeliverPolicy) -> (Ordered, u64) {
+/// Opens the server's reading of the event stream from `start`, retried until the bus answers.
+/// Returns it with how many events it has to deliver before it reaches the end of the stream.
+async fn reopen(bus: &Bus, start: Start) -> (Ordered, u64) {
     let mut wait = Duration::from_millis(250);
     loop {
-        match open(context, policy).await {
+        match bus.ordered(ASPEN_NATS_STREAM_NAME, start).await {
             Ok(opened) => return opened,
             Err(e) => {
                 error!("could not open the event feed's consumer, retrying: {e}");
@@ -2025,37 +2002,28 @@ struct Unreadable;
 /// The value of the header `name`, which restricts who receives an event: `Ok(None)` without
 /// the header, and `Err` with one this build cannot read, which must not pass for none.
 fn restricting<T: std::str::FromStr>(
-    headers: Option<&async_nats::HeaderMap>,
+    headers: &aspen_bus::Headers,
     name: &str,
 ) -> Result<Option<T>, Unreadable> {
-    match headers.and_then(|headers| headers.get(name)) {
+    match headers.get(name) {
         None => Ok(None),
-        Some(value) => value.as_str().parse().map(Some).map_err(|_| Unreadable),
+        Some(value) => value.parse().map(Some).map_err(|_| Unreadable),
     }
 }
 
-/// A delivered message that is not an event this build reads.
-enum Skipped {
-    /// It came without the metadata that places it in the stream, so the sequence it took is
-    /// unknown and the event after it reads as following a gap.
-    Unplaced,
-    /// Its place is known, so the stream is still read whole: a subject shape or a payload
-    /// this build does not know, as a newer server on the same stream may publish.
-    At { sequence: u64, pending: u64 },
+/// A delivered message that is not an event this build reads: a subject shape or a payload
+/// this build does not know, as a newer server on the same stream may publish. Its place is
+/// known, so the stream is still read whole.
+struct Skipped {
+    sequence: u64,
+    pending: u64,
 }
 
 /// Reads a delivered message into an event and how many messages are still to be delivered.
-fn read(message: &jetstream::Message) -> Result<(FeedEvent, u64), Skipped> {
-    let info = match message.info() {
-        Ok(info) => info,
-        Err(e) => {
-            error!("event stream message without metadata: {e}");
-            return Err(Skipped::Unplaced);
-        }
-    };
-    let skipped = Skipped::At {
-        sequence: info.stream_sequence,
-        pending: info.pending,
+fn read(message: &aspen_bus::StreamMessage) -> Result<(FeedEvent, u64), Skipped> {
+    let skipped = Skipped {
+        sequence: message.sequence,
+        pending: message.pending,
     };
     let Some(owner) = subject_owner(message.subject.as_str()) else {
         warn!(subject = %message.subject, "event on a subject with no owner");
@@ -2083,7 +2051,7 @@ fn read(message: &jetstream::Message) -> Result<(FeedEvent, u64), Skipped> {
         resync,
         email_unverified,
     } = Glanced::read(owner, payload.get());
-    let headers = message.headers.as_ref();
+    let headers = &message.headers;
     let channel = restricting::<uuid::Uuid>(headers, CHANNEL_HEADER);
     let category = restricting::<uuid::Uuid>(headers, CATEGORY_HEADER);
     let requires = restricting::<Permission>(headers, REQUIRES_HEADER);
@@ -2103,27 +2071,25 @@ fn read(message: &jetstream::Message) -> Result<(FeedEvent, u64), Skipped> {
     let channel = channel.ok().flatten().map(ChannelId);
     let category = category.ok().flatten().map(CategoryId);
     let requires = requires.ok().flatten().map(Permission::bits);
-    let header = |name: &str| headers.and_then(|headers| headers.get(name));
     // Its creator only adds a reader to those `requires` allows, so one that cannot be read
     // narrows.
-    let creator = header(CREATOR_HEADER)
-        .and_then(|id| id.as_str().parse().ok())
+    let creator = headers
+        .get(CREATOR_HEADER)
+        .and_then(|id| id.parse().ok())
         .map(UserId);
-    let age = (time::OffsetDateTime::now_utc() - info.published).clamp(
+    let age = (time::OffsetDateTime::now_utc() - message.published).clamp(
         time::Duration::ZERO,
         time::Duration::try_from(MAX_EVENT_AGE).unwrap_or_default(),
     );
     let published = Instant::now()
         .checked_sub(age.try_into().unwrap_or_default())
         .unwrap_or_else(Instant::now);
-    let event_id = message
-        .headers
-        .as_ref()
-        .and_then(|headers| headers.get(crate::events::EVENT_ID_HEADER))
-        .map(|value| value.to_string());
+    let event_id = headers
+        .get(crate::events::EVENT_ID_HEADER)
+        .map(str::to_string);
     Ok((
         FeedEvent {
-            sequence: info.stream_sequence,
+            sequence: message.sequence,
             event_id,
             payload,
             owner,
@@ -2150,7 +2116,7 @@ fn read(message: &jetstream::Message) -> Result<(FeedEvent, u64), Skipped> {
             place: None,
             frame: OnceLock::new(),
         },
-        info.pending,
+        message.pending,
     ))
 }
 
@@ -2420,14 +2386,11 @@ fn relayed_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
 }
 
 /// Subscribes to a subject of relays (`app::typing::TYPING_SUBJECT`,
-/// `app::mana::live::MANA_SUBJECT`), retried until NATS answers.
-async fn subscribe_relays(
-    context: &jetstream::Context,
-    subject: &'static str,
-) -> async_nats::Subscriber {
+/// `app::mana::live::MANA_SUBJECT`), retried until the bus answers.
+async fn subscribe_relays(bus: &Bus, subject: &'static str) -> aspen_bus::Subscriber {
     let mut wait = Duration::from_millis(250);
     loop {
-        match context.client().subscribe(subject).await {
+        match bus.subscribe(subject).await {
             Ok(subscriber) => return subscriber,
             Err(e) => {
                 error!("could not subscribe to {subject}, retrying: {e}");
@@ -2447,9 +2410,9 @@ async fn subscribe_relays(
 fn vouch_loaded_window(
     retained: &mut Retained,
     started: Instant,
-    stream_info: &jetstream::stream::Info,
+    stream_info: &aspen_bus::StreamInfo,
 ) {
-    let max_bytes = u64::try_from(stream_info.config.max_bytes).unwrap_or(0);
+    let max_bytes = stream_info.config.max_bytes;
     let near_limit = max_bytes > 0 && stream_info.state.bytes.saturating_mul(10) >= max_bytes * 9;
     if near_limit {
         return;
@@ -2460,18 +2423,16 @@ fn vouch_loaded_window(
 }
 
 async fn dispatch(
-    context: jetstream::Context,
+    bus: Bus,
     shards: Vec<mpsc::Sender<ShardCommand>>,
     retained_bytes: usize,
     mut registrations: mpsc::Receiver<Register>,
     mut unregister: mpsc::UnboundedReceiver<u64>,
     seen: Arc<AtomicU64>,
 ) {
-    let window_start = || DeliverPolicy::ByStartTime {
-        start_time: time::OffsetDateTime::now_utc() - MAX_EVENT_AGE,
-    };
+    let window_start = || Start::ByTime(time::OffsetDateTime::now_utc() - MAX_EVENT_AGE);
     let started = Instant::now();
-    let (mut messages, pending) = reopen(&context, window_start()).await;
+    let (mut messages, pending) = reopen(&bus, window_start()).await;
     let mut retained = Retained::with_cap(retained_bytes);
     let mut models = Models::default();
     let shard = |id: u64| &shards[(id % shards.len() as u64) as usize];
@@ -2479,24 +2440,22 @@ async fn dispatch(
     let mut loaded = pending == 0;
     let load_deadline = Instant::now() + LOAD_DEADLINE;
     if loaded {
-        if let Ok(mut stream) = context.get_stream(ASPEN_NATS_STREAM_NAME).await
-            && let Ok(stream_info) = stream.info().await
-        {
+        if let Ok(Some(stream_info)) = bus.stream_info(ASPEN_NATS_STREAM_NAME).await {
             retained.last_sequence = stream_info.state.last_sequence;
             seen.store(retained.last_sequence, Ordering::Release);
-            vouch_loaded_window(&mut retained, started, stream_info);
+            vouch_loaded_window(&mut retained, started, &stream_info);
         }
         info!("event feed ready");
     }
     let mut evict = tokio::time::interval(EVICT_INTERVAL);
-    let mut typing = subscribe_relays(&context, TYPING_SUBJECT).await;
-    let mut mana = subscribe_relays(&context, MANA_SUBJECT).await;
+    let mut typing = subscribe_relays(&bus, TYPING_SUBJECT).await;
+    let mut mana = subscribe_relays(&bus, MANA_SUBJECT).await;
     loop {
         tokio::select! {
             message = typing.next() => {
                 let Some(message) = message else {
                     error!("the typing subscription ended, subscribing again");
-                    typing = subscribe_relays(&context, TYPING_SUBJECT).await;
+                    typing = subscribe_relays(&bus, TYPING_SUBJECT).await;
                     continue;
                 };
                 route_relays(&message.payload, &models, &shards);
@@ -2504,7 +2463,7 @@ async fn dispatch(
             message = mana.next() => {
                 let Some(message) = message else {
                     error!("the mana subscription ended, subscribing again");
-                    mana = subscribe_relays(&context, MANA_SUBJECT).await;
+                    mana = subscribe_relays(&bus, MANA_SUBJECT).await;
                     continue;
                 };
                 route_relays(&message.payload, &models, &shards);
@@ -2517,10 +2476,8 @@ async fn dispatch(
                             Some(Err(e)) => error!("event feed consumer failed, reopening: {e}"),
                             _ => error!("event feed consumer ended, reopening"),
                         }
-                        let policy = DeliverPolicy::ByStartSequence {
-                            start_sequence: retained.last_sequence.saturating_add(1),
-                        };
-                        (messages, _) = reopen(&context, policy).await;
+                        let start = Start::BySequence(retained.last_sequence.saturating_add(1));
+                        (messages, _) = reopen(&bus, start).await;
                         continue;
                     }
                 };
@@ -2529,8 +2486,7 @@ async fn dispatch(
                         let sequence = event.sequence;
                         (Some(event), sequence, pending)
                     }
-                    Err(Skipped::At { sequence, pending }) => (None, sequence, pending),
-                    Err(Skipped::Unplaced) => continue,
+                    Err(Skipped { sequence, pending }) => (None, sequence, pending),
                 };
                 if retained.gap_before(sequence) {
                     warn!(
@@ -2562,10 +2518,8 @@ async fn dispatch(
                 seen.store(sequence, Ordering::Release);
                 if !loaded && pending == 0 {
                     loaded = true;
-                    if let Ok(mut stream) = context.get_stream(ASPEN_NATS_STREAM_NAME).await
-                        && let Ok(stream_info) = stream.info().await
-                    {
-                        vouch_loaded_window(&mut retained, started, stream_info);
+                    if let Ok(Some(stream_info)) = bus.stream_info(ASPEN_NATS_STREAM_NAME).await {
+                        vouch_loaded_window(&mut retained, started, &stream_info);
                     }
                     info!(retained = retained.order.len(), "event feed ready");
                 }
@@ -4044,33 +3998,29 @@ mod tests {
 
     #[test]
     fn a_restricting_header_that_cannot_be_read_is_not_taken_for_none() {
-        let mut headers = async_nats::HeaderMap::new();
+        let mut headers = aspen_bus::Headers::new();
         let channel = ChannelId::new();
-        headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+        headers.insert(CHANNEL_HEADER, channel.0.to_string());
         headers.insert(CATEGORY_HEADER, "not an id");
         headers.insert(REQUIRES_HEADER, "aPermissionOfALaterVersion");
-        let headers = Some(&headers);
         assert!(matches!(
-            restricting::<uuid::Uuid>(headers, CHANNEL_HEADER),
+            restricting::<uuid::Uuid>(&headers, CHANNEL_HEADER),
             Ok(Some(id)) if id == channel.0
         ));
-        assert!(restricting::<uuid::Uuid>(headers, CATEGORY_HEADER).is_err());
-        assert!(restricting::<Permission>(headers, REQUIRES_HEADER).is_err());
+        assert!(restricting::<uuid::Uuid>(&headers, CATEGORY_HEADER).is_err());
+        assert!(restricting::<Permission>(&headers, REQUIRES_HEADER).is_err());
         assert!(matches!(
-            restricting::<Permission>(headers, CREATOR_HEADER),
+            restricting::<Permission>(&headers, CREATOR_HEADER),
             Ok(None)
         ));
         assert!(matches!(
-            restricting::<Permission>(None, REQUIRES_HEADER),
+            restricting::<Permission>(&aspen_bus::Headers::new(), REQUIRES_HEADER),
             Ok(None)
         ));
-        let mut known = async_nats::HeaderMap::new();
-        known.insert(
-            REQUIRES_HEADER,
-            Permission::ManageInvites.to_string().as_str(),
-        );
+        let mut known = aspen_bus::Headers::new();
+        known.insert(REQUIRES_HEADER, Permission::ManageInvites.to_string());
         assert!(matches!(
-            restricting::<Permission>(Some(&known), REQUIRES_HEADER),
+            restricting::<Permission>(&known, REQUIRES_HEADER),
             Ok(Some(Permission::ManageInvites))
         ));
     }

@@ -396,12 +396,7 @@ async fn publish(
             return;
         }
     };
-    if let Err(e) = state
-        .nats_context
-        .client()
-        .publish(TYPING_SUBJECT, payload.into())
-        .await
-    {
+    if let Err(e) = state.bus.publish(TYPING_SUBJECT, payload.into()).await {
         warn!(error = %e, "could not publish typing");
     }
 }

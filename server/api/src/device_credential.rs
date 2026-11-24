@@ -91,13 +91,7 @@ pub async fn redeem(
     State(state): State<GlobalServerContext>,
     Json(request): Json<DeviceCredentialRequest>,
 ) -> ApiResult<Json<DeviceCredential>> {
-    let earned = device_credential::redeem(&state, &request.challenge, request.nonce)
-        .await
-        .map_err(|e| match e {
-            aspen_app::Error::Valkey(_) => ApiError::new(ProblemCode::ServerBusy)
-                .with_retry_after(std::time::Duration::from_secs(10)),
-            other => other.into(),
-        })?;
+    let earned = device_credential::redeem(&state, &request.challenge, request.nonce).await?;
     match earned {
         Ok(credential) => Ok(Json(DeviceCredential {
             credential: credential.token,

@@ -584,11 +584,10 @@ impl Plugins {
 pub async fn start(state: &GlobalServerContext) -> crate::Result<()> {
     host::start_ticker(state.plugins.engine.clone());
     state.plugins.reload(state).await?;
-    let client = state.nats_context.client();
     let state = state.clone();
     tokio::spawn(async move {
         loop {
-            match client.subscribe(CHANGED_SUBJECT).await {
+            match state.bus.subscribe(CHANGED_SUBJECT).await {
                 Ok(mut changes) => {
                     while let Some(message) = changes.next().await {
                         let change: Change =
@@ -623,17 +622,12 @@ pub async fn start(state: &GlobalServerContext) -> crate::Result<()> {
 
 /// Tells every API server that installed plugins changed, or with `community`, that the
 /// community's use of them did.
-pub async fn announce(
-    client: &async_nats::Client,
-    community: Option<CommunityId>,
-) -> crate::Result<()> {
+pub async fn announce(bus: &aspen_bus::Bus, community: Option<CommunityId>) -> crate::Result<()> {
     let payload = serde_json::to_vec(&Change { community })?;
-    client
-        .publish(CHANGED_SUBJECT, payload.into())
+    bus.publish(CHANGED_SUBJECT, payload.into())
         .await
         .map_err(|e| crate::Error::Plugin(e.to_string()))?;
-    client
-        .flush()
+    bus.flush()
         .await
         .map_err(|e| crate::Error::Plugin(e.to_string()))?;
     Ok(())

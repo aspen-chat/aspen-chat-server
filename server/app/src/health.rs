@@ -5,9 +5,7 @@
 //! however many requests arrive: each of them takes the one answer.
 
 use crate::context::GlobalServerContext;
-use async_nats::connection::State;
 use diesel_async::RunQueryDsl;
-use fred::interfaces::ClientLike;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 
@@ -84,13 +82,13 @@ async fn check(state: &GlobalServerContext) -> Readiness {
     };
     let (database, valkey) = tokio::join!(
         timeout(ANSWER_WITHIN, database),
-        timeout(ANSWER_WITHIN, state.valkey.ping::<String>(None)),
+        timeout(ANSWER_WITHIN, state.ephemeral.ping()),
     );
     Readiness {
         database: matches!(database, Ok(Some(_))),
         // The client's own account of its connection, which it keeps with pings of its own:
         // nothing is sent here.
-        nats: state.nats_context.client().connection_state() == State::Connected,
+        nats: state.bus.connected(),
         valkey: matches!(valkey, Ok(Ok(_))),
     }
 }

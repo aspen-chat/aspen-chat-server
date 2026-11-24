@@ -226,7 +226,8 @@ they read any other (see [Signing in abroad](../federation/signing-in-abroad.md)
 A provider that supports OpenID Connect Back-Channel Logout posts a logout token to
 `POST /auth/oidc/back-channel-logout` when someone signs out there or is removed. The server
 verifies it (a `typ` of `logout+jwt` when it has one, an asymmetric signature by the one provider of
-its issuer, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`) and ends:
+its issuer, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`, which
+PostgreSQL remembers in `used_once`) and ends:
 
 - the sign-ins made through that provider with its session id (`sid`), when the token names one;
 - otherwise every sign-in made through that provider by the account its `sub` is linked to.

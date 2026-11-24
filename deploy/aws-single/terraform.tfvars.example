@@ -1,9 +1,0 @@
-region = "eu-central-1"
-
-# `public_url` becomes https://chat.example.org, for good. The hosted zone must hold it.
-domain          = "chat.example.org"
-route53_zone_id = "Z0123456789ABCDEFGHIJ"
-acme_email      = "admin@example.org"
-
-# The release to run: a tag of ghcr.io/aspen-chat/aspen-api and aspen-voice.
-image_tag = "TAG"

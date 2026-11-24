@@ -1,7 +1,8 @@
 # Installing Aspen
 
 Follow these steps in order to set up a deployment, from the services it needs to its first
-administrator.
+administrator. For a small deployment on one machine, rented or your own,
+[Ultra Lite](../ultra-lite/index.md) is all of it in one program instead.
 
 ## Steps
 
@@ -20,11 +21,8 @@ administrator.
 These steps can be written down once and applied by a tool:
 
 - [Container images](../../../deploy/README.md#the-images) of both servers, with the web client.
-- [One machine](../../../deploy/box/README.md), rented or your own: `aspen-box` sets up a whole
-  small deployment on it and checks it.
-- [A deployment on AWS](../../../deploy/aws/README.md), described for OpenTofu, and
-  [a small one on a single machine](../../../deploy/aws-single/README.md). Both are prototypes: they
-  have been planned and never applied.
+- [A deployment on AWS](../../../deploy/aws/README.md), described for OpenTofu. It is a prototype:
+  it has been planned and never applied.
 
 ## Securing and maintaining
 

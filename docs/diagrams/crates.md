@@ -25,6 +25,7 @@ flowchart LR
         webpush["aspen_webpush<br/>RFC 8291 and 8292"]
         fed_core["aspen_federation_core<br/>JWS, gates' policy"]
         email_tpl["aspen_email_templates"]
+        ephemeral["aspen_ephemeral<br/>short-lived shared state:<br/>keys, buckets, mana (Valkey)"]
     end
 
     subgraph foundation["What every layer speaks"]
@@ -38,7 +39,7 @@ flowchart LR
 
     bin --> api --> app
     bin --> app
-    app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl
+    app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl & ephemeral
     link_preview --> outbound
     plugin_rt & fed_core & link_preview --> wire
     api & app --> wire & locale
@@ -62,7 +63,7 @@ flowchart LR
 
 ## Every binary
 
-Four binaries come out of the workspace. The crates they share are the protocol between the API
+Five binaries come out of the workspace. The crates they share are the protocol between the API
 server and the voice server, and the plumbing every server needs.
 
 ```mermaid
@@ -72,6 +73,7 @@ flowchart TB
         voice_server["voice_server<br/>rooms, signalling, STUN and TURN"]
         migrate["aspen-migrate<br/>migrations and their registry"]
         bench["aspen-bench<br/>(crate aspen_bench): load generator"]
+        ul["aspen-ul<br/>a deployment in one program"]
     end
 
     app["aspen_app<br/>(and everything beneath it)"]
@@ -84,16 +86,19 @@ flowchart TB
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
     sockets["aspen_sockets<br/>dual-stack listeners"]
     tls["aspen_tls<br/>TLS files, NATS connections"]
+    bus["aspen_bus<br/>the message bus: subjects,<br/>streams, buckets"]
     config_values["aspen_config_values<br/>lists and tables in settings"]
     bench_protocol["aspen_bench_protocol<br/>seeding and suspension messages"]
 
-    chat --> app & voice_protocol & limits & metrics & sockets & bench_protocol
-    app --> database & voice_protocol & tls & config_values & bench_protocol
-    voice_server --> voice_protocol & voice_media & limits & metrics & sockets & tls & config_values
+    chat --> app & voice_protocol & limits & bus & metrics & sockets & bench_protocol
+    ul --> chat & voice_server & migrate & app & bus & sockets
+    app --> database & voice_protocol & tls & bus & config_values & bench_protocol
+    voice_server --> voice_protocol & voice_media & limits & bus & metrics & sockets & tls & config_values
     migrate --> database & search_text
-    bench --> voice_protocol & voice_media & limits & metrics & bench_protocol
+    bench --> voice_protocol & voice_media & limits & bus & metrics & bench_protocol
     voice_media --> voice_protocol & sockets & str0m
     voice_protocol --> limits
+    limits --> bus
     database --> metrics
 ```
 

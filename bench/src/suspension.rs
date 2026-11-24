@@ -13,7 +13,7 @@ const SUSPENSION_MARGIN: Duration = Duration::from_secs(600);
 pub async fn suspend_limits(
     profile: &Profile,
     planned: Duration,
-) -> Result<Option<(async_nats::jetstream::kv::Store, Suspension)>, String> {
+) -> Result<Option<(aspen_bus::Bucket, Suspension)>, String> {
     let limits = &profile.limits;
     if !limits.suspend {
         return Ok(None);
@@ -29,7 +29,7 @@ pub async fn suspend_limits(
     let client = async_nats::connect_with_options(url, options)
         .await
         .map_err(|e| format!("could not connect to NATS at {url}: {e}"))?;
-    let store = suspension::bucket(client).await?;
+    let store = suspension::bucket(&aspen_bus::Bus::Nats(aspen_bus::Nats::new(client))).await?;
     let started_at = suspension::now_ms();
     let record = Suspension {
         started_at,
@@ -55,7 +55,7 @@ pub async fn suspend_limits(
 }
 
 /// Withdraws the suspension, unless someone has replaced it meanwhile.
-pub async fn resume_limits(store: &async_nats::jetstream::kv::Store, ours: &Suspension) {
+pub async fn resume_limits(store: &aspen_bus::Bucket, ours: &Suspension) {
     match suspension::read(store).await {
         Ok(Some(current)) if &current == ours => match suspension::clear(store).await {
             Ok(()) => eprintln!("rate limits are in force again"),

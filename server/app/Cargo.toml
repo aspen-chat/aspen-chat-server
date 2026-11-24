@@ -36,7 +36,7 @@ schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }
 time = "0.3.47"
 vecmap-rs = "0.2.4"
 emojis = "0.8.0"
-fred = { version = "10.1.0", features = ["i-config", "i-scripts", "enable-rustls"] }
+fred = { version = "10.1.0", features = ["i-config", "enable-rustls"] }
 # Without their default features, which add a second, older rustls and hyper, SigV4a's
 # elliptic curves, and AWS SSO sign-in, none of which a bucket reached with a static key needs.
 aws-config = { version = "1.8.8", default-features = false, features = ["default-https-client", "rt-tokio"] }
@@ -55,6 +55,8 @@ hmac = "0.12"
 sha1 = "0.10"
 data-encoding = "2.9"
 subtle = "2.6"
+aspen_bus = { version = "0.1.0", path = "../../bus" }
+aspen_ephemeral = { version = "0.1.0", path = "../ephemeral" }
 aspen_config_values = { version = "0.1.0", path = "../../config_values" }
 aspen_limits = { version = "0.1.0", path = "../../limits" }
 aspen_metrics = { version = "0.1.0", path = "../../metrics", features = ["jemalloc"] }

@@ -1,41 +1,44 @@
 #!/usr/bin/env python3
-"""Moves a deployment that runs on one machine, a box, to this configuration, in three steps with
-a `tofu apply` of this configuration after each of the first two:
+"""Moves an Ultra Lite deployment (`aspen-ul`) to this configuration, in three steps with a
+`tofu apply` of this configuration after each of the first two:
 
-    migrate.py prepare --from-single    while the old deployment serves: point this configuration
-    migrate.py prepare --from-box       at its address, and, from ../aws-single, its storage
-    migrate.py copy [--export DIR]      stop the old deployment, and copy it here
+    migrate.py prepare --domain D       while the old deployment serves: point this configuration
+                                        at its address
+    migrate.py copy --export DIR        once it is stopped and exported, copy it here
     migrate.py finish                   once this deployment serves: let go of the old one
 
-A box made with ../aws-single keeps its files in a bucket, which this deployment takes over, so
-only its database is copied, and `copy` runs the box's export on its machine itself. Any other
-box is exported on its machine (`aspen-box export DIR`), and `copy --export DIR` copies its
-database and its files here from that directory.
+Ultra Lite is exported on its machine (`aspen-ul export DIR`), and `copy --export DIR` copies its
+database here from that directory and uploads its files, each kept with the type and disposition
+it is served with, by `aspen-chat-server storage import` from the API image (`--image`), run in
+Docker on this machine with the AWS command line's credentials.
 
-README.md#moving-a-box-here is the whole procedure. Each step says what to do next, and may be
-run again if it fails part of the way. It needs `tofu`, the AWS command line, and the
-credentials the configurations are applied with.
+README.md#moving-ultra-lite-here is the whole procedure. Each step says what to do next, and may
+be run again if it fails part of the way. It needs `tofu`, the AWS command line, Docker, and the
+credentials the configuration is applied with.
 """
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 # Written by `prepare` into this configuration's directory: the variables the old deployment
-# decides, and, from ../aws-single, the two things of its that this one imports rather than
-# makes.
+# decides.
 VARIABLES_FILE = "migration.auto.tfvars.json"
-IMPORTS_FILE = "adopt_media.tf"
-# Where the move stands: where it is from, and, once copied, what the old deployment held.
+# Where the move stands: once copied, what the old deployment held.
 STATE_FILE = "migration.json"
-# Where ../aws-single's box is exported on its machine, on its data volume.
-SINGLE_EXPORT = "/data/aspen/export"
-AWS_CLI = "public.ecr.aws/aws-cli/aws-cli:latest"
+# The name Ultra Lite registers its own voice server under, whose registration comes with its
+# database (server/ul/src/main.rs's `VOICE_NAME`).
+UL_VOICE = "aspen-ul"
+# The variables of the AWS command line's credentials that reach the import's container, by name.
+AWS_VARIABLES = ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
 
 
 class Failed(Exception):
@@ -50,23 +53,11 @@ def run(*command: str, capture: bool = False) -> str:
     return done.stdout if capture else ""
 
 
-def output(directory: pathlib.Path, name: str, missing: str) -> dict:
-    """One output of the configuration applied in `directory`."""
-    outputs = json.loads(run("tofu", f"-chdir={directory}", "output", "-json", capture=True))
-    if name not in outputs:
-        raise Failed(missing)
-    return outputs[name]["value"]
-
-
-def single(opt: argparse.Namespace) -> dict:
-    return output(
-        opt.single, "handover",
-        f"{opt.single} has no `handover` output: apply it once with this release of the configuration",
-    )  # fmt: skip
-
-
 def fleet(opt: argparse.Namespace) -> dict:
-    return output(opt.fleet, "migration", f"{opt.fleet} has not been applied: run `prepare`, then `tofu apply` there")
+    outputs = json.loads(run("tofu", f"-chdir={opt.fleet}", "output", "-json", capture=True))
+    if "migration" not in outputs:
+        raise Failed(f"{opt.fleet} has not been applied: run `prepare`, then `tofu apply` there")
+    return outputs["migration"]["value"]
 
 
 def variable(directory: pathlib.Path, expression: str):
@@ -99,14 +90,6 @@ def write_variables(opt: argparse.Namespace, variables: dict) -> None:
     (opt.fleet / VARIABLES_FILE).write_text(json.dumps(variables, indent=2) + "\n")
 
 
-def on_machine(opt: argparse.Namespace, source: dict, *command: str, capture: bool = False) -> str:
-    """Runs a command on the machine of a deployment made with ../aws-single."""
-    return run(
-        sys.executable, str(opt.single / "on_machine.py"), "--region", source["region"], "--instance", source["instance"],
-        "--", *command, capture=capture,
-    )  # fmt: skip
-
-
 def run_task(target: dict, task: str, prefix: str, *command: str) -> None:
     """Runs one of this deployment's tasks to its end, on Fargate."""
     run(
@@ -119,106 +102,43 @@ def run_task(target: dict, task: str, prefix: str, *command: str) -> None:
 
 
 def prepare(opt: argparse.Namespace) -> None:
-    if opt.from_single:
-        source = single(opt)
-        write_variables(opt, {
-            "region": source["region"],
-            # The address is the deployment: its federation domain and its passkeys.
-            "domain": source["domain"],
-            "route53_zone_id": source["route53_zone_id"],
-            "media_bucket": source["bucket"],
-            # The old deployment keeps the name until `copy` has run.
-            "public_dns": False,
-        })  # fmt: skip
-        (opt.fleet / IMPORTS_FILE).write_text(
-            "# Written by migrate.py: the storage of the deployment this one replaces, kept rather\n"
-            "# than copied. `finish` removes this file.\n"
-            f'import {{\n  to = module.media.aws_s3_bucket.media\n  id = "{source["bucket"]}"\n}}\n\n'
-            f'import {{\n  to = module.media.aws_cloudfront_distribution.media\n  id = "{source["distribution_id"]}"\n}}\n'
-        )
-        # Checked with the files above in place, which give the variables that have no default.
-        run("tofu", f"-chdir={opt.fleet}", "init", "-input=false", capture=True)
-        name = variable(opt.fleet, "var.name")
-        if name == source["name"]:
-            raise Failed(
-                f"both deployments are named {name!r}, and they exist side by side until `finish`: "
-                f"set `name` in {opt.fleet}/terraform.tfvars to another"
-            )
-    else:
-        if not opt.domain:
-            raise Failed("give the box's domain: --domain chat.example.org")
-        write_variables(opt, {"domain": opt.domain, "public_dns": False})
-        run("tofu", f"-chdir={opt.fleet}", "init", "-input=false", capture=True)
-        for needed, why in (("region", ""), ("route53_zone_id", ", the hosted zone that holds the box's domain")):
-            try:
-                variable(opt.fleet, f"var.{needed}")
-            except Failed:
-                raise Failed(f"set `{needed}`{why} in {opt.fleet}/terraform.tfvars") from None
-    # The box's own voice server is registered as `voice`, and its registration comes with the
-    # database.
-    if "voice" in variable(opt.fleet, "keys(var.voice_servers)"):
-        raise Failed("the box's voice server is registered as 'voice', which comes with its database: call none of `voice_servers` that")
-    save_state(opt, {"from": "single" if opt.from_single else "box"})
-    copying = (
-        "Then run `copy`, which stops the old deployment."
-        if opt.from_single
-        else "Then, on the box's machine, `aspen-box export DIR`, which stops it. Copy DIR to this\n"
-        "machine, keeping it where only you can read it, and run `copy --export DIR`."
-    )
+    # The address is the deployment: its federation domain and its passkeys. The old deployment
+    # keeps the name until `copy` has run.
+    write_variables(opt, {"domain": opt.domain, "public_dns": False})
+    run("tofu", f"-chdir={opt.fleet}", "init", "-input=false", capture=True)
+    for needed, why in (("region", ""), ("route53_zone_id", ", the hosted zone that holds the domain")):
+        try:
+            variable(opt.fleet, f"var.{needed}")
+        except Failed:
+            raise Failed(f"set `{needed}`{why} in {opt.fleet}/terraform.tfvars") from None
+    if UL_VOICE in variable(opt.fleet, "keys(var.voice_servers)"):
+        raise Failed(f"Ultra Lite's voice server is registered as {UL_VOICE!r}, which comes with its database: "
+                     "call none of `voice_servers` that")  # fmt: skip
+    save_state(opt, {})
     print(
-        f"Wrote {VARIABLES_FILE}{f' and {IMPORTS_FILE}' if opt.from_single else ''} in {opt.fleet}.\n\n"
+        f"Wrote {VARIABLES_FILE} in {opt.fleet}.\n\n"
         f"Next, in {opt.fleet}, with no `image_tag` set:\n\n"
         "    tofu apply\n\n"
-        + (
-            "The plan imports the bucket and the distribution and changes the distribution in\n"
-            "place. It must not replace or destroy either. "
-            if opt.from_single
-            else ""
-        )
-        + f"The old deployment goes on serving.\n{copying}"
+        "The old deployment goes on serving. Then, on its machine, `sudo systemctl stop aspen-ul` and\n"
+        "`sudo aspen-ul export DIR`. Copy DIR to this machine, keeping it where only you can read it,\n"
+        "and run `copy --export DIR`."
     )
 
 
 def copy(opt: argparse.Namespace) -> None:
     moving, target = state(opt), fleet(opt)
-    if moving["from"] == "single":
-        source = single(opt)
-        if not opt.yes:
-            answer = input(f"This stops the deployment at https://{source['domain']} until the new one is released. Type the domain to go on: ")
-            if answer.strip() != source["domain"]:
-                raise Failed("not confirmed")
-        print("Stopping the old deployment and exporting its database…", flush=True)
-        # On the machine, as its role, which may write the bucket. The dump is not left there:
-        # the data volume is kept, as the way back, after the deployment is gone.
-        on_machine(opt, source, "sh", "-ec", "\n".join([
-            f"rm -rf {SINGLE_EXPORT}",
-            f"aspen-box export {SINGLE_EXPORT} --database-only --yes",
-            f"docker run --rm --network host -e AWS_REGION={source['region']} -v {SINGLE_EXPORT}:/export:ro "
-            f"{AWS_CLI} s3 cp /export/database.dump {target['dump']} --only-show-errors",
-            f"rm {SINGLE_EXPORT}/database.dump",
-        ]))  # fmt: skip
-        exported = json.loads(on_machine(opt, source, "cat", f"{SINGLE_EXPORT}/export.json", capture=True))
-    else:
-        if not opt.export:
-            raise Failed("give the directory `aspen-box export` wrote, copied to this machine: --export DIR")
-        exported = json.loads((opt.export / "export.json").read_text())
-        if exported["domain"] != target["domain"]:
-            raise Failed(f"{opt.export} is an export of {exported['domain']}, and this deployment is {target['domain']}")
+    exported = ul_export(json.loads((opt.export / "export.json").read_text()))
+    if exported["domain"] != target["domain"]:
+        raise Failed(f"{opt.export} is an export of {exported['domain']}, and this deployment is {target['domain']}")
     clash = set(exported["voice_servers"]) & set(target["voice_servers"])
     if clash:
         raise Failed(
             f"the old deployment's voice servers {sorted(clash)} have the names of this one's, and their registrations "
             "come with the database: rename this one's in `voice_servers`, `tofu apply`, and run `copy` again"
         )
-    if moving["from"] == "box":
-        print("Copying the database into the bucket…", flush=True)
-        run("aws", "--region", target["region"], "s3", "cp", str(opt.export / "database.dump"), target["dump"], "--only-show-errors")
-        if exported["files"]:
-            print("Copying people's files into the bucket…", flush=True)
-            run(
-                "aws", "--region", target["region"], "s3", "sync", str(opt.export / "files"), f"s3://{target['bucket']}",
-                "--exclude", "migration/*", "--only-show-errors",
-            )  # fmt: skip
+    print("Copying the database into the bucket…", flush=True)
+    run("aws", "--region", target["region"], "s3", "cp", str(opt.export / "database.dump"), target["dump"], "--only-show-errors")
+    import_files(opt, target, exported)
     print("Restoring the database into the new deployment…", flush=True)
     run_task(target, target["restore_task"], "restore")
     save_state(opt, {**moving, "voice_servers": exported["voice_servers"]})
@@ -232,6 +152,60 @@ def copy(opt: argparse.Namespace) -> None:
         "When the deployment answers at its address, run `finish`. To go back instead, see\n"
         "README.md#going-back."
     )
+
+
+def ul_export(exported: dict) -> dict:
+    """What an Ultra Lite export's `export.json` (`server/ul/src/export.rs`) says of it."""
+    if exported.get("format") != 1:
+        raise Failed(f"this export is of format {exported.get('format')}, which this migrate.py does not know")
+    voice = exported.get("voiceServer")
+    return {
+        "domain": urllib.parse.urlsplit(exported["publicUrl"]).hostname,
+        "voice_servers": [voice["name"]] if voice else [],
+        "files_in_s3": exported["files"] == "s3",
+    }
+
+
+def import_files(opt: argparse.Namespace, target: dict, exported: dict) -> None:
+    """Uploads an Ultra Lite export's files into this deployment's bucket, each with the type and
+    disposition it is served with, by `aspen-chat-server storage import` from the API image, as
+    this machine's user and with the AWS command line's credentials. Run again, it uploads only
+    what is not there yet."""
+    if exported["files_in_s3"]:
+        if not opt.files_copied:
+            raise Failed(
+                "the old deployment keeps its files in object storage, which the export does not hold. Copy them into "
+                f"s3://{target['bucket']} with `aws s3 sync s3://<its bucket> s3://{target['bucket']} --exclude 'migration/*'` "
+                "(a copy between buckets keeps each file's type), then run `copy --export DIR --files-copied`"
+            )
+        return
+    print("Uploading people's files into the bucket…", flush=True)
+    aws = pathlib.Path.home() / ".aws"
+    with tempfile.TemporaryDirectory() as settings:
+        # What `storage import` reads is the storage alone; the rest names nothing it reaches.
+        pathlib.Path(settings, "aspen.toml").write_text(
+            f'public_url = "https://{target["domain"]}"\n'
+            'database_url = "postgres://unused.invalid/aspen"\n'
+            'nats_url = "nats://unused.invalid"\nnats_auth_token = "unused"\n'
+            'valkey_url = "redis://unused.invalid"\n'
+            "[media.s3]\n"
+            f'endpoint = "https://s3.{target["region"]}.amazonaws.com"\n'
+            f'region = "{target["region"]}"\nbucket = "{target["bucket"]}"\n'
+            f'public_base_url = "https://{target["domain"]}"\n'
+        )
+        os.chmod(settings, 0o755)
+        credentials = ["-v", f"{aws}:/aws:ro", "-e", "AWS_CONFIG_FILE=/aws/config",
+                       "-e", "AWS_SHARED_CREDENTIALS_FILE=/aws/credentials"] if aws.is_dir() else []  # fmt: skip
+        run(
+            "docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp",
+            "-e", f"AWS_REGION={target['region']}",
+            # The keys reach the container through its environment, never a command line, which any
+            # user of the machine may read.
+            *[flag for name in AWS_VARIABLES if name in os.environ for flag in ("-e", name)],
+            *credentials,
+            "-v", f"{settings}:/etc/aspen:ro", "-v", f"{opt.export.resolve()}:/export:ro",
+            opt.image, "aspen-chat-server", "storage", "import", "/export",
+        )  # fmt: skip
 
 
 def finish(opt: argparse.Namespace) -> None:
@@ -259,45 +233,27 @@ def finish(opt: argparse.Namespace) -> None:
                 "Remove it from the dashboard's Server fleet tab, or run this step again in a few minutes.",
                 file=sys.stderr,
             )
-    if moving["from"] == "single":
-        source = single(opt)
-        held = set(run("tofu", f"-chdir={opt.single}", "state", "list", capture=True).split())
-        kept = [address for address in source["kept"] if address in held]
-        if kept:
-            run("tofu", f"-chdir={opt.single}", "state", "rm", *kept)
-        (opt.fleet / IMPORTS_FILE).unlink(missing_ok=True)
-        print(
-            f"\nThe old deployment no longer holds the storage, the name, or its data volume.\n"
-            f"Take the rest of it down, in {opt.single}:\n\n"
-            "    tofu destroy\n\n"
-            f"Its data volume, {source['data_volume']}, and the snapshots of it are kept: they are the\n"
-            "old deployment. Delete them in the EC2 console once the new deployment has run a while.\n"
-            f"Keep {VARIABLES_FILE} in {opt.fleet}: `media_bucket` in it is this deployment's bucket."
-        )
-    else:
-        print(
-            "\nThe old voice servers' registrations are gone. Take the box down on its machine with\n"
-            "`aspen-box down`, and any voice servers it had elsewhere on theirs. Keep the box's\n"
-            "directory, and the export, until the new deployment has run a while: they are the old\n"
-            f"deployment. Keep {VARIABLES_FILE} in {opt.fleet}: `domain` is in it."
-        )
+    print(
+        "\nThe old voice server's registration is gone. On the Ultra Lite machine, keep it from\n"
+        "starting again with `sudo systemctl disable aspen-ul`. Keep its data directory, and the\n"
+        "export, until the new deployment has run a while: they are the old deployment. Keep\n"
+        f"{VARIABLES_FILE} in {opt.fleet}: `domain` is in it."
+    )
     (opt.fleet / STATE_FILE).unlink(missing_ok=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--single", type=pathlib.Path, default=HERE.parent / "aws-single",
-                        help="the configuration directory of a deployment made with ../aws-single")  # fmt: skip
     parser.add_argument("--fleet", type=pathlib.Path, default=HERE, help="this configuration's directory")
     steps = parser.add_subparsers(dest="step", required=True)
-    ready = steps.add_parser("prepare")
-    origin = ready.add_mutually_exclusive_group(required=True)
-    origin.add_argument("--from-single", action="store_true", help="a deployment made with ../aws-single")
-    origin.add_argument("--from-box", action="store_true", help="any other box")
-    ready.add_argument("--domain", help="the box's domain (--from-box)")
+    steps.add_parser("prepare").add_argument("--domain", required=True, help="the Ultra Lite deployment's domain")
     copied = steps.add_parser("copy")
-    copied.add_argument("--export", type=pathlib.Path, help="the directory `aspen-box export` wrote (--from-box)")
-    copied.add_argument("--yes", action="store_true", help="do not ask before stopping the old deployment")
+    copied.add_argument("--export", type=pathlib.Path, required=True,
+                        help="the directory `aspen-ul export` wrote, copied to this machine")  # fmt: skip
+    copied.add_argument("--image", default="ghcr.io/aspen-chat/aspen-api:main",
+                        help="the API image whose `storage import` uploads the export's files")  # fmt: skip
+    copied.add_argument("--files-copied", action="store_true",
+                        help="the files of an Ultra Lite deployment on object storage are copied into this one's bucket")  # fmt: skip
     steps.add_parser("finish").add_argument("--force", action="store_true", help="let go of the old deployment though the new one does not answer")
     opt = parser.parse_args()
     {"prepare": prepare, "copy": copy, "finish": finish}[opt.step](opt)

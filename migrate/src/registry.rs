@@ -141,4 +141,6 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261111_145810_held_message_list_by_id::M,
     &migrations::m20261116_034814_voice_participant_held::M,
     &migrations::m20261116_101740_shrink_icons::M,
+    &migrations::m20261119_172748_used_once::M,
+    &migrations::m20261119_173448_attempt_count::M,
 ];

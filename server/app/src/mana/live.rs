@@ -13,7 +13,6 @@ use crate::ChannelId;
 use crate::context::GlobalServerContext;
 use crate::events::{ChannelHome, channel_home, dm_recipients};
 use crate::typing::{Audience, EphemeralEvent, Relay};
-use fred::interfaces::KeysInterface;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -32,19 +31,18 @@ static TRAILING: LazyLock<Mutex<HashSet<ChannelId>>> = LazyLock::new(Default::de
 
 /// Tells viewers of `pool` its `level` after a spend, or as the window ends.
 pub async fn changed(state: &GlobalServerContext, pool: &Pool, level: Level) {
-    let first: Result<Option<String>, _> = state
-        .valkey
+    let first = state
+        .ephemeral
         .set(
-            format!("mana:{}:told", pool.channel.0),
+            &format!("mana:{}:told", pool.channel.0),
             1,
-            Some(fred::types::Expiration::PX(
+            Some(aspen_ephemeral::Expiry::Millis(
                 i64::try_from(EVERY.as_millis()).unwrap_or(i64::MAX),
             )),
-            Some(fred::types::SetOptions::NX),
-            false,
+            Some(aspen_ephemeral::Condition::Absent),
         )
         .await;
-    if !matches!(first, Ok(None)) {
+    if !matches!(first, Ok(false)) {
         tell(state.clone(), *pool, level);
         return;
     }
@@ -199,12 +197,7 @@ fn tell(state: GlobalServerContext, pool: Pool, level: Level) {
                 return;
             }
         };
-        if let Err(e) = state
-            .nats_context
-            .client()
-            .publish(MANA_SUBJECT, payload.into())
-            .await
-        {
+        if let Err(e) = state.bus.publish(MANA_SUBJECT, payload.into()).await {
             warn!(error = %e, "could not publish a channel's mana");
         }
     });

@@ -756,11 +756,10 @@ pub async fn retire(
         .await?;
     // Its copy is no use to anyone once they are gone; should the deletion roll back, the next
     // time they come online copies it again.
-    let _: Result<(), _> = fred::interfaces::KeysInterface::del::<(), _>(
-        &state.valkey,
-        crate::presence_override::override_key(id),
-    )
-    .await;
+    let _ = state
+        .ephemeral
+        .del(crate::presence_override::override_key(id))
+        .await;
     // What plugins kept about them goes with them.
     crate::plugin::storage::forget(conn, crate::plugin::storage::Scope::User(id)).await?;
     diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))

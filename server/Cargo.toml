@@ -5,6 +5,7 @@ edition = "2024"
 license = "MPL-2.0"
 
 [dependencies]
+axum = { version = "0.8.4", features = ["macros", "ws"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive"] }
 ctrlc = { version = "3.4.6", features = ["termination"] }
@@ -25,10 +26,10 @@ hyper = { version = "1.6.0", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "server-auto", "server-graceful"] }
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }
 tokio-rustls = "0.26.2"
-async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
 anyhow = "1.0.102"
 log = "0.4.27"
 time = "0.3.47"
+aspen_bus = { version = "0.1.0", path = "../bus" }
 aspen_limits = { version = "0.1.0", path = "../limits" }
 aspen_sockets = { version = "0.1.0", path = "../sockets" }
 voice_protocol = { path = "../voice_protocol" }

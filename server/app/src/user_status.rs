@@ -44,11 +44,10 @@ use crate::presence_override::PresenceOverride;
 use crate::presence_upkeep::ListingTimes;
 use crate::user::UserPg;
 use crate::{CommunityId, UserId};
+use aspen_ephemeral::{Condition, Ephemeral, Pipeline, Ttl};
 use aspen_wire::user::UserOnlineStatus;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::{KeysInterface, SortedSetsInterface};
-use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -143,14 +142,14 @@ pub fn seen_by_others(status: UserOnlineStatus) -> UserOnlineStatus {
 /// are told to those watching them (`app::presence_feed`).
 pub fn mark_active(state: &GlobalServerContext, user: UserId) {
     let feed = state.presence_feed.clone();
-    let valkey = state.valkey.clone();
+    let ephemeral = state.ephemeral.clone();
     let key = active_key(user);
     let seconds = state.config.presence.away_after_seconds;
     let ttl = i64::try_from(seconds).unwrap_or(i64::MAX);
     tokio::spawn(async move {
         // Setting the key answers its previous value, which says whether they were away.
-        match valkey
-            .set::<Option<i64>, _, i64>(key, 1, Some(Expiration::EX(ttl)), None, true)
+        match ephemeral
+            .set_previous::<i64>(&key, 1, Some(aspen_ephemeral::Expiry::Seconds(ttl)), None)
             .await
         {
             Ok(previous) => {
@@ -168,21 +167,15 @@ pub fn mark_active(state: &GlobalServerContext, user: UserId) {
 /// Lists `user`, who just joined `community`, in its set for as long as an `active` key of theirs
 /// can last, since their listings elsewhere may not be due for renewal. Fire and forget.
 pub fn list_in_community(state: &GlobalServerContext, user: UserId, community: CommunityId) {
-    let valkey = state.valkey.clone();
+    let ephemeral = state.ephemeral.clone();
     let lifetime = community_set_lifetime(state);
     tokio::spawn(async move {
         let key = community_online_key(community);
         let until = chrono::Utc::now().timestamp().saturating_add(lifetime) as f64;
-        let pipeline = valkey.pipeline();
-        let listed: Result<Vec<fred::types::Value>, fred::error::Error> = async {
-            let () = pipeline
-                .zadd(&key, None, None, false, false, (until, user.0.to_string()))
-                .await?;
-            let () = pipeline.expire(&key, lifetime, None).await?;
-            pipeline.all().await
-        }
-        .await;
-        if let Err(e) = listed {
+        let mut pipeline = Pipeline::new();
+        pipeline.zadd(&key, vec![(until, user.0.to_string())]);
+        pipeline.expire(&key, lifetime);
+        if let Err(e) = ephemeral.run(pipeline).await {
             tracing::warn!(error = %e, "failed to list a new member as possibly online");
         }
     });
@@ -196,17 +189,12 @@ pub async fn online_candidates(
     community: CommunityId,
 ) -> crate::Result<Vec<UserId>> {
     let key = community_online_key(community);
-    // Scores are bounded as floats: fred reads an integer bound as a rank.
     let now = chrono::Utc::now().timestamp() as f64;
     // Pruning and reading go in one round trip.
-    let pipeline = state.valkey.pipeline();
-    let () = pipeline
-        .zremrangebyscore(&key, f64::NEG_INFINITY, now - 1.0)
-        .await?;
-    let () = pipeline
-        .zrangebyscore(&key, now, f64::INFINITY, false, None)
-        .await?;
-    let (_, listed): (i64, Vec<String>) = pipeline.all().await?;
+    let mut pipeline = Pipeline::new();
+    pipeline.zremrangebyscore(&key, f64::NEG_INFINITY, now - 1.0);
+    let listed = pipeline.zrangebyscore(&key, now, f64::INFINITY);
+    let listed = state.ephemeral.run(pipeline).await?.take(listed)?;
     Ok(listed
         .iter()
         .filter_map(|id| uuid::Uuid::parse_str(id).ok().map(UserId))
@@ -226,7 +214,7 @@ async fn having_status(
     let batches = futures_util::future::try_join_all(
         users
             .chunks(STATUS_BATCH)
-            .map(|batch| users_online_status(&state.valkey, batch.to_vec())),
+            .map(|batch| users_online_status(&state.ephemeral, batch.to_vec())),
     )
     .await?;
     Ok(batches
@@ -359,7 +347,7 @@ pub async fn statuses_for(
         .copied()
         .filter(|user| visible.contains(user))
         .collect();
-    let known = raw_statuses(&state.valkey, asked).await?;
+    let known = raw_statuses(&state.ephemeral, asked).await?;
     Ok(users
         .into_iter()
         .map(|user| {
@@ -391,22 +379,25 @@ pub async fn read_statuses(
 /// [`STATUS_BATCH`] at a time, the batches at once. What a person is told of someone else's
 /// goes through [`seen_by_others`] and a check that it is theirs to learn.
 pub async fn raw_statuses(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     users: Vec<UserId>,
 ) -> crate::Result<HashMap<UserId, UserOnlineStatus>> {
     let batches = futures_util::future::try_join_all(
         users
             .chunks(STATUS_BATCH)
-            .map(|batch| users_online_status(valkey, batch.to_vec())),
+            .map(|batch| users_online_status(ephemeral, batch.to_vec())),
     )
     .await?;
     Ok(batches.into_iter().flatten().collect())
 }
 
-/// How long a presence key has left, from Valkey's answer to `PTTL`: `None` for a key not set
-/// (-2) or set with no expiry (-1, an override that lasts until changed).
-fn time_left(pttl_millis: i64) -> Option<Duration> {
-    u64::try_from(pttl_millis).ok().map(Duration::from_millis)
+/// How long a presence key has left: `None` for a key not set or set with no expiry (an
+/// override that lasts until changed).
+fn time_left(ttl: Ttl) -> Option<Duration> {
+    match ttl {
+        Ttl::Left(left) => Some(left),
+        Ttl::NoKey | Ttl::NoExpiry => None,
+    }
 }
 
 /// What running out of each of a user's keys makes of their presence, in the order the keys are
@@ -419,7 +410,7 @@ const KEY_EXPIRIES: [Expiry; 3] = [Expiry::Connection, Expiry::Activity, Expiry:
 /// key and whether or not that server still runs. A key not set, or set with no expiry, is left
 /// out.
 pub async fn raw_statuses_with_expiries(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     users: Vec<UserId>,
 ) -> crate::Result<(
     HashMap<UserId, UserOnlineStatus>,
@@ -428,7 +419,7 @@ pub async fn raw_statuses_with_expiries(
     let batches = futures_util::future::try_join_all(
         users
             .chunks(STATUS_BATCH)
-            .map(|batch| users_presence_with_expiries(valkey, batch.to_vec())),
+            .map(|batch| users_presence_with_expiries(ephemeral, batch.to_vec())),
     )
     .await?;
     let mut statuses = HashMap::new();
@@ -443,7 +434,7 @@ pub async fn raw_statuses_with_expiries(
 /// As [`users_online_status`], with the time each key has left, read in the same round trip:
 /// the `MGET` and then a `PTTL` for each key, in one pipeline.
 async fn users_presence_with_expiries(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     user_ids: Vec<UserId>,
 ) -> crate::Result<Vec<(UserId, UserOnlineStatus, Vec<(Expiry, Duration)>)>> {
     if user_ids.is_empty() {
@@ -459,18 +450,14 @@ async fn users_presence_with_expiries(
             ]
         })
         .collect();
-    let pipeline = valkey.pipeline();
-    let () = pipeline.mget(keys.clone()).await?;
-    for key in &keys {
-        let () = pipeline.pttl(key.as_str()).await?;
-    }
-    let mut answers = pipeline.all::<Vec<fred::types::Value>>().await?.into_iter();
-    let values: Vec<Option<String>> = answers
-        .next()
-        .ok_or_else(|| fred::error::Error::new(fred::error::ErrorKind::Parse, "no MGET answer"))?
-        .convert()?;
-    let left: Vec<i64> = answers
-        .map(fred::types::Value::convert)
+    let mut pipeline = Pipeline::new();
+    let values = pipeline.mget(keys.clone());
+    let left: Vec<_> = keys.iter().map(|key| pipeline.pttl(key)).collect();
+    let mut answers = ephemeral.run(pipeline).await?;
+    let values = answers.take(values)?;
+    let left: Vec<Ttl> = left
+        .into_iter()
+        .map(|left| answers.take(left))
         .collect::<Result<_, _>>()?;
     Ok(user_ids
         .into_iter()
@@ -496,7 +483,7 @@ async fn users_presence_with_expiries(
 /// `connected_members`, through [`seen_by_others`]). What a person is told of someone's presence
 /// goes through `statuses_for`.
 async fn users_online_status(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     user_ids: Vec<UserId>,
 ) -> crate::Result<Vec<(UserId, UserOnlineStatus)>> {
     // MGET with no keys is a protocol error, so an empty batch is answered locally.
@@ -513,7 +500,7 @@ async fn users_online_status(
             ]
         })
         .collect();
-    let values: Vec<Option<String>> = valkey.mget(keys).await?;
+    let values = ephemeral.mget(keys).await?;
     Ok(user_ids
         .into_iter()
         .zip(
@@ -564,22 +551,22 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
         // not online yet is brought online by their arrival, which sets the key once their
         // override is copied (`app::presence_upkeep`). The other keys' time left is read in the
         // same round trip.
-        let pipeline = state.valkey.pipeline();
-        let marked: Result<(Option<i64>, i64, i64), fred::error::Error> = async {
-            let () = pipeline
-                .set(
-                    online_key(user),
-                    1,
-                    Some(Expiration::EX(ONLINE_TTL_SECONDS)),
-                    Some(SetOptions::XX),
-                    true,
-                )
-                .await?;
-            let () = pipeline.pttl(active_key(user)).await?;
-            let () = pipeline
-                .pttl(crate::presence_override::override_key(user))
-                .await?;
-            pipeline.all().await
+        let marked: aspen_ephemeral::Result<(Option<i64>, Ttl, Ttl)> = async {
+            let mut pipeline = Pipeline::new();
+            let renewed = pipeline.set_previous(
+                online_key(user),
+                1,
+                Some(aspen_ephemeral::Expiry::Seconds(ONLINE_TTL_SECONDS)),
+                Some(Condition::Present),
+            );
+            let active_left = pipeline.pttl(active_key(user));
+            let override_left = pipeline.pttl(crate::presence_override::override_key(user));
+            let mut answers = state.ephemeral.run(pipeline).await?;
+            Ok((
+                answers.take(renewed)?,
+                answers.take(active_left)?,
+                answers.take(override_left)?,
+            ))
         }
         .await;
         let (renewed, active_left, override_left) = match marked {
@@ -608,13 +595,12 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
         }
         if bot
             && let Err(e) = state
-                .valkey
-                .set::<(), _, i64>(
-                    active_key(user),
+                .ephemeral
+                .set(
+                    &active_key(user),
                     1,
-                    Some(Expiration::EX(ONLINE_TTL_SECONDS)),
+                    Some(aspen_ephemeral::Expiry::Seconds(ONLINE_TTL_SECONDS)),
                     None,
-                    false,
                 )
                 .await
         {
@@ -627,22 +613,20 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
 /// Sets `user`'s `online` key, and a bot's `active` key with it, for [`ONLINE_TTL_SECONDS`]: their
 /// arrival, once their override is copied (`app::presence_upkeep`).
 pub(crate) async fn set_online_keys(
-    valkey: &fred::clients::Client,
+    ephemeral: &Ephemeral,
     feed: &crate::presence_feed::PresenceFeed,
     user: UserId,
     bot: bool,
 ) -> crate::Result<()> {
-    let expiry = Some(Expiration::EX(ONLINE_TTL_SECONDS));
-    let () = valkey
-        .set(online_key(user), 1, expiry.clone(), None, false)
-        .await?;
+    let expiry = Some(aspen_ephemeral::Expiry::Seconds(ONLINE_TTL_SECONDS));
+    ephemeral.set(&online_key(user), 1, expiry, None).await?;
     feed.expires(
         user,
         Expiry::Connection,
         Duration::from_secs(ONLINE_TTL_SECONDS as u64),
     );
     if bot {
-        let () = valkey.set(active_key(user), 1, expiry, None, false).await?;
+        ephemeral.set(&active_key(user), 1, expiry, None).await?;
     }
     Ok(())
 }
@@ -682,10 +666,13 @@ mod tests {
 
     #[test]
     fn a_key_has_time_left_only_while_set_with_an_expiry() {
-        assert_eq!(time_left(-2), None);
-        assert_eq!(time_left(-1), None);
-        assert_eq!(time_left(0), Some(Duration::ZERO));
-        assert_eq!(time_left(1_500), Some(Duration::from_millis(1_500)));
+        assert_eq!(time_left(Ttl::NoKey), None);
+        assert_eq!(time_left(Ttl::NoExpiry), None);
+        assert_eq!(time_left(Ttl::Left(Duration::ZERO)), Some(Duration::ZERO));
+        assert_eq!(
+            time_left(Ttl::Left(Duration::from_millis(1_500))),
+            Some(Duration::from_millis(1_500))
+        );
     }
 
     #[test]

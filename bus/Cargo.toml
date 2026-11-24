@@ -1,0 +1,20 @@
+[package]
+name = "aspen_bus"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The message bus Aspen's servers share: subjects, streams and their consumers, and key-value buckets, over NATS JetStream."
+
+[dependencies]
+async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
+bytes = "1.11"
+futures-util = "0.3.31"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.18"
+time = "0.3.47"
+tokio = { version = "1.51.1", features = ["io-util", "macros", "net", "sync", "time"] }
+tracing = "0.1.41"
+
+[dev-dependencies]
+tokio = { version = "1.51.1", features = ["full"] }

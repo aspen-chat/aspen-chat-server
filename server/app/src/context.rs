@@ -24,8 +24,8 @@ pub enum Role {
 #[derive(Clone)]
 pub struct GlobalServerContext {
     pub connection_pool: Pool,
-    pub nats_context: Arc<async_nats::jetstream::Context>,
-    pub valkey: fred::clients::Client,
+    pub bus: aspen_bus::Bus,
+    pub ephemeral: aspen_ephemeral::Ephemeral,
     pub media_store: Arc<crate::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
     pub rate_limiter: Arc<crate::rate_limit::RateLimiter>,
@@ -113,65 +113,98 @@ const VALKEY_ANSWER_WITHIN: Duration = Duration::from_secs(1);
 const VALKEY_RECONNECT_MIN_MILLIS: u32 = 100;
 const VALKEY_RECONNECT_MAX_MILLIS: u32 = 5_000;
 
+/// Where a server's bus and short-lived store are.
+#[derive(Clone)]
+pub enum Backends {
+    /// NATS and Valkey, reached as the configuration says.
+    Connect,
+    /// These, which the process holds itself: a deployment of one server (`aspen-ul`).
+    InProcess {
+        bus: aspen_bus::Bus,
+        ephemeral: aspen_ephemeral::Ephemeral,
+    },
+}
+
 impl GlobalServerContext {
-    /// Connects to everything the server needs. `routes` are the API's routes, which the rate
-    /// limits are checked against.
+    /// Connects to everything the server needs, configured by `aspen.toml` and the environment.
+    /// `routes` are the API's routes, which the rate limits are checked against.
     pub async fn new(
         routes: &[crate::rate_limit::Route],
         role: Role,
     ) -> Result<Self, crate::Error> {
-        let config = load_config()?;
+        Self::with(routes, role, load_config()?, Backends::Connect).await
+    }
+
+    /// As [`new`](Self::new), configured by `config`, with the bus and short-lived store of
+    /// `backends`.
+    pub async fn with(
+        routes: &[crate::rate_limit::Route],
+        role: Role,
+        config: AspenConfig,
+        backends: Backends,
+    ) -> Result<Self, crate::Error> {
         crate::login::configure_password_work(
             config.auth.password_hashing_threads,
             Duration::from_secs(config.auth.password_hashing_wait_seconds),
         );
         let rate_limiter = crate::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
             .map_err(|message| crate::Error::Config(config::ConfigError::Message(message)))?;
-        let client = config.connect_nats().await?;
-        aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
-        aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
-        let context = async_nats::jetstream::new(client);
-        let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
-        // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
-        // `[valkey.tls]` without one.
-        if let Some(tls) = &config.valkey.tls {
-            let client = tls
-                .rustls_client_config("valkey.tls")
-                .map_err(|message| crate::Error::Config(config::ConfigError::Message(message)))?;
-            valkey_config.tls = Some(client.into());
-        }
-        // Commands are small and many are in flight at once; with Nagle's algorithm on, one sent
-        // while another is unacknowledged waits for Valkey's delayed ACK.
-        let valkey_connection = fred::types::config::ConnectionConfig {
-            tcp: fred::types::config::TcpConfig {
-                nodelay: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
+        let (bus, ephemeral) = match backends {
+            Backends::InProcess { bus, ephemeral } => (bus, ephemeral),
+            Backends::Connect => {
+                let client = config.connect_nats().await?;
+                aspen_tls::warn_if_nats_unencrypted(
+                    &config.nats_url,
+                    config.nats.tls.as_ref(),
+                    &client,
+                );
+                let bus = aspen_bus::Bus::Nats(aspen_bus::Nats::new(client));
+                let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)
+                    .map_err(aspen_ephemeral::Error::from)?;
+                // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
+                // `[valkey.tls]` without one.
+                if let Some(tls) = &config.valkey.tls {
+                    let client = tls.rustls_client_config("valkey.tls").map_err(|message| {
+                        crate::Error::Config(config::ConfigError::Message(message))
+                    })?;
+                    valkey_config.tls = Some(client.into());
+                }
+                // Commands are small and many are in flight at once; with Nagle's algorithm on, one sent
+                // while another is unacknowledged waits for Valkey's delayed ACK.
+                let valkey_connection = fred::types::config::ConnectionConfig {
+                    tcp: fred::types::config::TcpConfig {
+                        nodelay: Some(true),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                // Without a time limit a command sent while Valkey is away is never answered, and every
+                // request that counts a rate limit waits with it. With one, the command fails, and the
+                // request is let through or refused as its endpoint says (`app::rate_limit`).
+                let valkey_performance = fred::types::config::PerformanceConfig {
+                    default_command_timeout: VALKEY_ANSWER_WITHIN,
+                    ..Default::default()
+                };
+                // Tried again for as long as it takes, so Valkey restarting needs no server restarted.
+                // The first connection is not: a server whose `valkey_url` reaches nothing stops as it
+                // starts.
+                let valkey_reconnect = fred::types::config::ReconnectPolicy::new_exponential(
+                    0,
+                    VALKEY_RECONNECT_MIN_MILLIS,
+                    VALKEY_RECONNECT_MAX_MILLIS,
+                    2,
+                );
+                let valkey = fred::prelude::Client::new(
+                    valkey_config.clone(),
+                    Some(valkey_performance),
+                    Some(valkey_connection),
+                    Some(valkey_reconnect),
+                );
+                valkey.init().await.map_err(aspen_ephemeral::Error::from)?;
+                (bus, aspen_ephemeral::Ephemeral::Valkey(valkey))
+            }
         };
-        // Without a time limit a command sent while Valkey is away is never answered, and every
-        // request that counts a rate limit waits with it. With one, the command fails, and the
-        // request is let through or refused as its endpoint says (`app::rate_limit`).
-        let valkey_performance = fred::types::config::PerformanceConfig {
-            default_command_timeout: VALKEY_ANSWER_WITHIN,
-            ..Default::default()
-        };
-        // Tried again for as long as it takes, so Valkey restarting needs no server restarted.
-        // The first connection is not: a server whose `valkey_url` reaches nothing stops as it
-        // starts.
-        let valkey_reconnect = fred::types::config::ReconnectPolicy::new_exponential(
-            0,
-            VALKEY_RECONNECT_MIN_MILLIS,
-            VALKEY_RECONNECT_MAX_MILLIS,
-            2,
-        );
-        let valkey = fred::prelude::Client::new(
-            valkey_config.clone(),
-            Some(valkey_performance),
-            Some(valkey_connection),
-            Some(valkey_reconnect),
-        );
-        valkey.init().await?;
+        aspen_limits::suspension::watch(bus.clone(), rate_limiter.suspension().clone(), "api");
 
         let media_store = Arc::new(crate::media_store::MediaStore::new(&config).await?);
         // Built now so that a `public_url` no relying party can be made for stops the server as
@@ -205,7 +238,7 @@ impl GlobalServerContext {
             )
             .await?;
             // Before anything reads or publishes to the streams, which this makes.
-            crate::nats_memory::fit_locked(conn.as_mut(), &context, &nats_monitor, true).await?;
+            crate::nats_memory::fit_locked(conn.as_mut(), &bus, &nats_monitor, true).await?;
             (
                 crate::deployment_settings::load_with_icon(conn.as_mut()).await?,
                 crate::server_secret::CodeKey::load(conn.as_mut()).await?,
@@ -223,8 +256,8 @@ impl GlobalServerContext {
         };
 
         let presence_feed = crate::presence_feed::PresenceFeed::start(
-            context.client(),
-            valkey.clone(),
+            bus.clone(),
+            ephemeral.clone(),
             connection_pool.clone(),
             role == Role::Public,
         );
@@ -243,7 +276,7 @@ impl GlobalServerContext {
             presence_marked: crate::user_status::presence_marked(),
             presence_upkeep: crate::presence_upkeep::PresenceUpkeep::start(
                 connection_pool.clone(),
-                valkey.clone(),
+                ephemeral.clone(),
                 presence_feed.clone(),
                 crate::user_status::listing_times(&config.presence),
             ),
@@ -255,7 +288,7 @@ impl GlobalServerContext {
             connection_pool,
             event_feed: match role {
                 Role::Public => crate::event_feed::EventFeed::start(
-                    context.clone(),
+                    bus.clone(),
                     config.event_queue_size,
                     config.event_feed_shards,
                     config.event_retained_mib.saturating_mul(1 << 20),
@@ -263,8 +296,8 @@ impl GlobalServerContext {
                 ),
                 Role::PrivateWorker => crate::event_feed::EventFeed::idle(),
             },
-            nats_context: Arc::new(context),
-            valkey,
+            bus,
+            ephemeral,
             media_store,
             rate_limiter: Arc::new(rate_limiter),
             federation_client,

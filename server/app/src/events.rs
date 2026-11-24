@@ -312,13 +312,13 @@ pub fn channel_homes() -> ChannelHomes {
 /// kept as it is learned since a channel never moves. The server has it in its context; an
 /// operator command, which has no server context, makes a `Publisher`.
 pub trait Publishing: Sync {
-    fn nats(&self) -> &async_nats::jetstream::Context;
+    fn bus(&self) -> &aspen_bus::Bus;
     fn channel_homes(&self) -> &ChannelHomes;
 }
 
 impl Publishing for GlobalServerContext {
-    fn nats(&self) -> &async_nats::jetstream::Context {
-        &self.nats_context
+    fn bus(&self) -> &aspen_bus::Bus {
+        &self.bus
     }
 
     fn channel_homes(&self) -> &ChannelHomes {
@@ -329,24 +329,23 @@ impl Publishing for GlobalServerContext {
 /// Event publishing for an operator command run from the terminal, which changes the database
 /// as the server does and announces it the same way.
 pub struct Publisher {
-    nats: async_nats::jetstream::Context,
+    bus: aspen_bus::Bus,
     channel_homes: ChannelHomes,
 }
 
 impl Publisher {
     /// Connects to the event stream `config` names.
     pub async fn connect(config: &crate::aspen_config::AspenConfig) -> crate::Result<Self> {
-        let client = config.connect_nats().await?;
         Ok(Publisher {
-            nats: async_nats::jetstream::new(client),
+            bus: config.connect_bus().await?,
             channel_homes: channel_homes(),
         })
     }
 }
 
 impl Publishing for Publisher {
-    fn nats(&self) -> &async_nats::jetstream::Context {
-        &self.nats
+    fn bus(&self) -> &aspen_bus::Bus {
+        &self.bus
     }
 
     fn channel_homes(&self) -> &ChannelHomes {
@@ -1090,12 +1089,9 @@ pub async fn publish_events(
     acknowledged(sent).await
 }
 
-/// One copy of an event handed to NATS, with when it was sent, awaiting the stream's
+/// One copy of an event handed to the bus, with when it was sent, awaiting the stream's
 /// acknowledgement.
-type Sent = (
-    std::time::Instant,
-    async_nats::jetstream::context::PublishAckFuture,
-);
+type Sent = (std::time::Instant, aspen_bus::PublishAck);
 
 /// Waits for the stream to acknowledge every copy in `sent`.
 async fn acknowledged(sent: Vec<Sent>) -> crate::Result<()> {
@@ -1180,18 +1176,18 @@ async fn send_event(
     }
     let payload: bytes::Bytes = serde_json::to_string(event)?.into_bytes().into();
     let event_id = Uuid::now_v7().to_string();
-    let mut headers = async_nats::HeaderMap::new();
-    headers.insert(EVENT_ID_HEADER, event_id.as_str());
+    let mut headers = aspen_bus::Headers::new();
+    headers.insert(EVENT_ID_HEADER, event_id);
     if let Some(channel) = governing {
-        headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+        headers.insert(CHANNEL_HEADER, channel.0.to_string());
     }
     if let Some(category) = governing_category(event) {
-        headers.insert(CATEGORY_HEADER, category.0.to_string().as_str());
+        headers.insert(CATEGORY_HEADER, category.0.to_string());
     }
     if let Some((permission, creator)) = &audience {
-        headers.insert(REQUIRES_HEADER, permission.to_string().as_str());
+        headers.insert(REQUIRES_HEADER, permission.to_string());
         if let Some(creator) = creator {
-            headers.insert(CREATOR_HEADER, creator.0.to_string().as_str());
+            headers.insert(CREATOR_HEADER, creator.0.to_string());
         }
     }
     let mut sent = Vec::with_capacity(subjects.len());
@@ -1206,8 +1202,8 @@ async fn send_event(
         };
         let started = std::time::Instant::now();
         let ack = state
-            .nats()
-            .publish_with_headers(subject, headers.clone(), payload)
+            .bus()
+            .publish_to_stream(subject, headers.clone(), payload)
             .await?;
         sent.push((started, ack));
     }

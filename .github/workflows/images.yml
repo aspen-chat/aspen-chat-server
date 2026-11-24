@@ -4,7 +4,8 @@
 # are then joined under the tags.
 #
 # Every push to `main` is published as `main` and as its commit's first twelve characters, every
-# tag `v*` as itself, and a run started by hand on another branch as its commit alone. `deploy/box` and both AWS configurations run these images, by tag.
+# tag `v*` as itself, and a run started by hand on another branch as its commit alone. The AWS
+# configuration runs these images, by tag.
 #
 # A package the registry makes for an organization is private until an owner makes it public,
 # once, in the package's settings; until then nothing can pull it without signing in.

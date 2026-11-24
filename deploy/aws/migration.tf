@@ -1,4 +1,4 @@
-# Arriving from a box (README.md#moving-a-box-here): a task that restores the box's database,
+# Arriving from Ultra Lite (README.md#moving-ultra-lite-here): a task that restores its database,
 # copied into this deployment's bucket, into this one's empty database. migrate.py runs it,
 # before this deployment's first release.
 
@@ -91,7 +91,7 @@ resource "aws_ecs_task_definition" "restore" {
 }
 
 output "migration" {
-  description = "What migrate.py reads to move a box here."
+  description = "What migrate.py reads to move Ultra Lite here."
   value = {
     name           = var.name
     region         = var.region

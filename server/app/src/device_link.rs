@@ -33,14 +33,13 @@ use crate::ephemeral_token::token_key;
 use crate::login::{self, Session, SignInMethod};
 use crate::t;
 use crate::two_factor::Caller;
+use aspen_ephemeral::{Condition, Expiry};
 use aspen_schema::{refresh_token, user};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use fred::interfaces::KeysInterface;
-use fred::types::{Expiration, SetOptions};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -255,7 +254,7 @@ fn giver(state: &GlobalServerContext, caller: &Caller) -> crate::Result<Giver> {
 }
 
 async fn read(state: &GlobalServerContext, id: &str) -> crate::Result<Link> {
-    let raw: Option<String> = state.valkey.get(token_key(LINK_PREFIX, id)).await?;
+    let raw: Option<String> = state.ephemeral.get(&token_key(LINK_PREFIX, id)).await?;
     raw.map(|raw| serde_json::from_str(&raw).map_err(crate::Error::from))
         .transpose()?
         .ok_or(crate::Error::DeviceLinkExpired)
@@ -267,14 +266,13 @@ async fn write(
     link: &Link,
     ttl_seconds: i64,
 ) -> crate::Result<()> {
-    let _: () = state
-        .valkey
+    state
+        .ephemeral
         .set(
-            token_key(LINK_PREFIX, id),
+            &token_key(LINK_PREFIX, id),
             serde_json::to_string(link)?,
-            Some(Expiration::EX(ttl_seconds)),
+            Some(Expiry::Seconds(ttl_seconds)),
             None,
-            false,
         )
         .await?;
     Ok(())
@@ -288,17 +286,16 @@ async fn rewrite(
     link: &Link,
     ttl_seconds: i64,
 ) -> crate::Result<()> {
-    let written: Option<String> = state
-        .valkey
+    let written = state
+        .ephemeral
         .set(
-            token_key(LINK_PREFIX, id),
+            &token_key(LINK_PREFIX, id),
             serde_json::to_string(link)?,
-            Some(Expiration::EX(ttl_seconds)),
-            Some(SetOptions::XX),
-            false,
+            Some(Expiry::Seconds(ttl_seconds)),
+            Some(Condition::Present),
         )
         .await?;
-    written.map(|_| ()).ok_or(crate::Error::DeviceLinkExpired)
+    written.then_some(()).ok_or(crate::Error::DeviceLinkExpired)
 }
 
 /// Gives the link `id` a user code no live link holds (`NX`), for `ttl_seconds`: the code as
@@ -310,17 +307,16 @@ async fn reserve_code(
 ) -> crate::Result<String> {
     for _ in 0..CODE_DRAWS {
         let code = new_code();
-        let reserved: Option<String> = state
-            .valkey
+        let reserved = state
+            .ephemeral
             .set(
-                token_key(CODE_PREFIX, &code),
+                &token_key(CODE_PREFIX, &code),
                 id,
-                Some(Expiration::EX(ttl_seconds)),
-                Some(SetOptions::NX),
-                false,
+                Some(Expiry::Seconds(ttl_seconds)),
+                Some(Condition::Absent),
             )
             .await?;
-        if reserved.is_some() {
+        if reserved {
             return Ok(code);
         }
     }
@@ -367,7 +363,7 @@ pub async fn start(
         match reserve_code(state, &id, lifetime).await {
             Ok(code) => Some(shown_code(&code)),
             Err(e) => {
-                let _: i64 = state.valkey.del(token_key(LINK_PREFIX, &id)).await?;
+                state.ephemeral.del(token_key(LINK_PREFIX, &id)).await?;
                 return Err(e);
             }
         }
@@ -391,17 +387,16 @@ async fn take(
     side: Side,
     entered: bool,
 ) -> crate::Result<Scanned> {
-    let taken: Option<String> = state
-        .valkey
+    let taken = state
+        .ephemeral
         .set(
-            token_key(SCAN_PREFIX, id),
+            &token_key(SCAN_PREFIX, id),
             "1",
-            Some(Expiration::EX(TAKEN_SECONDS)),
-            Some(SetOptions::NX),
-            false,
+            Some(Expiry::Seconds(TAKEN_SECONDS)),
+            Some(Condition::Absent),
         )
         .await?;
-    if taken.is_none() {
+    if !taken {
         return Err(crate::Error::DeviceLinkUsed);
     }
     link.scanned = true;
@@ -470,7 +465,7 @@ pub async fn enter(
     let code = normalize_code(typed).ok_or_else(|| {
         crate::Error::Validation(t!("deviceLinkCodeMalformed", length = CODE_LENGTH))
     })?;
-    let id: Option<String> = state.valkey.get(token_key(CODE_PREFIX, &code)).await?;
+    let id: Option<String> = state.ephemeral.get(&token_key(CODE_PREFIX, &code)).await?;
     let id = id.ok_or(crate::Error::DeviceLinkCodeUnknown)?;
     let link = match read(state, &id).await {
         Err(crate::Error::DeviceLinkExpired) => return Err(crate::Error::DeviceLinkCodeUnknown),
@@ -543,7 +538,7 @@ pub async fn approve(state: &GlobalServerContext, id: &str, caller: &Caller) -> 
 /// Its user code, if it has one, then matches no link, and is kept until it expires so that no
 /// other link is given it meanwhile.
 pub async fn cancel(state: &GlobalServerContext, id: &str) -> crate::Result<()> {
-    let _: i64 = state.valkey.del(token_key(LINK_PREFIX, id)).await?;
+    state.ephemeral.del(token_key(LINK_PREFIX, id)).await?;
     Ok(())
 }
 
@@ -581,7 +576,7 @@ pub async fn claim(
     if let Some(answer) = before_taking(&link, account) {
         return Ok(answer);
     }
-    let taken: Option<String> = state.valkey.getdel(token_key(LINK_PREFIX, id)).await?;
+    let taken: Option<String> = state.ephemeral.getdel(&token_key(LINK_PREFIX, id)).await?;
     let link: Link = taken
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?

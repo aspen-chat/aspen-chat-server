@@ -65,9 +65,10 @@ The App Store, with TestFlight for the beta, once what [The stores](#the-stores)
 
 ### Servers
 
-| What                                                     | Where                                                  | Built                               |
-| -------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------- |
-| `aspen-api` and `aspen-voice`, for x86-64 and 64-bit ARM | GHCR, tagged by version and `beta`, signed with cosign | the images, unsigned (`images.yml`) |
+| What                                                     | Where                                                  | Built                                 |
+| -------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------- |
+| `aspen-api` and `aspen-voice`, for x86-64 and 64-bit ARM | GHCR, tagged by version and `beta`, signed with cosign | the images, unsigned (`images.yml`)   |
+| `aspen-ul`, Ultra Lite, for x86-64 and 64-bit ARM        | each tag `v*`'s GitHub release, with `SHA256SUMS`      | both, unsigned (`ci.yml`'s `release`) |
 
 Servers never update themselves. Each server's dashboard says when a newer version is released, on
 by default, from a `releases.json` on Aspen's own domain, so checking reveals nothing to GitHub.
@@ -173,6 +174,8 @@ deployment and account for the stores' reviewers, and calls that keep running in
   signing, and the macOS dmgs with their signing and notarization, all built in CI. electron-builder
   also builds an AppImage, which is not published.
 - The server images, published to GHCR on every push to `main` and every tag (`images.yml`).
+- Ultra Lite's packages, built and checked under systemd on every CI run, and published with a tag's
+  GitHub release once the whole run passes (`ci.yml`).
 - Android `versionCode` from the CI run number (`android-builds.md`).
 - The site (`site/`): a landing page linking to the download page (`site/downloads/`), to the
   operator guide on GitHub, and to the repository, assembled with the app's icon and font by

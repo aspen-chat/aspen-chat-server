@@ -58,7 +58,8 @@ The receiving deployment, in order:
 5. refuses a password-only sign-in where it requires two factors (`strongerSignInRequired`);
 6. refuses an assertion that calls a bot a person or a person a bot (`statementInconsistent`),
    whether by its sign-in method or against the foreign user it already made;
-7. remembers the id in Valkey until it expires, so it is used once.
+7. remembers the id in PostgreSQL (`used_once`) until it expires, so it is used once, whatever
+   restarts.
 
 Step 6 matters because the gate it checks is the one for the kind the assertion claims.
 

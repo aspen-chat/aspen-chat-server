@@ -1,31 +1,19 @@
-//! The Aspen API server. Without a subcommand it serves the API; the subcommands are what an
-//! operator runs against a deployment (`operator`).
+//! The Aspen API server's process: its allocator, command line, logging, and runtime. Without a
+//! subcommand it serves the API (`aspen_chat_server::serve`); the subcommands are what an
+//! operator runs against a deployment (`aspen_chat_server::run_command`).
 
 use std::{
-    fs, io,
+    io,
     net::{IpAddr, SocketAddr as StdSocketAddr},
     panic,
     path::PathBuf,
-    sync::Arc,
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
-use futures_util::{StreamExt, stream::FuturesUnordered};
-use hyper::{Request, body::Incoming};
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo, TokioTimer},
-    server,
-};
-use rustls::{
-    ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer},
-};
+use anyhow::{Result, bail};
+use clap::Parser;
 use tokio::{runtime, sync::oneshot};
-use tokio_rustls::TlsAcceptor;
-use tower::Service as _;
-use tracing::{debug, error, info, level_filters::LevelFilter, warn};
+use tracing::{error, info, level_filters::LevelFilter, warn};
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -33,8 +21,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use aspen_api as api;
 use aspen_app as app;
 use aspen_app::aspen_config;
-mod connections;
-mod operator;
+use aspen_chat_server::Command;
 
 /// jemalloc for the whole process (it also replaces `malloc`), which keeps memory from
 /// fragmenting across threads and reports what it holds (`aspen_metrics::memory`).
@@ -46,15 +33,6 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// allocates, and a server gone idle after a busy hour keeps its peak resident size.
 #[unsafe(export_name = "malloc_conf")]
 pub static MALLOC_CONF: &[u8; 23] = b"background_thread:true\0";
-
-/// How often an idle HTTP/2 connection is pinged, and how long its answer may take before the
-/// connection is closed.
-const HTTP2_PING_INTERVAL: Duration = Duration::from_secs(30);
-const HTTP2_PING_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// The first and longest waits before accepting again after accepting failed.
-const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(10);
-const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -102,137 +80,6 @@ struct Opt {
     run_companion_migration: Option<String>,
     #[clap(subcommand)]
     command: Option<Command>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Operator commands for rate limits.
-    Limits {
-        #[clap(subcommand)]
-        action: operator::LimitsCommand,
-    },
-    /// Operator commands for benchmark populations.
-    Bench {
-        #[clap(subcommand)]
-        action: operator::BenchCommand,
-    },
-    /// Operator commands for the files kept of deleted messages for reviewing reports.
-    Attachments {
-        #[clap(subcommand)]
-        action: operator::AttachmentsCommand,
-    },
-    /// Operator commands for deployment roles: the first administrator, and the top role.
-    Admin {
-        #[clap(subcommand)]
-        action: operator::AdminCommand,
-    },
-    /// Operator commands for communities.
-    Communities {
-        #[clap(subcommand)]
-        action: operator::CommunitiesCommand,
-    },
-    /// Operator commands for background jobs.
-    Jobs {
-        #[clap(subcommand)]
-        action: operator::JobsCommand,
-    },
-    /// Operator commands for the deployment's Privacy Policy and Terms of Use.
-    Documents {
-        #[clap(subcommand)]
-        action: operator::DocumentsCommand,
-    },
-    /// Operator commands for registration invites.
-    Invites {
-        #[clap(subcommand)]
-        action: operator::InvitesCommand,
-    },
-    /// Operator commands for federation: the directory of other deployments, and this
-    /// deployment's key.
-    Federation {
-        #[clap(subcommand)]
-        action: operator::FederationCommand,
-    },
-    /// Operator commands for the deployment's settings: its name, policies, and federation
-    /// gates.
-    Settings {
-        #[clap(subcommand)]
-        action: operator::SettingsCommand,
-    },
-    /// Operator commands for the registry of voice servers.
-    VoiceServers {
-        #[clap(subcommand)]
-        action: operator::VoiceServersCommand,
-    },
-    /// Operator commands for the OpenID Connect providers people sign in through.
-    IdentityProviders {
-        #[clap(subcommand)]
-        action: operator::IdentityProvidersCommand,
-    },
-    /// Operator commands for plugins: installing, configuring, ordering, and removing them.
-    Plugins {
-        #[clap(subcommand)]
-        action: operator::PluginsCommand,
-    },
-}
-
-/// Whether a key or certificate file is PEM, which is told by its contents: PEM marks what it
-/// holds with a line that begins so, and DER is the bare binary structure.
-fn is_pem(file: &[u8]) -> bool {
-    const BOUNDARY: &[u8] = b"-----BEGIN";
-    file.windows(BOUNDARY.len())
-        .any(|window| window == BOUNDARY)
-}
-
-/// The private key a `--key` file holds, PEM or DER, as PKCS #8, PKCS #1, or SEC1.
-fn private_key(file: Vec<u8>) -> Result<PrivateKeyDer<'static>> {
-    if is_pem(&file) {
-        rustls_pemfile::private_key(&mut &*file)
-            .context("malformed PEM-encoded private key")?
-            .context("the PEM file holds no private key")
-    } else {
-        PrivateKeyDer::try_from(file).map_err(|error| {
-            anyhow::anyhow!("the private key is neither PEM nor a DER-encoded key: {error}")
-        })
-    }
-}
-
-/// The certificates a `--cert` file holds: every one of a PEM file, or the one a DER file is.
-fn certificate_chain(file: Vec<u8>) -> Result<Vec<CertificateDer<'static>>> {
-    if is_pem(&file) {
-        rustls_pemfile::certs(&mut &*file)
-            .collect::<Result<_, _>>()
-            .context("invalid PEM-encoded certificate")
-    } else {
-        Ok(vec![CertificateDer::from(file)])
-    }
-}
-
-/// The TLS this server answers with: the `--cert` and `--key` given, or none under
-/// `--no-https`. Given neither, it refuses to start rather than present a certificate no client
-/// trusts; `scripts/dev_ca.py` issues one for development.
-fn tls_acceptor(options: &Opt) -> Result<Option<TlsAcceptor>> {
-    if options.no_https {
-        return Ok(None);
-    }
-    let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) else {
-        bail!(
-            "no certificate: give --cert and --key (scripts/dev_ca.py issues them for \
-             development), or --no-https behind a proxy that terminates TLS"
-        );
-    };
-    // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
-    // a server reboot to start using the new cert and key.
-    let key = private_key(fs::read(key_path).context("failed to read private key")?)?;
-    let cert_chain =
-        certificate_chain(fs::read(cert_path).context("failed to read certificate chain")?)?;
-    let mut server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)?;
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
-    if options.keylog {
-        server_config.key_log = Arc::new(rustls::KeyLogFile::new());
-    }
-    Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
 }
 
 // tokio-console reads instrumentation Tokio compiles only under this flag.
@@ -303,43 +150,30 @@ fn main() {
 
 async fn run(options: Opt) -> Result<()> {
     if let Some(command) = options.command {
-        let config = aspen_config::load_config()?;
-        let ran = match command {
-            Command::Limits { action } => operator::limits(&config, action).await,
-            Command::Bench { action } => operator::bench(&config, action).await,
-            Command::Admin { action } => operator::admin(&config, action).await,
-            Command::Attachments { action } => operator::attachments(&config, action).await,
-            Command::Invites { action } => operator::invites(&config, action).await,
-            Command::Documents { action } => operator::documents(&config, action).await,
-            Command::Communities { action } => operator::communities(&config, action).await,
-            Command::Jobs { action } => operator::jobs(&config, action).await,
-            Command::Federation { action } => operator::federation(&config, action).await,
-            Command::Settings { action } => operator::settings(&config, action).await,
-            Command::VoiceServers { action } => operator::voice_servers(&config, action).await,
-            Command::IdentityProviders { action } => {
-                operator::identity_providers(&config, action).await
-            }
-            Command::Plugins { action } => operator::plugins(&config, action).await,
-        };
-        // What the command decided may be a job (a plugin's purge, signing out a blocked
-        // deployment's users), which the servers start at once rather than at their next look.
-        if ran.is_ok() {
-            app::jobs::wake_from(&config).await;
-        }
-        return ran;
+        return aspen_chat_server::run_command(command).await;
     }
     let role = if options.private_worker {
         app::context::Role::PrivateWorker
     } else {
         app::context::Role::Public
     };
-    let tls_acceptor = if options.private_worker || options.gen_openapi_schema {
+    let tls_acceptor = if options.private_worker || options.gen_openapi_schema || options.no_https {
         None
     } else {
-        tls_acceptor(&options)?
+        let (Some(key), Some(cert)) = (&options.key, &options.cert) else {
+            bail!(
+                "no certificate: give --cert and --key (scripts/dev_ca.py issues them for \
+                 development), or --no-https behind a proxy that terminates TLS"
+            );
+        };
+        Some(aspen_chat_server::tls_from_files(
+            key,
+            cert,
+            options.keylog,
+        )?)
     };
     let app = api::start(options.gen_openapi_schema, role).await?;
-    let (exit_tx, mut exit_rx) = oneshot::channel();
+    let (exit_tx, exit_rx) = oneshot::channel();
     let mut exit_tx = Some(exit_tx);
     ctrlc::set_handler(move || {
         let Some(exit_tx) = exit_tx.take() else {
@@ -348,12 +182,7 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
-    let Some(api::Serving {
-        router: app,
-        config,
-        suspension,
-    }) = app
-    else {
+    let Some(serving) = app else {
         info!("running as a private worker: serving nothing, doing the background work");
         let _ = exit_rx.await;
         return Ok(());
@@ -371,212 +200,8 @@ async fn run(options: Opt) -> Result<()> {
     for listener in &listeners {
         info!("listening on {}", listener.local_addr()?);
     }
-
     if options.no_https {
         warn!("--no-https enabled, server is not encrypting anything in transit");
     }
-
-    let limits = &config.connections;
-    let addresses = aspen_limits::ClientAddresses::new(
-        &config.rate_limits.trusted_proxies,
-        config.rate_limits.ipv6_prefix,
-    )
-    .map_err(anyhow::Error::msg)?;
-    let gate = connections::Gate::new(limits, addresses, suspension);
-    let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
-    let idle_timeout = Duration::from_secs(limits.idle_seconds);
-    let shutdown_timeout = Duration::from_secs(limits.shutdown_seconds);
-    // Without a timer hyper keeps no time at all: a client could take forever over its headers.
-    // HTTP/2 connections are pinged while idle, and closed when a ping goes unanswered.
-    let mut http = server::conn::auto::Builder::new(TokioExecutor::new());
-    http.http1()
-        .timer(TokioTimer::new())
-        .header_read_timeout(Duration::from_secs(limits.header_read_seconds));
-    http.http2()
-        .timer(TokioTimer::new())
-        .keep_alive_interval(Some(HTTP2_PING_INTERVAL))
-        .keep_alive_timeout(HTTP2_PING_TIMEOUT)
-        .max_concurrent_streams(limits.max_streams);
-    let http = Arc::new(http);
-    let mut accept_backoff = ACCEPT_BACKOFF_MIN;
-
-    loop {
-        let mut listeners = FuturesUnordered::from_iter(listeners.iter().map(|l| l.accept()));
-        let (socket, remote_addr) = tokio::select! {
-            maybe_socket = listeners.next() => {
-                match maybe_socket {
-                    Some(Ok((socket, remote_addr))) => {
-                        accept_backoff = ACCEPT_BACKOFF_MIN;
-                        (socket, remote_addr)
-                    }
-                    Some(Err(e)) => {
-                        // Out of file descriptors or memory, accepting again at once fails
-                        // again at once; waiting lets connections close first.
-                        error!("TCP I/O error {e}");
-                        tokio::time::sleep(accept_backoff).await;
-                        accept_backoff = (accept_backoff * 2).min(ACCEPT_BACKOFF_MAX);
-                        continue;
-                    }
-                    None => {
-                        unreachable!("listeners is not empty, and exactly one value is pulled from it.")
-                    }
-                }
-            },
-            _ = &mut exit_rx => {
-                break Ok(());
-            }
-        };
-        // Closed at once, by dropping it, when over a limit.
-        let Some(admitted) = gate.admit(remote_addr.ip()) else {
-            continue;
-        };
-        // Event frames are small and each is flushed as it is written; without this, one written
-        // while the previous is still unacknowledged waits for the client's delayed ACK.
-        if let Err(e) = socket.set_nodelay(true) {
-            warn!("could not turn off Nagle's algorithm for {remote_addr}: {e}");
-        }
-        let place = api::rate_limit::Connection(admitted.place());
-        // The socket holds its place within the limits until it closes, through an upgrade to
-        // a WebSocket too, which keeps it.
-        let socket = connections::Counted::new(socket, admitted);
-        let tls_acceptor = tls_acceptor.clone();
-        let service = app.clone();
-        let http = http.clone();
-        tokio::spawn(async move {
-            let activity = connections::Activity::new();
-            let hyper_service = {
-                let activity = activity.clone();
-                hyper::service::service_fn(move |mut request: Request<Incoming>| {
-                    // Rate limits count by the client's address, which starts from the peer's.
-                    request
-                        .extensions_mut()
-                        .insert(api::rate_limit::PeerAddr(remote_addr));
-                    request.extensions_mut().insert(place.clone());
-                    let busy = activity.begin();
-                    let response = service.clone().call(request);
-                    async move {
-                        response.await.map(|r| {
-                            let progress = busy.responded();
-                            r.map(|body| connections::Tracked::new(body, progress))
-                        })
-                    }
-                })
-            };
-
-            /// Using a macro to do compile time duck typing over TlsStream and TcpStream.
-            macro_rules! handle_stream {
-                ($stream:expr) => {{
-                    let socket = TokioIo::new($stream);
-                    let connection = http.serve_connection_with_upgrades(socket, hyper_service);
-                    tokio::pin!(connection);
-                    // A connection with nothing happening on it for the idle time is asked to
-                    // close: HTTP/2 sends GOAWAY and finishes what is in flight, for at most
-                    // the shutdown time, after which it is dropped with whatever is left.
-                    let served = tokio::select! {
-                        served = connection.as_mut() => served,
-                        () = activity.idle(idle_timeout) => {
-                            connection.as_mut().graceful_shutdown();
-                            match tokio::time::timeout(shutdown_timeout, connection).await {
-                                Ok(served) => served,
-                                Err(_) => {
-                                    debug!("{remote_addr} did not finish closing in time");
-                                    Ok(())
-                                }
-                            }
-                        }
-                    };
-                    match served {
-                        Ok(()) => {}
-                        Err(e) if api::disconnect::is_disconnect(&*e) => {
-                            debug!("{remote_addr} disconnected: {e}");
-                        }
-                        Err(e) => error!("failed to serve connection {e}"),
-                    }
-                }};
-            }
-
-            match &tls_acceptor {
-                Some(tls_acceptor) => {
-                    match tokio::time::timeout(handshake_timeout, tls_acceptor.accept(socket)).await
-                    {
-                        Ok(Ok(tls_stream)) => {
-                            handle_stream!(tls_stream)
-                        }
-                        Ok(Err(e)) if api::disconnect::is_disconnect(&e) => {
-                            debug!("{remote_addr} disconnected during its TLS handshake: {e}");
-                        }
-                        Ok(Err(e)) => {
-                            error!("error establishing TLS {e}");
-                        }
-                        Err(_) => {
-                            info!("{remote_addr} took too long over its TLS handshake");
-                        }
-                    }
-                }
-                None => {
-                    handle_stream!(socket)
-                }
-            }
-        });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An Ed25519 key as PKCS #8: the algorithm, then the key's 32 bytes.
-    fn pkcs8() -> Vec<u8> {
-        let mut der = vec![
-            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
-            0x04, 0x20,
-        ];
-        der.extend(0..32);
-        der
-    }
-
-    /// A P-256 key as SEC1: the key's 32 bytes, then the curve.
-    fn sec1() -> Vec<u8> {
-        let mut der = vec![0x30, 0x31, 0x02, 0x01, 0x01, 0x04, 0x20];
-        der.extend(0..32);
-        der.extend([
-            0xa0, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
-        ]);
-        der
-    }
-
-    #[test]
-    fn a_key_file_is_read_by_what_it_holds() {
-        assert!(matches!(
-            private_key(pkcs8()).unwrap(),
-            PrivateKeyDer::Pkcs8(_)
-        ));
-        assert!(matches!(
-            private_key(sec1()).unwrap(),
-            PrivateKeyDer::Sec1(_)
-        ));
-        let pem = "comment\n-----BEGIN PRIVATE KEY-----\n\
-                   MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n\
-                   -----END PRIVATE KEY-----\n";
-        match private_key(pem.as_bytes().to_vec()).unwrap() {
-            PrivateKeyDer::Pkcs8(key) => assert_eq!(key.secret_pkcs8_der(), pkcs8()),
-            other => panic!("{other:?}"),
-        }
-        assert!(private_key(b"not a key".to_vec()).is_err());
-        assert!(
-            private_key(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n".to_vec())
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn a_certificate_file_is_read_by_what_it_holds() {
-        let der = vec![0x30, 0x03, 0x02, 0x01, 0x00];
-        assert_eq!(
-            certificate_chain(der.clone()).unwrap(),
-            [CertificateDer::from(der)]
-        );
-        let pem = "-----BEGIN CERTIFICATE-----\nMAMCAQA=\n-----END CERTIFICATE-----\n".repeat(2);
-        assert_eq!(certificate_chain(pem.into_bytes()).unwrap().len(), 2);
-    }
+    aspen_chat_server::serve(serving, listeners, tls_acceptor, exit_rx).await
 }
