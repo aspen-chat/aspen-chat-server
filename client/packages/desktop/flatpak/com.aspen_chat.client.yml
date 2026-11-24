@@ -9,9 +9,19 @@ sdk: org.freedesktop.Sdk
 # base app brings zypak, which gives Chromium's processes Flatpak's own sandboxes instead.
 base: org.electronjs.Electron2.BaseApp
 base-version: "25.08"
+# The base app's commit is pinned as the `flatpak` group's version in `sources.json`, which also
+# lists the sources of what it carries; `scripts/flatpak.mjs` refuses a build made on another.
 command: aspen
 # The app's translations are in its own bundle; there are no locale files to split out.
 separate-locales: false
+# What the base app holds for other apps' builds and not for running: its tools for patching an
+# Electron app's desktop file name (Aspen names its own, `src/main/index.ts`) and the Python they
+# run in, with the Python bindings of its libraries.
+cleanup-commands:
+  - >-
+    rm -r /app/bin/patch-desktop-filename /app/bin/patch-electron-desktop-filename
+    /app/lib/python3.13
+    /app/share/licenses/org.electronjs.Electron2.BaseApp/patch-electron-desktop-filename
 finish-args:
   - --share=network
   # Shared memory with the X server, where there is one.

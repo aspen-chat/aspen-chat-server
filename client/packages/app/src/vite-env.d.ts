@@ -42,6 +42,19 @@ interface AudioOptionsShape {
   bitrateKbps?: number;
 }
 
+/** The track the desktop app follows for updates, or none. */
+type DesktopUpdateChoice = "stable" | "beta" | "off";
+
+/** Where the desktop app's updating stands (`UpdateState` in `packages/desktop/src/main/updates.ts`). */
+interface DesktopUpdateState {
+  choice: DesktopUpdateChoice;
+  /** Who turned updating off from outside the app: an administrator's policy, or the installer. */
+  locked: "administrator" | "installer" | null;
+  status: "idle" | "checking" | "downloading" | "ready" | "failed";
+  /** The version waiting to be installed while `ready`. */
+  version: string | null;
+}
+
 /** Injected by the Electron preload script; absent in browsers and Capacitor. */
 interface AspenDesktopBridge {
   readonly platform: NodeJS.Platform;
@@ -106,6 +119,17 @@ interface AspenDesktopBridge {
     choice(): Promise<{ drawn: boolean; next: boolean } | null>;
     choose(drawn: boolean): Promise<void>;
     relaunch(): void;
+  };
+  /**
+   * The app updating itself (`packages/desktop/src/main/updates.ts`): `state` is `null` from a
+   * build that never does (every one but the signed Windows build), and `onChange` hears each
+   * state after it.
+   */
+  readonly updates: {
+    state(): Promise<DesktopUpdateState | null>;
+    choose(choice: DesktopUpdateChoice): Promise<void>;
+    restart(): void;
+    onChange(listener: (state: DesktopUpdateState) => void): () => void;
   };
   /** The saved sign-ins, kept encrypted (`packages/desktop/src/main/secrets.ts`). */
   readonly secrets: {

@@ -16,13 +16,15 @@
     "package:build": "install-electron && pnpm --filter @aspen/app build:desktop && pnpm build:native && electron-vite build",
     "package": "pnpm package:build && electron-builder --config electron-builder.yml",
     "package:dir": "pnpm package:build && electron-builder --config electron-builder.yml --dir",
-    "package:signed": "pnpm package:build && electron-builder --config electron-builder.signed.yml",
+    "package:signed": "pnpm package:build && electron-builder --config electron-builder.signed.mjs",
     "package:flatpak": "pnpm package:dir && node scripts/flatpak.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
+    "builder-util-runtime": "9.7.1",
     "electron": "^44.9.1",
     "electron-builder": "^26.17.0",
+    "electron-updater": "6.8.12",
     "electron-vite": "^5.0.0",
     "typescript-7": "npm:typescript@~7.0.2",
     "vite": "^7.3.7"

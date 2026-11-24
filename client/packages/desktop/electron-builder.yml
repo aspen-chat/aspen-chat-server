@@ -71,6 +71,8 @@ win:
   icon: build/icon.ico
   target:
     - nsis
+  # The name the downloads site and the update feeds give it (`src/release/releases.ts`).
+  artifactName: Aspen-Setup-${version}.${ext}
   # The libobs the helper uses, the OBS Project's own signed release files as
   # `scripts/fetch-libobs.mjs` lays them out (`pnpm fetch:libobs` before packaging).
   extraResources:
@@ -100,3 +102,8 @@ win:
     - "!obs-nvenc-test.exe"
     - "!obs-qsv-test.exe"
     - "!obs-amf-test.exe"
+nsis:
+  # Updates download whole (`docs/architecture/desktop-updates.md`), so no blockmap is made.
+  differentialPackage: false
+  # `/DISABLEUPDATES`, which turns the app's updater off as it installs.
+  include: build/installer.nsh

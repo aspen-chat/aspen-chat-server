@@ -1,8 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { Button } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { isOutdated, reloadForNewRelease } from "./releaseReload";
+import { ReleaseStrip } from "./ReleaseStrip";
 
 /**
  * A strip above the app once its deployment serves a newer release than this page's, which
@@ -33,19 +33,12 @@ export function NewRelease() {
     return null;
   }
   return (
-    <div
-      role="status"
-      className="motion-drop flex items-center justify-center gap-3 bg-accent-soft px-3 py-1 text-sm text-ink"
-    >
-      <span>{m.newRelease.ready}</span>
-      <Button
-        onPress={() => {
-          reloadForNewRelease();
-        }}
-        className="rounded border border-current px-2 py-0.5 text-xs outline-none pressed:opacity-70 focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
-        {m.newRelease.reload}
-      </Button>
-    </div>
+    <ReleaseStrip
+      text={m.newRelease.ready}
+      action={m.newRelease.reload}
+      onAction={() => {
+        reloadForNewRelease();
+      }}
+    />
   );
 }

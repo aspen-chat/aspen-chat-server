@@ -1,0 +1,27 @@
+# Attaches a file to the GitHub Release of the tag the run is for, making the release first when
+# no publishing job has yet (each platform's job attaches its own, in whichever order they run).
+# A beta version's release is a prerelease. Needs `GH_TOKEN` and `contents: write`.
+name: GitHub Release
+description: Makes the tag's GitHub Release if it is missing and attaches a file to it.
+inputs:
+  file:
+    description: The file to attach.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Make the release, or find it, and attach the file
+      shell: bash
+      env:
+        FILE: ${{ inputs.file }}
+      run: |
+        if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+          prerelease=()
+          case "$GITHUB_REF_NAME" in *-beta.*) prerelease=(--prerelease) ;; esac
+          downloads="$(node -p 'JSON.parse(require("fs").readFileSync("client/packages/desktop/downloads.json", "utf8")).url')"
+          # Another platform's job may make it between the check and here; then it is there.
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Aspen ${GITHUB_REF_NAME#client-v}" \
+            "${prerelease[@]}" --notes "Aspen's installers, also at $downloads." \
+            || gh release view "$GITHUB_REF_NAME" > /dev/null
+        fi
+        gh release upload "$GITHUB_REF_NAME" "$FILE" --clobber

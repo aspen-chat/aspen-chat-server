@@ -89,6 +89,9 @@ same commit, as with comments.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments,
   `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments,
   and file transfers in calls.
+- [`desktop-updates.md`](docs/architecture/desktop-updates.md): releasing the client by a `client-v`
+  tag, versions and tracks, the downloads site and what publishing refuses, the source archives
+  offered beside the installer, the Windows app's updater, and turning it off.
 - [`documents.md`](docs/architecture/documents.md): the deployment's Privacy Policy and Terms of
   Use: their pages, the links to them, rendering their Markdown, and the dashboard's editor.
 - [`flatpak.md`](docs/architecture/flatpak.md): the desktop app's Flatpak: its manifest and

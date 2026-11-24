@@ -16,10 +16,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { APP_ID, RUNTIME_REPO } from "../src/release/flatpakFiles.ts";
 
-const APP_ID = "com.aspen_chat.client";
-// Where the bundle tells Flatpak to find the runtime when the machine lacks it.
-const RUNTIME_REPO = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 const BRANCHES = ["stable", "beta"];
 
 const root = join(import.meta.dirname, "..");
@@ -83,6 +81,17 @@ run(builder[0], [
   join(out, "build"),
   join("flatpak", `${APP_ID}.yml`),
 ]);
+// flatpak-builder builds on whatever base app is installed and only records which, in the manifest
+// it leaves in the app (`base-commit`). The pinned one is the one whose sources `sources.json`
+// lists and whose libraries the Open Source Attributions page names.
+const pinned = JSON.parse(readFileSync(join(root, "sources.json"), "utf8")).flatpak.version;
+const built = JSON.parse(readFileSync(join(out, "build", "files", "manifest.json"), "utf8"));
+if (built["base-commit"] !== pinned) {
+  const base = `${built.base}//${built["base-version"]}`;
+  throw new Error(
+    `this was built on ${base} at ${String(built["base-commit"])}, not at ${pinned}, which sources.json pins: install the pinned commit (flatpak update --commit=${pinned} ${base}), or read the new one's sources and pin it`,
+  );
+}
 const bundle = join(out, `Aspen-${version}.flatpak`);
 run("flatpak", [
   "build-bundle",

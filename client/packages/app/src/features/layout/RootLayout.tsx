@@ -33,6 +33,7 @@ import { RegisterForm } from "@/features/auth/RegisterForm";
 import { ServerChoiceContext, useServerChoice } from "@/features/auth/serverChoice";
 import { AccountSwitcher } from "@/features/accounts/AccountSwitcher";
 import { NewRelease } from "@/features/layout/NewRelease";
+import { UpdateReady } from "@/features/updates/UpdateReady";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
 import { VerificationScreen } from "@/features/email/VerificationScreen";
@@ -287,6 +288,7 @@ function ShownAccount() {
       <div className="flex h-full flex-col">
         <SyncBanner />
         <NewRelease />
+        <UpdateReady />
         <SourcePickerDialog />
         {/* Panels slide in from beyond the screen's edge; nothing there may widen the page. */}
         <div className="flex min-h-0 flex-1 overflow-x-clip">

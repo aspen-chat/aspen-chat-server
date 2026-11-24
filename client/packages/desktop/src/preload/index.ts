@@ -91,6 +91,24 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       ipcRenderer.send("title-bar:relaunch");
     },
   },
+  // The app updating itself: what it follows and how far it has got, and restarting into an
+  // update that is waiting.
+  updates: {
+    state: () => ipcRenderer.invoke("updates:state"),
+    choose: (choice: unknown) => ipcRenderer.invoke("updates:choose", choice),
+    restart: () => {
+      ipcRenderer.send("updates:restart");
+    },
+    onChange: (listener: (state: unknown) => void) => {
+      const handler = (_event: unknown, state: unknown) => {
+        listener(state);
+      };
+      ipcRenderer.on("updates:state", handler);
+      return () => {
+        ipcRenderer.off("updates:state", handler);
+      };
+    },
+  },
   // Chromium's notices, opened in the system's browser; answers whether they could be.
   chromiumNotices: {
     open: () => ipcRenderer.invoke("chromium-notices:open"),

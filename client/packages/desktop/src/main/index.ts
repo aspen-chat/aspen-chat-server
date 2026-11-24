@@ -16,6 +16,7 @@ import { externalUrl, isAppPage, permitted } from "./navigation";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 import { serveSecrets } from "./secrets";
 import { serveTitleBar, titleBarOptions } from "./titleBar";
+import { serveUpdates } from "./updates";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
 import { guardSending } from "./sendingGuard";
 
@@ -270,6 +271,7 @@ app
     servePasskeyHandoff();
     serveSecrets(appPage());
     serveTitleBar();
+    serveUpdates(appPage());
     serveZoom();
     createWindow();
     app.on("activate", () => {

@@ -12,6 +12,8 @@ the same unpacked build they do; nothing is compiled for it.
 | Desktop entry                                               | `flatpak/com.aspen_chat.client.desktop`              |
 | What software centres show                                  | `flatpak/com.aspen_chat.client.metainfo.xml.in`      |
 | Build script                                                | `packages/desktop/scripts/flatpak.mjs`               |
+| The base app's pinned commit, and its sources               | `flatpak` in `packages/desktop/sources.json`         |
+| Publishing, and the repository people install from          | `desktop-updates.md`                                 |
 | The window naming its desktop entry                         | `src/main/index.ts`                                  |
 
 ## Building it
@@ -22,10 +24,12 @@ unpacked app in `release/linux-unpacked`, then `scripts/flatpak.mjs`.
 The script needs:
 
 - `flatpak-builder` on the `PATH`, or the `org.flatpak.Builder` Flatpak.
-- The runtime, SDK, and base app the manifest names, installed from Flathub:
+- The runtime, SDK, and base app the manifest names, installed from Flathub, the base app at the
+  commit `sources.json` pins:
 
   ```sh
   flatpak install flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+  flatpak update --commit=<the pinned commit> org.electronjs.Electron2.BaseApp//25.08
   ```
 
 It writes, under `release/flatpak/`:
@@ -38,6 +42,11 @@ It writes, under `release/flatpak/`:
 `--branch` chooses the branch the build is committed to: `stable` (the default) or `beta`.
 
 The script fills the version from `package.json` and the build's date into the metainfo's release.
+
+The script refuses a build made on another base app than the pinned one: flatpak-builder builds on
+whatever is installed and records which (`base-commit` in the app's `manifest.json`), and the
+package carries the base app's libraries, whose sources Aspen offers and whose licences the Open
+Source Attributions page lists for that commit.
 
 ### Signing
 
@@ -53,10 +62,17 @@ key with it. An unsigned build is for installing by hand.
 The app runs on `org.freedesktop.Platform`, which people's machines get from Flathub. The bundle
 names Flathub as the place to find it.
 
-`org.electronjs.Electron2.BaseApp` is built into the app. It brings zypak. **Why:** Chromium
-sandboxes its processes with a setuid helper or with user namespaces, and a Flatpak allows neither.
-zypak has Flatpak make those sandboxes instead. The launcher starts the app through `zypak-wrapper`,
-and the manifest removes `chrome-sandbox`.
+`org.electronjs.Electron2.BaseApp` is built into the app, at a pinned commit. It brings zypak.
+**Why:** Chromium sandboxes its processes with a setuid helper or with user namespaces, and a
+Flatpak allows neither. zypak has Flatpak make those sandboxes instead. The launcher starts the app
+through `zypak-wrapper`, and the manifest removes `chrome-sandbox`.
+
+It also brings libraries Chromium loads when it finds them: the keyring's (libsecret,
+libgnome-keyring), the tray's (libappindicator, libindicator, libdbusmenu, dbus-glib), the
+launcher's (libunity, Dee), and speech's (libspeechd). Its tools for other apps' builds, which patch
+an Electron app's desktop file name, and the Python they run in, are removed from the package
+(`cleanup-commands`): Aspen names its desktop entry itself, and one of the tools' Python modules
+carries no licence.
 
 The binaries are not stripped (`build-options` in the manifest), so they are the ones
 electron-builder made.

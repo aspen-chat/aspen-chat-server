@@ -4,7 +4,8 @@ node_modules/
 dist/
 dist-electron/
 out/
-release/
+# What electron-builder makes; `src/release/`, the code that publishes it, is kept.
+packages/desktop/release/
 coverage/
 playwright-report/
 test-results/

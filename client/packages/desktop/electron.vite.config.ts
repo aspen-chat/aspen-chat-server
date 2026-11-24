@@ -7,7 +7,9 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
  */
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // The package ships no `node_modules`, every dependency being a development one, so what the
+    // main process loads besides Electron and Node is bundled into it.
+    plugins: [externalizeDepsPlugin({ exclude: ["electron-updater", "builder-util-runtime"] })],
     build: {
       rollupOptions: {
         input: "src/main/index.ts",
