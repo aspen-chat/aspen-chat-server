@@ -42,16 +42,23 @@ const { chooseMedia, isCameraDenied, mediaSources } = await import("./mediaBridg
 /** The ranges each read asked for, by URL. */
 const ranges = new Map<string, string | null>();
 
-/** Serves `bodies` by URL, as a range answer, and refuses any other. */
+/**
+ * Serves `bodies` by URL, as a range answer, and refuses any other. `Response` is Node's while
+ * `Blob` and `File` are jsdom's, and jsdom's `File` reads a Node `Blob` as the text
+ * "[object Blob]" on some Node versions, so a body is answered as a `Blob` of the test's realm.
+ */
 function serve(bodies: Record<string, string>) {
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) => {
       ranges.set(url, new Headers(init?.headers).get("Range"));
+      const body = bodies[url];
+      if (body === undefined) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      const response = new Response(body, { status: 206 });
       return Promise.resolve(
-        url in bodies
-          ? new Response(bodies[url], { status: 206 })
-          : new Response(null, { status: 404 }),
+        Object.assign(response, { blob: () => Promise.resolve(new Blob([body])) }),
       );
     }),
   );

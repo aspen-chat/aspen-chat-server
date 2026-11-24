@@ -185,7 +185,7 @@ public class PushHandlerTest {
 
     private StatusBarNotification find(String message) {
         for (StatusBarNotification notification : notifications.getActiveNotifications()) {
-            if ((CHANNEL + "/" + message).equals(notification.getTag())) {
+            if ((SUBSCRIPTION + "/" + CHANNEL + "/" + message).equals(notification.getTag())) {
                 return notification;
             }
         }

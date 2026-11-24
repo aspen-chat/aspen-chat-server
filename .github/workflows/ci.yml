@@ -1003,7 +1003,6 @@ jobs:
       ASPEN_DOWNLOADS_ENDPOINT: ${{ vars.R2_ENDPOINT }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      ASPEN_FLATPAK_GPG_HOMEDIR: ${{ runner.temp }}/gnupg
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1024,7 +1023,11 @@ jobs:
       - name: The repository's signing key
         env:
           FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        # A job's `env` cannot read the `runner` context, so the keyring's place is set here for
+        # the steps after this one.
         run: |
+          ASPEN_FLATPAK_GPG_HOMEDIR="$RUNNER_TEMP/gnupg"
+          echo "ASPEN_FLATPAK_GPG_HOMEDIR=$ASPEN_FLATPAK_GPG_HOMEDIR" >> "$GITHUB_ENV"
           mkdir -m 700 "$ASPEN_FLATPAK_GPG_HOMEDIR"
           printf '%s\n' "$FLATPAK_GPG_KEY" | gpg --homedir "$ASPEN_FLATPAK_GPG_HOMEDIR" --batch --import
           key="$(gpg --homedir "$ASPEN_FLATPAK_GPG_HOMEDIR" --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')"
