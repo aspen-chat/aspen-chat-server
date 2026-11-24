@@ -71,7 +71,7 @@ export function ReplyLine({
     shown = <Original reply={message} original={original} home={home} />;
   }
   return (
-    <div className="flex min-w-0 basis-full items-center gap-1.5 text-sm text-ink-muted">
+    <div className="@container flex min-w-0 basis-full items-center gap-1.5 text-sm text-ink-muted">
       <span aria-hidden="true" className={SPINE_CLASS} />
       {shown}
     </div>
@@ -127,7 +127,10 @@ function Original({
       {name === null ? (
         <Skeleton inline className="w-16" />
       ) : (
-        <span className="max-w-[45%] shrink-0 truncate font-medium" style={{ color }}>
+        // Whole unless the row runs out: capped against the row (`cqw`), not the button, which is
+        // only as wide as what it holds, and short of it by the spine, the picture, the gaps, and
+        // a few letters of the text after it.
+        <span className="max-w-[calc(100cqw-9rem)] shrink-0 truncate font-medium" style={{ color }}>
           {tagged ? `@${name}` : name}
         </span>
       )}
