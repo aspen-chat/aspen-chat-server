@@ -1877,7 +1877,9 @@
     "confirmDeleteCategory": "Delete category"
   },
   "removeReactor": "Remove {name}'s reaction",
-  "removeSentAttachment": "Remove attachment {name}",
+  "removeSentAttachmentHeading": "Remove {name}?",
+  "removeSentAttachmentHint": "It will be taken off the message for everyone.",
+  "removeSentAttachmentAction": "Remove",
   "notifications": {
     "titleInChannel": "{name} in #{channel} ({community})",
     "poll": "Posted a poll",
@@ -2782,6 +2784,7 @@
     "openOriginal": "Open original",
     "copyLinkAddress": "Copy link address",
     "copyFileAddress": "Copy file address",
+    "removeAttachment": "Remove attachment",
     "copiedAddress": "Copied the address",
     "joinMuted": "Join muted",
     "markRead": "Mark as read",
@@ -2800,6 +2803,10 @@
     "copiedPicture": "Copied the picture",
     "unreadableFile": "This server's file storage doesn't let the app read files, so this one can't be saved or copied. Its administrators need to let it, as Aspen's operator guide says.",
     "fileFailed": "The file couldn't be read: {problem}"
+  },
+  "attachmentMenu": {
+    "label": "Attachment actions",
+    "longPress": "Long press for attachment actions"
   },
   "pictureMenu": {
     "more": "More options",

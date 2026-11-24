@@ -2,8 +2,8 @@
  * What was right-clicked inside a message, which its context menu offers first: a picture,
  * video, or file attached to it, or a link's picture (`data-media-url`, with its file name in
  * `data-media-name`, and `data-media-picture` on a picture, with what of it is shown in
- * `data-media-shown` when that is not the file itself), or a link in its text that opens
- * elsewhere.
+ * `data-media-shown` when that is not the file itself, and the attachment's id on what holds it
+ * in `data-attachment-id`), or a link in its text that opens elsewhere.
  */
 export type UnderPointer =
   | {
@@ -15,6 +15,8 @@ export type UnderPointer =
       readonly shown: string;
       /** What carries the address: a picture's button, which pressing opens the gallery on it. */
       readonly element: HTMLElement;
+      /** The message's attachment it is, or null for a link's picture. */
+      readonly attachmentId: string | null;
     }
   | { readonly kind: "link"; readonly url: string; readonly anchor: HTMLAnchorElement }
   | null;
@@ -33,6 +35,8 @@ export function underPointer(target: EventTarget | null): UnderPointer {
       picture: media.dataset.mediaPicture !== undefined,
       shown: media.dataset.mediaShown ?? media.dataset.mediaUrl,
       element: media,
+      attachmentId:
+        media.closest<HTMLElement>("[data-attachment-id]")?.dataset.attachmentId ?? null,
     };
   }
   // Links within the app (invites, links to messages) offer their own menus or go nowhere new.

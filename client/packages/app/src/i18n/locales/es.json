@@ -1841,7 +1841,9 @@
     "confirmDeleteCategory": "Eliminar categoría"
   },
   "removeReactor": "Quitar la reacción de {name}",
-  "removeSentAttachment": "Quitar el archivo adjunto {name}",
+  "removeSentAttachmentHeading": "¿Quitar {name}?",
+  "removeSentAttachmentHint": "Se quitará del mensaje para todos.",
+  "removeSentAttachmentAction": "Quitar",
   "notifications": {
     "titleInChannel": "{name} en #{channel} ({community})",
     "poll": "Publicó una encuesta",
@@ -2746,6 +2748,7 @@
     "openOriginal": "Abrir el original",
     "copyLinkAddress": "Copiar dirección del enlace",
     "copyFileAddress": "Copiar dirección del archivo",
+    "removeAttachment": "Quitar archivo adjunto",
     "copiedAddress": "Se copió la dirección",
     "joinMuted": "Unirse en silencio",
     "markRead": "Marcar como leído",
@@ -2764,6 +2767,10 @@
     "copiedPicture": "Se copió la imagen",
     "unreadableFile": "El almacenamiento de archivos de este servidor no deja que la app lea archivos, así que este no se puede guardar ni copiar. Sus administradores deben permitirlo, como indica la guía para operadores de Aspen.",
     "fileFailed": "No se pudo leer el archivo: {problem}"
+  },
+  "attachmentMenu": {
+    "label": "Acciones del archivo adjunto",
+    "longPress": "Mantén presionado para las acciones del archivo adjunto"
   },
   "pictureMenu": {
     "more": "Más opciones",
