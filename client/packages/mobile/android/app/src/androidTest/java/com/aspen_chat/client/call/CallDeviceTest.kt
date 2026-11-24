@@ -193,7 +193,7 @@ class CallDeviceTest {
 
         val media = CallEngine.peerConnections(context)
         val peerConnections = CallEngineTest.RecordingPeerConnections(media)
-        val call = CallEngine(context, api, loopbackPlainText = true, media = media, peerConnections = peerConnections)
+        val call = CallEngine(context, CallAccount(api, user), loopbackPlainText = true, media = media, peerConnections = peerConnections)
         val audioManager = context.getSystemService(AudioManager::class.java)
         try {
             assumeTrue("a phone with an earpiece", call.routes.hasEarpiece)
@@ -310,7 +310,7 @@ class CallDeviceTest {
         val pushes = CallTestSupport.Pushes()
         val subscription = "call-device-test-ring"
         store.save(CallTestSupport.pushState(api, subscription, user, refreshToken, pushes))
-        val engine = CallEngines.forOrigin(context, api)
+        val engine = CallEngines.forAccount(context, CallAccount(api, user))
         assertEquals("nothing rings before", CallTelecom.Phase.IDLE, engine.telecom.phase)
         val declineIntent = CallService.declineIntent(context)
         val filter = notifications.currentInterruptionFilter

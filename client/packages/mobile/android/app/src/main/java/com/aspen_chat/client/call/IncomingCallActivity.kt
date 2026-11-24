@@ -88,11 +88,12 @@ class IncomingCallActivity : AppCompatActivity() {
         bind(intent)
     }
 
-    /** Shows the call of the deployment the intent names; a stale intent, with no call to show, closes the screen. */
+    /** Shows the call of the account the intent names; a stale intent, with no call to show, closes the screen. */
     private fun bind(intent: Intent) {
         unbind()
         val origin = intent.getStringExtra(EXTRA_ORIGIN)
-        val engine = origin?.let { CallEngines.existing(it) }
+        val userId = intent.getStringExtra(EXTRA_USER_ID)
+        val engine = if (origin != null && userId != null) CallEngines.existing(CallAccount(origin, userId)) else null
         if (engine == null || engine.telecom.phase == CallTelecom.Phase.IDLE) {
             finish()
             return
@@ -185,11 +186,13 @@ class IncomingCallActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_ORIGIN = "origin"
+        private const val EXTRA_USER_ID = "userId"
 
-        /** The intent that shows the ring of the deployment at `origin` (its `public_url`). */
-        fun intent(context: Context, origin: String): Intent =
+        /** The intent that shows the ring of `account`. */
+        fun intent(context: Context, account: CallAccount): Intent =
             Intent(context, IncomingCallActivity::class.java)
-                .putExtra(EXTRA_ORIGIN, origin)
+                .putExtra(EXTRA_ORIGIN, account.origin)
+                .putExtra(EXTRA_USER_ID, account.userId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }

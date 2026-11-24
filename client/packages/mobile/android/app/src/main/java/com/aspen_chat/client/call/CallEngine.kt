@@ -19,9 +19,8 @@ import com.aspen_chat.client.voice.SocketFactory
  * reports; `AspenCallPlugin` commands it for the web view, and the process's `video` draws its
  * video tracks, `camera` captures the camera it sends, and `screen` the screen it shares.
  *
- * Starts an engine for the deployment at `origin` (its `public_url`), which the device's account
- * there, kept by the web view on sign-in, is the session of. `loopbackPlainText` lets a
- * development deployment's voice servers be reached over plain HTTP at this device's own
+ * Starts an engine for `account`, whose session the web view kept on sign-in. `loopbackPlainText`
+ * lets a development deployment's voice servers be reached over plain HTTP at this device's own
  * addresses; a release build never allows it. A test stands between the engine and the platform
  * by giving `media` of its own (a `CallPeerConnections` on another audio device module, whose
  * factory the microphone then comes from too), `sockets` wrapping `CallSockets`, or
@@ -30,7 +29,7 @@ import com.aspen_chat.client.voice.SocketFactory
  */
 class CallEngine(
     context: Context,
-    origin: String,
+    account: CallAccount,
     loopbackPlainText: Boolean = false,
     media: CallPeerConnections = peerConnections(context),
     sockets: SocketFactory = CallSockets(),
@@ -38,12 +37,12 @@ class CallEngine(
 ) : AutoCloseable {
     val sounds = CallSounds(context)
     val snapshots = CallSnapshots(sounds)
-    val credentials = CallCredentials(context, origin)
+    val credentials = CallCredentials(context, account)
     val audio = CallAudio(context, media.factory, tracks)
     val routes = CallRoutes(context)
     val engine: Engine = Engine.start(
         Platform(CallHttp(), sockets, peerConnections ?: media, CallFiles(context)),
-        Options(origin, credentials, loopbackPlainText),
+        Options(account.origin, credentials, loopbackPlainText),
         snapshots,
     )
     val telecom = CallTelecom(context, engine, snapshots, audio, routes)

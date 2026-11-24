@@ -63,8 +63,8 @@ final class CallScreen: CallScreenSink {
     private let frameSource = RTCVideoCapturer()
     private(set) var videoTrack: RTCVideoTrack?
     private(set) var audioTrack: RTCAudioTrack?
-    /// The deployment whose engine the share is for, while one is asked for or on.
-    private(set) var origin: String?
+    /// The account whose engine the share is for, while one is asked for or on.
+    private(set) var account: CallAccount?
     private var wantsAudio = false
     private var onStarted: ((TrackId, TrackId?) -> Void)?
     private var onEnded: ((CallScreenFailure?) -> Void)?
@@ -95,18 +95,18 @@ final class CallScreen: CallScreenSink {
         return BroadcastScreenCapturer()
     }
 
-    /// Asks the system for the screen for `origin`'s engine. `onStarted` is called with the
+    /// Asks the system for the screen for `account`'s engine. `onStarted` is called with the
     /// video track and, with `audio`, the audio track once the capture runs, which is when the
     /// engine is given them; `onEnded` when it is over, with why when it did not simply stop.
     /// A share already asked for is left as it is.
     func start(
-        origin: String, audio: Bool, onStarted: @escaping (TrackId, TrackId?) -> Void,
+        account: CallAccount, audio: Bool, onStarted: @escaping (TrackId, TrackId?) -> Void,
         onEnded: @escaping (CallScreenFailure?) -> Void
     ) {
         guard capturer == nil else {
             return
         }
-        self.origin = origin
+        self.account = account
         wantsAudio = audio
         self.onStarted = onStarted
         self.onEnded = onEnded
@@ -134,7 +134,7 @@ final class CallScreen: CallScreenSink {
         source = nil
         shareAudio = nil
         capturer = nil
-        origin = nil
+        account = nil
         onStarted = nil
         onEnded = nil
     }

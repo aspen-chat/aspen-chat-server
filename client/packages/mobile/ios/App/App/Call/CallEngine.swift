@@ -28,15 +28,14 @@ final class CallEngine: @unchecked Sendable {
     let audio: CallAudio
     let credentials: CallCredentials
 
-    /// Starts an engine for the deployment at `origin` (its `public_url`), which the device's
-    /// account there, kept by the web view on sign-in, is the session of. `loopbackPlainText`
-    /// lets a development deployment's voice servers be reached over plain HTTP at this
-    /// machine's own addresses; a release build never allows it. A test stands between the
+    /// Starts an engine for `account`, whose session the web view kept on sign-in.
+    /// `loopbackPlainText` lets a development deployment's voice servers be reached over plain
+    /// HTTP at this machine's own addresses; a release build never allows it. A test stands between the
     /// engine and the platform by giving `media` of its own (a `CallPeerConnections` on another
     /// audio device, whose factory the microphone then comes from too), `sockets` wrapping
     /// `CallSockets`, or `peerConnections` wrapping `media`.
     init(
-        origin: String,
+        account: CallAccount,
         loopbackPlainText: Bool = false,
         media: CallPeerConnections = CallEngine.peerConnections,
         sockets: SocketFactory = CallSockets(),
@@ -44,7 +43,7 @@ final class CallEngine: @unchecked Sendable {
     ) {
         let sounds = CallSounds()
         let snapshots = CallSnapshots(sounds: sounds)
-        let credentials = CallCredentials(origin: origin)
+        let credentials = CallCredentials(account: account)
         self.snapshots = snapshots
         self.credentials = credentials
         self.audio = CallAudio(factory: media.factory, tracks: Self.tracks, sounds: sounds)
@@ -52,7 +51,7 @@ final class CallEngine: @unchecked Sendable {
             platform: Platform(
                 http: CallHttp(), sockets: sockets, peerConnections: peerConnections ?? media, files: CallFiles()
             ),
-            options: Options(apiUrl: origin, credentials: credentials, loopbackPlainText: loopbackPlainText),
+            options: Options(apiUrl: account.origin, credentials: credentials, loopbackPlainText: loopbackPlainText),
             observer: snapshots
         )
     }

@@ -87,7 +87,7 @@ public final class PushHandler {
                     showNotice(subscription, account, channel, pointer.getString("notice"));
                     break;
                 case "call":
-                    ring(account.getString("origin"), pointer);
+                    ring(account, pointer);
                     break;
                 default:
                     // A kind this app does not know yet.
@@ -152,10 +152,10 @@ public final class PushHandler {
      * within the five seconds a service started by a push has; nothing is fetched first, the
      * pointer carrying what the call shows.
      */
-    private void ring(String origin, JSONObject pointer) {
+    private void ring(JSONObject account, JSONObject pointer) {
         try {
             Class<?> rings = Class.forName(CALL_RINGS);
-            rings.getMethod("incoming", Context.class, String.class, JSONObject.class).invoke(null, context, origin, pointer);
+            rings.getMethod("incoming", Context.class, JSONObject.class, JSONObject.class).invoke(null, context, account, pointer);
         } catch (ClassNotFoundException e) {
             Log.i(TAG, "a call rang the phone, but this build has no call layer to show it");
         } catch (ReflectiveOperationException e) {

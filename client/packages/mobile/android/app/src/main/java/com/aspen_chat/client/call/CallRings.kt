@@ -22,8 +22,8 @@ object CallRings {
 
     /** What a `call` pointer says. */
     data class IncomingRing(
-        /** The deployment's `public_url`, from the account the push's subscription names. */
-        val origin: String,
+        /** The account the push's subscription names, which the ring is for. */
+        val account: CallAccount,
         val channel: String,
         val session: String,
         val callerName: String,
@@ -32,21 +32,22 @@ object CallRings {
     )
 
     /**
-     * Shows the call `pointer` describes as ringing the phone; `false` for a pointer that is not a
-     * whole `call`. Called from the push handler's thread; the call is made on the main thread.
+     * Shows the call `pointer` describes as ringing the phone, for `kept`, the push state's account
+     * the push's subscription names; `false` for a pointer that is not a whole `call`. Called from
+     * the push handler's thread; the call is made on the main thread.
      */
     @JvmStatic
-    fun incoming(context: Context, origin: String, pointer: JSONObject): Boolean {
-        val ring = read(origin, pointer) ?: return false
+    fun incoming(context: Context, kept: JSONObject, pointer: JSONObject): Boolean {
+        val ring = read(CallAccount.of(kept), pointer) ?: return false
         val application = context.applicationContext
         Handler(Looper.getMainLooper()).post {
-            CallEngines.forOrigin(application, ring.origin).telecom.ring(ring)
+            CallEngines.forAccount(application, ring.account).telecom.ring(ring)
         }
         return true
     }
 
     /** The ring a `call` pointer describes, or `null` when a field it needs is missing. */
-    fun read(origin: String, pointer: JSONObject): IncomingRing? {
+    fun read(account: CallAccount, pointer: JSONObject): IncomingRing? {
         if (pointer.optString("kind") != "call") {
             return null
         }
@@ -57,21 +58,21 @@ object CallRings {
         if (channel.isEmpty() || session.isEmpty() || until.isEmpty()) {
             return null
         }
-        return IncomingRing(CallEngines.trimmed(origin), channel, session, callerName, until)
+        return IncomingRing(account, channel, session, callerName, until)
     }
 
     /**
-     * Ends the ring at the deployment (`DELETE /channels/{channel}/voice/rings/@me`) as the account
-     * kept for the deployment, renewing its session once when refused. Runs on a thread of its own;
+     * Ends the ring at the deployment (`DELETE /channels/{channel}/voice/rings/@me`) as `ringing`,
+     * the account it rang, renewing its session once when refused. Runs on a thread of its own;
      * nothing waits for it.
      */
-    fun decline(context: Context, origin: String, channel: String) {
+    fun decline(context: Context, ringing: CallAccount, channel: String) {
         val application = context.applicationContext
         Thread {
             try {
                 val store = PushStore(application)
-                val account = store.accountAt(origin) ?: return@Thread
-                val url = "${CallEngines.trimmed(origin)}/api/v1/channels/$channel/voice/rings/@me"
+                val account = store.accountWhere(ringing::names) ?: return@Thread
+                val url = "${ringing.origin}/api/v1/channels/$channel/voice/rings/@me"
                 var status = delete(application, url, account.getString("sessionToken"))
                 if (status == 401) {
                     val token = SessionRefresh.refresh(application, account) ?: return@Thread

@@ -196,7 +196,7 @@ class CallTelecom(
         displayName = ring.callerName.ifEmpty { context.getString(R.string.app_name) }
         CallService.showIncoming(
             context,
-            ring.origin,
+            ring.account,
             displayName,
             answer = { onMainLater { answer(call, byTelecom = false) } },
             decline = { onMainLater { declined(call, byTelecom = false) } },
@@ -205,7 +205,7 @@ class CallTelecom(
         announce()
         call.watch = RingWatch.start(
             RingPlatform(CallHttp(), CallSockets()),
-            RingOptions(ring.origin, CallCredentials(context, ring.origin), CallEngines.loopbackPlainText(context)),
+            RingOptions(ring.account.origin, CallCredentials(context, ring.account), CallEngines.loopbackPlainText(context)),
             Ring(ring.channel, ring.session, ring.until),
             object : RingObserver {
                 override fun ended(end: RingEnd) {
@@ -296,7 +296,7 @@ class CallTelecom(
             return
         }
         stopRinging(call)
-        CallRings.decline(context, ring.origin, ring.channel)
+        CallRings.decline(context, ring.account, ring.channel)
         call.endedAtRevision = (snapshots.latest ?: engine.state()).revision
         val cause = DisconnectCause(DisconnectCause.REJECTED)
         when {

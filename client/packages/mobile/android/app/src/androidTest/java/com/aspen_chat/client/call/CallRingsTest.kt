@@ -121,7 +121,7 @@ class CallRingsTest {
         assertEquals("Alice", extras.getCharSequence(Notification.EXTRA_TITLE).toString())
         assertEquals(Notification.CATEGORY_CALL, shown.category)
         assertTrue("the notification can wake the lock screen", shown.fullScreenIntent != null)
-        val engine = waitFor("the deployment's engine", 5_000) { CallEngines.existing(origin) }!!
+        val engine = waitFor("the deployment's engine", 5_000) { CallEngines.existing(CallAccount(origin, USER)) }!!
         val telecom = engine.telecom
         assertTrue(
             "Telecom holds the call as ringing (${telecom.phase})",
@@ -184,7 +184,7 @@ class CallRingsTest {
         Thread.sleep(1_000)
         assertNull(incomingNotification())
         assertTrue(identified.isEmpty())
-        assertNull(CallEngines.existing(origin)?.telecom?.phase?.takeIf { it != CallTelecom.Phase.IDLE })
+        assertNull(CallEngines.existing(CallAccount(origin, USER))?.telecom?.phase?.takeIf { it != CallTelecom.Phase.IDLE })
     }
 
     private fun incomingNotification(): Notification? =

@@ -261,10 +261,12 @@ object CallTestSupport {
     }
 
     /**
-     * The push state as the web view writes it on sign-in, holding one account at `origin`:
+     * The push state as the web view writes it on sign-in, holding the account at `origin`:
      * `userId` and `refreshToken` as given, a session token the deployment refuses
      * (`stale-session-token`), so the first request goes through the renewal, and `keys` the
-     * phone's, which `pushes` encrypts to.
+     * phone's, which `pushes` encrypts to. Another account at the same deployment is kept before
+     * it, with a session of its own (`other-session-token`), so whatever finds an account by its
+     * deployment alone acts as that one.
      */
     fun pushState(origin: String, subscription: String, userId: String, refreshToken: String, pushes: Pushes): String {
         val account = JSONObject()
@@ -276,7 +278,15 @@ object CallTestSupport {
             .put("keys", pushes.keys())
             .put("applicationServerKey", "key")
             .put("deploymentSubscription", "dep")
-        return JSONObject().put("version", 1).put("device", JSONObject.NULL).put("accounts", JSONArray().put(account)).toString()
+        val other = JSONObject()
+            .put("subscription", "$subscription-other")
+            .put("origin", origin)
+            .put("userId", "$userId-other")
+            .put("refreshToken", "other-refresh-token")
+            .put("sessionToken", "other-session-token")
+            .put("keys", JSONObject().put("privateKey", JSONObject().put("d", "AA")).put("publicKey", "AA").put("auth", "AA"))
+        val accounts = JSONArray().put(other).put(account)
+        return JSONObject().put("version", 1).put("device", JSONObject.NULL).put("accounts", accounts).toString()
     }
 
     /**

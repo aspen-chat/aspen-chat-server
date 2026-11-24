@@ -26,9 +26,21 @@ factory is given a function that answers it later. Nothing in the app imports th
 The state crosses as whole snapshots, never as increments. The engine numbers each (`revision`,
 counting up with every change) and writes it as JSON beside the record it hands its observer
 (`CallObserver::state_changed`'s `json`, `Engine::state_json`); the plugins hand that string to the
-page untouched, in a `state` event and as `state()`'s answer, each as `{ origin, state }`
-(`PublishedState`), `origin` being the deployment's `public_url`, so each deployment's `NativeCall`
-takes its own.
+page untouched, in a `state` event and as `state()`'s answer, each as `{ origin, userId, state }`
+(`PublishedState`), naming the account the engine acts as (`CallAccount`: the deployment's
+`public_url` and the user signed in there), so each account's `NativeCall` takes its own.
+
+## One engine per account
+
+The phone may hold several accounts, more than one of them on the same deployment (`accounts.md`),
+so the engine is per account, never per deployment: every plugin command names its account by
+`origin` and `userId`, which the `NativeCall` takes from its client's session, and a command naming
+no `userId` is refused. `CallEngines` keeps one engine for each account it is asked for; the
+engine's session is that account's in the push state the web view keeps (`CallCredentials` finds it
+by deployment and user), the camera and the share remember the account whose engine they feed, and a
+ring belongs to the account the push's subscription names, so it rings, is watched, answered, and
+declined as that user. The accounts hold one call at a time between them, as on the web
+(`accounts.md`); the engines of the others stay idle.
 
 The shape is defined once, in Rust: `voice_client::state::CallState` and the types it holds derive
 `serde::Serialize` and `schemars::JsonSchema` beside their UniFFI derives, with camelCase wire
@@ -112,8 +124,8 @@ and the share's sound is a second one: `voice_client/README.md`, A share has a c
 own). On Android the plugin resolves once the user has answered the media projection dialog,
 rejecting with `denied` when they decline; on iOS it resolves at once, the system's picker being the
 user's, and a share that does not come of it is told by the plugin's `share` event (`ShareEnded`:
-the origin and `denied`, `unsupported`, `failed`, or `null` for the user's own stop). Either way the
-share shows as `sharingScreen` and `localScreen` only once the engine's snapshot carries the
+the account and `denied`, `unsupported`, `failed`, or `null` for the user's own stop). Either way
+the share shows as `sharingScreen` and `localScreen` only once the engine's snapshot carries the
 `screen` source, which is once the capture runs; a refusal becomes `shareError` (and a
 `ScreenShareError` thrown from `startScreenShare`), the voice server's refusal `unsent` from the
 snapshot. `stopScreenShare` goes to the plugin's method of that name, and `clearShareError` to its
@@ -294,7 +306,7 @@ rings are in place:
    above), whose two sound cues come with them.
 6. Rings: the engine's ring watch (`voice_client/src/ring.rs`) and each phone ringing natively from
    a `call` push are in place (`ios-app.md` and `android-builds.md`, Rings), and a ring answered
-   there joins through the deployment's one engine (`CallEngines`), the one the plugin commands, so
+   there joins through the ringing account's engine (`CallEngines`), the one the plugin commands, so
    the page shows the call as any other. The page's own ring (`dm-calls-and-rings.md`) is as it was
    beside the phone's.
 7. The microphone chosen by device (`setAudioDevices` by id). A gain on it is not planned: the

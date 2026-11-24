@@ -37,7 +37,7 @@ final class AspenCallPluginTests: XCTestCase {
       const plugin = window.Capacitor.registerPlugin("AspenCall");
       const record = { states: [], routes: [], shapes: [], pips: [], shares: [], results: {} };
       window.__aspenCallTest = record;
-      plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin }));
+      plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin, userId: published.userId }));
       plugin.addListener("routes", (routes) => record.routes.push(routes));
       plugin.addListener("shape", (shape) => record.shapes.push(shape));
       plugin.addListener("pip", (pip) => record.pips.push(pip));
@@ -103,11 +103,27 @@ final class AspenCallPluginTests: XCTestCase {
         let api = ProcessInfo.processInfo.environment["ASPEN_CALL_API"]
             .flatMap { $0.isEmpty ? nil : $0 } ?? "http://127.0.0.1:1"
         let origin = api
+        // The account the page names beside the deployment: the deployment's user when one is
+        // given, else one no deployment need know, for what runs before a join.
+        let userId = ProcessInfo.processInfo.environment["ASPEN_CALL_USER_ID"]
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "bridge-test-user"
 
         // A fresh snapshot, for a page that slept: the engine's idle state as its JSON, numbered,
-        // of this origin.
-        let published = try await run("state", ["origin": origin])
+        // of this account.
+        let published = try await run("state", ["origin": origin, "userId": userId])
         XCTAssertEqual(published["origin"] as? String, origin)
+        XCTAssertEqual(published["userId"] as? String, userId)
+        // Another account on the same deployment has an engine of its own, and its snapshots
+        // name it.
+        let another = try await run("state", ["origin": origin, "userId": "another-account"])
+        XCTAssertEqual(another["userId"] as? String, "another-account")
+        let pluginForAccounts = await MainActor.run { bridgeViewController.bridge?.plugin(withName: "AspenCall") as? AspenCallPlugin }
+        let accounts = try XCTUnwrap(pluginForAccounts)
+        let separate = await MainActor.run {
+            accounts.engine(for: CallAccount(origin: origin, userId: userId))
+                !== accounts.engine(for: CallAccount(origin: origin, userId: "another-account"))
+        }
+        XCTAssertTrue(separate, "two accounts on one deployment share no engine")
         let idle = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(published["state"] as? String).utf8)) as? [String: Any])
         XCTAssertEqual(idle["status"] as? String, "idle")
         XCTAssertEqual(idle["revision"] as? Int, 0)
@@ -158,20 +174,22 @@ final class AspenCallPluginTests: XCTestCase {
         }
 
         // Muted outside a call is what the user last asked for, shown in the next snapshot.
-        _ = try await run("setMuted", ["origin": origin, "muted": true])
+        _ = try await run("setMuted", ["origin": origin, "userId": userId, "muted": true])
         let mutedSnapshot = try await untilState("the mute reaches the page", seconds: 5) { $0["muted"] as? Bool == true }
         XCTAssertEqual(mutedSnapshot["status"] as? String, "idle")
         XCTAssertGreaterThan(try XCTUnwrap(mutedSnapshot["revision"] as? Int), 0)
-        _ = try await run("setMuted", ["origin": origin, "muted": false])
+        _ = try await run("setMuted", ["origin": origin, "userId": userId, "muted": false])
         _ = try await untilState("the unmute reaches the page", seconds: 5) { $0["muted"] as? Bool == false }
 
         // A command the plugin cannot read is refused by name.
-        let badSource = try await run("setUserVolume", ["origin": origin, "user": "u", "source": "video", "gain": 1], expectingError: true)
+        let badSource = try await run("setUserVolume", ["origin": origin, "userId": userId, "user": "u", "source": "video", "gain": 1], expectingError: true)
         XCTAssertTrue(badSource.contains("source"), badSource)
-        let badReason = try await run("sessionEnded", ["origin": origin, "session": "s", "channel": "c", "reason": "bored"], expectingError: true)
+        let badReason = try await run("sessionEnded", ["origin": origin, "userId": userId, "session": "s", "channel": "c", "reason": "bored"], expectingError: true)
         XCTAssertTrue(badReason.contains("reason"), badReason)
         let badOrigin = try await run("state", ["origin": "not a url"], expectingError: true)
         XCTAssertTrue(badOrigin.contains("origin"), badOrigin)
+        let noAccount = try await run("state", ["origin": origin], expectingError: true)
+        XCTAssertTrue(noAccount.contains("userId"), noAccount)
 
         // Web Audio in the page while the call's session is configured and active, as CallKit
         // would have it in a call (the simulator's CallKit holds none to activate it for): the
@@ -223,7 +241,7 @@ final class AspenCallPluginTests: XCTestCase {
         let state = try JSONSerialization.data(withJSONObject: ["version": 1, "accounts": [account]])
         XCTAssertTrue(PushStateStore.save(json: String(decoding: state, as: UTF8.self)))
         let before = try await states().count
-        _ = try await run("join", ["origin": origin, "channel": channel, "name": "Bridge test"])
+        _ = try await run("join", ["origin": origin, "userId": userId, "channel": channel, "name": "Bridge test"])
         // The plugin's join asks the system for the microphone first, which a phone answers with
         // its prompt the first time: the wait is for a finger.
         let joining = try await untilState("the join's snapshot reaches the page", seconds: systemCall == .stands ? 120 : 15) {
@@ -240,7 +258,7 @@ final class AspenCallPluginTests: XCTestCase {
         let revisions = try await states().dropFirst(before).compactMap { $0["revision"] as? Int }
         XCTAssertEqual(revisions, revisions.sorted(), "snapshots arrive in revision order: \(revisions)")
         XCTAssertEqual(Set(revisions).count, revisions.count, "no snapshot twice: \(revisions)")
-        let fresh = try await run("state", ["origin": origin])
+        let fresh = try await run("state", ["origin": origin, "userId": userId])
         let freshState = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(fresh["state"] as? String).utf8)) as? [String: Any])
         XCTAssertEqual(freshState["revision"] as? Int, revisions.last, "a fresh read is the latest published")
 
@@ -256,7 +274,7 @@ final class AspenCallPluginTests: XCTestCase {
         self.helper = helper
         let pluginFound = await MainActor.run { bridgeViewController.bridge?.plugin(withName: "AspenCall") as? AspenCallPlugin }
         let plugin = try XCTUnwrap(pluginFound)
-        let engine = await MainActor.run { plugin.engine(at: origin) }
+        let engine = await MainActor.run { plugin.engine(for: CallAccount(origin: origin, userId: userId)) }
         let directFrom = try await states().count
         let connected: [String: Any]
         switch systemCall {
@@ -293,7 +311,7 @@ final class AspenCallPluginTests: XCTestCase {
         // frames at 90 degrees, which the track's source turns itself once the encoder wants them
         // turned (no orientation extension being negotiated), so the preview is 240 by 320 either
         // way; the preview's layer lies in the hole.
-        let opened = try await run("startCamera", ["origin": origin, "device": NSNull()])
+        let opened = try await run("startCamera", ["origin": origin, "userId": userId, "device": NSNull()])
         XCTAssertEqual(opened["device"] as? String, SyntheticVideoCapturer.front.id)
         XCTAssertEqual(opened["facing"] as? String, "front")
         let sendingCamera = try await untilState("the camera is a source", seconds: 20) { snapshot in
@@ -311,7 +329,7 @@ final class AspenCallPluginTests: XCTestCase {
         XCTAssertEqual(selfShape["height"] as? Int, 320)
         let selfDrawnAt = await MainActor.run { CallEngine.video.frame(ofTile: "self") }
         XCTAssertEqual(selfDrawnAt, CGRect(x: 8, y: 16, width: 120, height: 160))
-        let switched = try await run("switchCamera", ["origin": origin, "device": SyntheticVideoCapturer.back.id])
+        let switched = try await run("switchCamera", ["origin": origin, "userId": userId, "device": SyntheticVideoCapturer.back.id])
         XCTAssertEqual(switched["device"] as? String, SyntheticVideoCapturer.back.id)
         XCTAssertEqual(switched["facing"] as? String, "back")
 
@@ -323,7 +341,7 @@ final class AspenCallPluginTests: XCTestCase {
         let bob = try XCTUnwrap(second["user"] as? String)
         _ = try await post(helper.appendingPathComponent("second-participant/show-video"))
         _ = try await post(helper.appendingPathComponent("second-participant/camera/start"))
-        _ = try await run("setWatched", ["origin": origin, "video": [["user": bob, "source": "camera"]]])
+        _ = try await run("setWatched", ["origin": origin, "userId": userId, "video": [["user": bob, "source": "camera"]]])
         let watching = try await untilState("the browser's camera is received", seconds: 30) { snapshot in
             ((snapshot["videos"] as? [[String: Any]]) ?? []).contains { $0["user"] as? String == bob && $0["source"] as? String == "camera" }
         }
@@ -354,13 +372,13 @@ final class AspenCallPluginTests: XCTestCase {
         }
 
         // Malformed video commands are refused by name.
-        let badWatch = try await run("setWatched", ["origin": origin, "video": [["user": bob, "source": "microphone"]]], expectingError: true)
+        let badWatch = try await run("setWatched", ["origin": origin, "userId": userId, "video": [["user": bob, "source": "microphone"]]], expectingError: true)
         XCTAssertTrue(badWatch.contains("source"), badWatch)
         let badTile = try await run("setTiles", ["tiles": [["tile": "t", "surface": "s"]]], expectingError: true)
         XCTAssertTrue(badTile.contains("rect"), badTile)
 
         // The camera off from the page: the source leaves the snapshot and the capture stops.
-        _ = try await run("stopCamera", ["origin": origin])
+        _ = try await run("stopCamera", ["origin": origin, "userId": userId])
         _ = try await untilState("the camera leaves the sources", seconds: 15) { snapshot in
             (snapshot["revision"] as? Int ?? 0) > (sendingCamera["revision"] as? Int ?? 0)
                 && !((snapshot["sources"] as? [[String: Any]]) ?? []).contains { $0["source"] as? String == "camera" }
@@ -383,12 +401,12 @@ final class AspenCallPluginTests: XCTestCase {
         _ = try await untilState("the browser's offer reaches the page", seconds: 15) { snapshot in
             Self.files(of: snapshot, "offers").contains { $0["id"] as? String == browserOfferId }
         }
-        let badAccept = try await run("acceptOffer", ["origin": origin, "offer": browserOfferId, "mode": "directPreferred"], expectingError: true)
+        let badAccept = try await run("acceptOffer", ["origin": origin, "userId": userId, "offer": browserOfferId, "mode": "directPreferred"], expectingError: true)
         XCTAssertTrue(badAccept.contains("destination"), badAccept)
         let receivedURL = FileManager.default.temporaryDirectory.appendingPathComponent("received-\(browserOfferId).bin")
         try Data().write(to: receivedURL)
         let destination = try FileRegistry.shared.addReceived(receivedURL)
-        _ = try await run("acceptOffer", ["origin": origin, "offer": browserOfferId, "mode": "directPreferred", "destination": destination])
+        _ = try await run("acceptOffer", ["origin": origin, "userId": userId, "offer": browserOfferId, "mode": "directPreferred", "destination": destination])
         let received = try await untilState("the browser's file arrives", seconds: 60) { snapshot in
             Self.files(of: snapshot, "transfers").contains { $0["offer"] as? String == browserOfferId && $0["status"] as? String == "completed" }
         }
@@ -406,7 +424,7 @@ final class AspenCallPluginTests: XCTestCase {
         // picture and receives the sound on the share's audio section of the `{user}-share` stream.
         XCTAssertEqual((connected["grants"] as? [String: Any])?["shareScreen"] as? Bool, true, "the channel lets the user share")
         let ownUser = try XCTUnwrap(connected["user"] as? String)
-        _ = try await run("startScreenShare", ["origin": origin, "audio": true])
+        _ = try await run("startScreenShare", ["origin": origin, "userId": userId, "audio": true])
         let sharesLive = { (snapshot: [String: Any]) -> Bool in
             let sources = (snapshot["sources"] as? [[String: Any]]) ?? []
             let live = { (name: String) in sources.contains { $0["source"] as? String == name && $0["live"] as? Bool == true && $0["external"] as? Bool == true } }
@@ -455,7 +473,7 @@ final class AspenCallPluginTests: XCTestCase {
             shareAudioPackets = (try? await self.browserShareAudioPackets(helper, user: ownUser)) ?? 0
             return shareAudioPackets > 20
         }
-        _ = try await run("stopScreenShare", ["origin": origin])
+        _ = try await run("stopScreenShare", ["origin": origin, "userId": userId])
         _ = try await untilState("the share leaves the sources", seconds: 15) { snapshot in
             (snapshot["revision"] as? Int ?? 0) > (sharing["revision"] as? Int ?? 0)
                 && !((snapshot["sources"] as? [[String: Any]]) ?? []).contains { ($0["source"] as? String)?.hasPrefix("screen") == true }
@@ -468,11 +486,11 @@ final class AspenCallPluginTests: XCTestCase {
         // A picker the user dismisses: the plugin resolved at once, and the share's end comes back
         // as a `share` event naming the refusal, with no source ever asked for.
         CallEngine.screen.makeCapturer = { SyntheticScreenCapturer(declining: true) }
-        _ = try await run("startScreenShare", ["origin": origin, "audio": true])
+        _ = try await run("startScreenShare", ["origin": origin, "userId": userId, "audio": true])
         let declined = try await untilRecorded("the declined picker reaches the page", in: "shares", seconds: 10) { $0["failure"] as? String == "denied" }
         XCTAssertEqual(declined["origin"] as? String, origin)
         XCTAssertFalse(CallEngine.screen.isActive)
-        _ = try await run("leave", ["origin": origin])
+        _ = try await run("leave", ["origin": origin, "userId": userId])
         _ = try await untilState("the leave reaches the page", seconds: 15) { snapshot in
             (snapshot["revision"] as? Int ?? 0) > (watching["revision"] as? Int ?? 0) && snapshot["status"] as? String == "idle"
         }
@@ -504,7 +522,7 @@ final class AspenCallPluginTests: XCTestCase {
         let camera = CallEngine.camera
         let surface: TrackId = try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async {
-                camera.start(device: nil, origin: "trailing") { result in
+                camera.start(device: nil, account: CallAccount(origin: "trailing", userId: "trailing")) { result in
                     switch result {
                     case .success(let opened): continuation.resume(returning: opened.track)
                     case .failure(let failure): continuation.resume(throwing: failure)

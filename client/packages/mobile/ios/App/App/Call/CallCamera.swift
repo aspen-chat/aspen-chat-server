@@ -163,8 +163,8 @@ final class CallCamera {
     private(set) var track: RTCVideoTrack?
     /// The camera open now.
     private(set) var device: CallCameraDevice?
-    /// The deployment whose engine was given the track (`startSource`), while the camera is on.
-    private(set) var origin: String?
+    /// The account whose engine was given the track (`startSource`), while the camera is on.
+    private(set) var account: CallAccount?
 
     init(factory: RTCPeerConnectionFactory, tracks: CallTracks) {
         self.factory = factory
@@ -197,10 +197,10 @@ final class CallCamera {
         }
     }
 
-    /// Opens the camera `device` names (the phone's default for `nil`) for `origin`'s engine,
+    /// Opens the camera `device` names (the phone's default for `nil`) for `account`'s engine,
     /// answering the track to send and the camera opened. A camera already on is moved instead.
     func start(
-        device id: String?, origin: String,
+        device id: String?, account: CallAccount,
         completion: @escaping (Result<(track: TrackId, device: CallCameraDevice), CallCameraFailure>) -> Void
     ) {
         let capturer = self.capturer ?? makeCapturer()
@@ -217,7 +217,7 @@ final class CallCamera {
             self.track = track
             tracks.add(track)
         }
-        self.origin = origin
+        self.account = account
         capturer.start(device: wanted, delegate: source) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else {
@@ -258,7 +258,7 @@ final class CallCamera {
         track = nil
         source = nil
         device = nil
-        origin = nil
+        account = nil
         capturer = nil
     }
 }

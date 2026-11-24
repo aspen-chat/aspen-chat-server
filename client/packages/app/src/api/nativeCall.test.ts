@@ -1,11 +1,11 @@
 import type { AspenClient, EngineCallState, VoiceCallOptions, VoiceMedia } from "@aspen/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PublishedState } from "./nativeCall";
+import type { CallAccount, PublishedState } from "./nativeCall";
 
 /** What the native side was asked, in order. */
 const calls: { method: string; options: Record<string, unknown> | undefined }[] = [];
-/** What `state` answers next, by origin. */
-const current = new Map<string, { origin: string; state: string }>();
+/** What `state` answers next, by `accountKey`. */
+const current = new Map<string, PublishedState>();
 /** What `state` rejects with, when set. */
 let stateFailure: Error | null = null;
 /** What `join` rejects with, when set. */
@@ -14,7 +14,15 @@ let joinFailure: Error | null = null;
 const refusals = new Map<string, Error>();
 /** What each method named here resolves with; `undefined` for the rest. */
 const answers = new Map<string, unknown>();
-const listeners = new Map<string, (event: PublishedState) => void>();
+/** Every listener added, by event: each `NativeCall` adds its own. */
+const listeners = new Map<string, ((event: never) => void)[]>();
+
+/** The plugin tells every listener of `event`. */
+function emit(event: string, data: unknown): void {
+  for (const listener of listeners.get(event) ?? []) {
+    listener(data as never);
+  }
+}
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
@@ -27,8 +35,8 @@ vi.mock("@capacitor/core", () => ({
       {
         get: (_, method: string) => {
           if (method === "addListener") {
-            return (event: string, listener: (event: PublishedState) => void) => {
-              listeners.set(event, listener);
+            return (event: string, listener: (event: never) => void) => {
+              listeners.set(event, [...(listeners.get(event) ?? []), listener]);
               return Promise.resolve({ remove: () => Promise.resolve() });
             };
           }
@@ -38,8 +46,8 @@ vi.mock("@capacitor/core", () => ({
               // An engine not yet made answers its idle state, revision 0, as the plugin does.
               return stateFailure === null
                 ? Promise.resolve(
-                    current.get(options?.origin as string) ??
-                      snapshot({ origin: options?.origin, revision: 0 }),
+                    current.get(accountKey(options as unknown as CallAccount)) ??
+                      snapshot({ origin: options?.origin, userId: options?.userId, revision: 0 }),
                   )
                 : Promise.reject(stateFailure);
             }
@@ -135,13 +143,19 @@ function engineTransfer(
   };
 }
 
-/** `engineState(patch)` as the plugin publishes it: the engine's JSON beside the deployment. */
+/** `engineState(patch)` as the plugin publishes it: the engine's JSON beside its account. */
 function snapshot(patch: Record<string, unknown> = {}): PublishedState {
-  const { origin, ...rest } = patch;
+  const { origin, userId, ...rest } = patch;
   return {
     origin: typeof origin === "string" ? origin : ORIGIN,
+    userId: typeof userId === "string" ? userId : ANN,
     state: JSON.stringify(engineState(rest)),
   };
+}
+
+/** How `current` is keyed: an account's deployment and user together. */
+function accountKey(account: CallAccount): string {
+  return `${account.origin} ${account.userId}`;
 }
 
 function participant(user: string, held = false, sources: { source: string }[] = []) {
@@ -170,18 +184,18 @@ async function settle(): Promise<void> {
 
 /** The engine publishes `snapshot` to the page. */
 function publish(published: PublishedState): void {
-  listeners.get("state")?.(published);
+  emit("state", published);
 }
 
 const media = {} as VoiceMedia;
 
 /** A call with the plugin faked around it, and what it reported and heard. */
-function call(options: Partial<VoiceCallOptions> = {}, origin = ORIGIN) {
+function call(options: Partial<VoiceCallOptions> = {}, origin = ORIGIN, userId = ANN) {
   const reported: unknown[] = [];
   const wakes: (() => void)[] = [];
   const changes: string[] = [];
   const made = new NativeCall(
-    { client: { baseUrl: origin } as AspenClient, media, ...options },
+    { client: { baseUrl: origin, session: { userId } } as AspenClient, media, ...options },
     {
       report: (error) => reported.push(error),
       onWake: (listener) => wakes.push(listener),
@@ -629,14 +643,20 @@ describe("nativeCall", () => {
 
   describe("snapshots", () => {
     it("reads the current snapshot as it is made, and again as the page wakes", async () => {
-      current.set(ORIGIN, snapshot({ revision: 3, status: "connected", channel: CHANNEL }));
+      current.set(
+        accountKey({ origin: ORIGIN, userId: ANN }),
+        snapshot({ revision: 3, status: "connected", channel: CHANNEL }),
+      );
       const { call: made, wake } = call();
       await settle();
       expect(calls.filter((c) => c.method === "state").map((c) => c.options)).toEqual([
-        { origin: ORIGIN },
+        { origin: ORIGIN, userId: ANN },
       ]);
       expect(made.state.status).toBe("connected");
-      current.set(ORIGIN, snapshot({ revision: 4, status: "idle" }));
+      current.set(
+        accountKey({ origin: ORIGIN, userId: ANN }),
+        snapshot({ revision: 4, status: "idle" }),
+      );
       wake();
       await settle();
       expect(calls.filter((c) => c.method === "state")).toHaveLength(2);
@@ -674,11 +694,33 @@ describe("nativeCall", () => {
       expect(made.state.status).toBe("idle");
     });
 
+    it("takes only its own account's snapshots and shares on a deployment holding two", async () => {
+      const { call: ann } = call();
+      const { call: bob } = call({}, ORIGIN, BOB);
+      await settle();
+      expect(calls.filter((c) => c.method === "state").map((c) => c.options)).toEqual([
+        { origin: ORIGIN, userId: ANN },
+        { origin: ORIGIN, userId: BOB },
+      ]);
+      publish(snapshot({ userId: BOB, revision: 9, status: "connected", channel: CHANNEL }));
+      expect(bob.state.status).toBe("connected");
+      expect(ann.state.status).toBe("idle");
+      emit("share", { origin: ORIGIN, userId: BOB, failure: "failed" });
+      expect(bob.state.shareError).toBe("failed");
+      expect(ann.state.shareError).toBeNull();
+    });
+
+    it("refuses to be made for a client with no session", () => {
+      expect(
+        () => new NativeCall({ client: { baseUrl: ORIGIN, session: null } as AspenClient, media }),
+      ).toThrow();
+    });
+
     it("reports a snapshot it cannot map and shows nothing of it", async () => {
       const { call: made, reported } = call();
       await settle();
       publish(snapshot({ revision: 2, status: "connected", endedReason: "bored" }));
-      publish({ origin: ORIGIN, state: "{not json" });
+      publish({ origin: ORIGIN, userId: ANN, state: "{not json" });
       expect(reported).toHaveLength(2);
       expect(reported[0]).toBeInstanceOf(NativeCallProtocolError);
       expect(reported[1]).toBeInstanceOf(NativeCallProtocolError);
@@ -699,6 +741,7 @@ describe("nativeCall", () => {
       await settle();
       expect(calls.find((c) => c.method === "join")?.options).toEqual({
         origin: ORIGIN,
+        userId: ANN,
         channel: CHANNEL,
         name: "Lounge",
       });
@@ -778,6 +821,7 @@ describe("nativeCall", () => {
           method: "offerFile",
           options: {
             origin: ORIGIN,
+            userId: ANN,
             offer,
             reference: "picked-1",
             name: "notes.bin",
@@ -804,7 +848,13 @@ describe("nativeCall", () => {
       expect(calls).toEqual([
         {
           method: "acceptOffer",
-          options: { origin: ORIGIN, offer: OFFER, mode: "relayOnly", destination: "doc-1" },
+          options: {
+            origin: ORIGIN,
+            userId: ANN,
+            offer: OFFER,
+            mode: "relayOnly",
+            destination: "doc-1",
+          },
         },
       ]);
       made.acceptOffer(OFFER, "directPreferred");
@@ -827,10 +877,16 @@ describe("nativeCall", () => {
       made.dismissTransfer(OFFER, BOB);
       made.dismissFileFailure();
       expect(calls).toEqual([
-        { method: "withdrawOffer", options: { origin: ORIGIN, offer: OFFER } },
-        { method: "cancelTransfer", options: { origin: ORIGIN, offer: OFFER, peer: BOB } },
-        { method: "dismissTransfer", options: { origin: ORIGIN, offer: OFFER, peer: BOB } },
-        { method: "clearFileFailure", options: { origin: ORIGIN } },
+        { method: "withdrawOffer", options: { origin: ORIGIN, userId: ANN, offer: OFFER } },
+        {
+          method: "cancelTransfer",
+          options: { origin: ORIGIN, userId: ANN, offer: OFFER, peer: BOB },
+        },
+        {
+          method: "dismissTransfer",
+          options: { origin: ORIGIN, userId: ANN, offer: OFFER, peer: BOB },
+        },
+        { method: "clearFileFailure", options: { origin: ORIGIN, userId: ANN } },
       ]);
     });
 
@@ -872,16 +928,22 @@ describe("nativeCall", () => {
       made.acknowledgeEnd();
       made.onSessionEnded({ id: "s1", channel: CHANNEL, reason: "serverLost" });
       expect(calls).toEqual([
-        { method: "leave", options: { origin: ORIGIN } },
-        { method: "setMuted", options: { origin: ORIGIN, muted: true } },
-        { method: "setDeafened", options: { origin: ORIGIN, deafened: true } },
-        { method: "setHeld", options: { origin: ORIGIN, held: true } },
-        { method: "setServerMuted", options: { origin: ORIGIN, serverMuted: true } },
-        { method: "clearStateRefusal", options: { origin: ORIGIN } },
-        { method: "acknowledgeEnd", options: { origin: ORIGIN } },
+        { method: "leave", options: { origin: ORIGIN, userId: ANN } },
+        { method: "setMuted", options: { origin: ORIGIN, userId: ANN, muted: true } },
+        { method: "setDeafened", options: { origin: ORIGIN, userId: ANN, deafened: true } },
+        { method: "setHeld", options: { origin: ORIGIN, userId: ANN, held: true } },
+        { method: "setServerMuted", options: { origin: ORIGIN, userId: ANN, serverMuted: true } },
+        { method: "clearStateRefusal", options: { origin: ORIGIN, userId: ANN } },
+        { method: "acknowledgeEnd", options: { origin: ORIGIN, userId: ANN } },
         {
           method: "sessionEnded",
-          options: { origin: ORIGIN, session: "s1", channel: CHANNEL, reason: "serverLost" },
+          options: {
+            origin: ORIGIN,
+            userId: ANN,
+            session: "s1",
+            channel: CHANNEL,
+            reason: "serverLost",
+          },
         },
       ]);
     });
@@ -918,8 +980,8 @@ describe("nativeCall", () => {
       );
       const volumes = () => calls.filter((c) => c.method === "setUserVolume").map((c) => c.options);
       expect(volumes()).toEqual([
-        { origin: ORIGIN, user: BOB, source: "microphone", gain: 0.5 },
-        { origin: ORIGIN, user: BOB, source: "screenAudio", gain: 0 },
+        { origin: ORIGIN, userId: ANN, user: BOB, source: "microphone", gain: 0.5 },
+        { origin: ORIGIN, userId: ANN, user: BOB, source: "screenAudio", gain: 0 },
       ]);
       // Told once: the next snapshot with the same people tells nothing again.
       publish(
@@ -931,12 +993,24 @@ describe("nativeCall", () => {
         }),
       );
       expect(volumes()).toHaveLength(4);
-      expect(volumes()[2]).toEqual({ origin: ORIGIN, user: CAROL, source: "microphone", gain: 1 });
+      expect(volumes()[2]).toEqual({
+        origin: ORIGIN,
+        userId: ANN,
+        user: CAROL,
+        source: "microphone",
+        gain: 1,
+      });
       // A refresh reads every present participant again.
       gains.set(`${CAROL} microphone`, 0);
       made.refreshVolumes();
       expect(volumes()).toHaveLength(8);
-      expect(volumes()[6]).toEqual({ origin: ORIGIN, user: CAROL, source: "microphone", gain: 0 });
+      expect(volumes()[6]).toEqual({
+        origin: ORIGIN,
+        userId: ANN,
+        user: CAROL,
+        source: "microphone",
+        gain: 0,
+      });
       // The call's end forgets whom it told, so a later call tells again.
       publish(snapshot({ revision: 3, status: "idle" }));
       publish(
@@ -957,8 +1031,8 @@ describe("nativeCall", () => {
       made.setUserVolume(BOB, 1.5);
       made.setUserVolume(BOB, 0, "screenAudio");
       expect(calls.filter((c) => c.method === "setUserVolume").map((c) => c.options)).toEqual([
-        { origin: ORIGIN, user: BOB, source: "microphone", gain: 1.5 },
-        { origin: ORIGIN, user: BOB, source: "screenAudio", gain: 0 },
+        { origin: ORIGIN, userId: ANN, user: BOB, source: "microphone", gain: 1.5 },
+        { origin: ORIGIN, userId: ANN, user: BOB, source: "screenAudio", gain: 0 },
       ]);
     });
   });
@@ -983,7 +1057,7 @@ describe("nativeCall", () => {
       expect(watched()).toEqual([
         {
           method: "setWatched",
-          options: { origin: ORIGIN, video: [{ user: BOB, source: "camera" }] },
+          options: { origin: ORIGIN, userId: ANN, video: [{ user: BOB, source: "camera" }] },
         },
       ]);
       // A snapshot that changes nothing watched asks nothing again.
@@ -1006,6 +1080,7 @@ describe("nativeCall", () => {
         method: "setWatched",
         options: {
           origin: ORIGIN,
+          userId: ANN,
           video: [
             { user: BOB, source: "camera" },
             { user: BOB, source: "screen" },
@@ -1018,7 +1093,7 @@ describe("nativeCall", () => {
       again();
       expect(watched().at(-1)).toEqual({
         method: "setWatched",
-        options: { origin: ORIGIN, video: [] },
+        options: { origin: ORIGIN, userId: ANN, video: [] },
       });
       // Released twice releases once.
       again();
@@ -1032,7 +1107,9 @@ describe("nativeCall", () => {
       calls.length = 0;
       answers.set("startCamera", { device: "front-1", facing: "front" });
       await made.startCamera();
-      expect(calls).toEqual([{ method: "startCamera", options: { origin: ORIGIN, device: null } }]);
+      expect(calls).toEqual([
+        { method: "startCamera", options: { origin: ORIGIN, userId: ANN, device: null } },
+      ]);
       // The picture shows once the engine's snapshot carries the source.
       expect(made.state.localCamera).toBeNull();
       publish(
@@ -1045,7 +1122,10 @@ describe("nativeCall", () => {
       );
       expect(made.state.localCamera).toEqual({ kind: "native", surface: "t-cam", facing: "front" });
       made.stopCamera();
-      expect(calls.at(-1)).toEqual({ method: "stopCamera", options: { origin: ORIGIN } });
+      expect(calls.at(-1)).toEqual({
+        method: "stopCamera",
+        options: { origin: ORIGIN, userId: ANN },
+      });
       publish(snapshot({ revision: 4, ...connected() }));
       expect(made.state.localCamera).toBeNull();
     });
@@ -1094,7 +1174,9 @@ describe("nativeCall", () => {
       calls.length = 0;
       made.clearCameraError();
       expect(made.state.cameraError).toBeNull();
-      expect(calls).toEqual([{ method: "clearCameraError", options: { origin: ORIGIN } }]);
+      expect(calls).toEqual([
+        { method: "clearCameraError", options: { origin: ORIGIN, userId: ANN } },
+      ]);
       // The next call starts clean.
       refusals.set("startCamera", Object.assign(new Error("not allowed"), { code: "denied" }));
       await expect(made.startCamera()).rejects.toBeInstanceOf(CameraError);
@@ -1117,7 +1199,7 @@ describe("nativeCall", () => {
       answers.set("startCamera", { device: "back-1", facing: "back" });
       await made.startCamera();
       expect(calls).toEqual([
-        { method: "startCamera", options: { origin: ORIGIN, device: "back-1" } },
+        { method: "startCamera", options: { origin: ORIGIN, userId: ANN, device: "back-1" } },
       ]);
       publish(
         snapshot({
@@ -1136,7 +1218,7 @@ describe("nativeCall", () => {
       });
       expect(calls.at(-1)).toEqual({
         method: "switchCamera",
-        options: { origin: ORIGIN, device: "front-1" },
+        options: { origin: ORIGIN, userId: ANN, device: "front-1" },
       });
       expect(made.state.localCamera).toEqual({ kind: "native", surface: "t-cam", facing: "front" });
       // The same choice again moves nothing.
@@ -1167,7 +1249,7 @@ describe("nativeCall", () => {
       calls.length = 0;
       await made.startScreenShare();
       expect(calls).toEqual([
-        { method: "startScreenShare", options: { origin: ORIGIN, audio: true } },
+        { method: "startScreenShare", options: { origin: ORIGIN, userId: ANN, audio: true } },
       ]);
       publish(
         snapshot(
@@ -1192,7 +1274,9 @@ describe("nativeCall", () => {
       await made.startScreenShare();
       expect(calls).toEqual([]);
       made.stopScreenShare();
-      expect(calls).toEqual([{ method: "stopScreenShare", options: { origin: ORIGIN } }]);
+      expect(calls).toEqual([
+        { method: "stopScreenShare", options: { origin: ORIGIN, userId: ANN } },
+      ]);
     });
 
     it("does not ask for the screen outside a call or where sharing is not granted", async () => {
@@ -1228,16 +1312,18 @@ describe("nativeCall", () => {
       calls.length = 0;
       made.clearShareError();
       expect(made.state.shareError).toBeNull();
-      expect(calls).toEqual([{ method: "clearShareError", options: { origin: ORIGIN } }]);
+      expect(calls).toEqual([
+        { method: "clearShareError", options: { origin: ORIGIN, userId: ANN } },
+      ]);
       // A share that ends after the plugin answered (iOS's picker dismissed) comes as an event.
-      listeners.get("share")?.({ origin: ORIGIN, failure: "unsupported" } as never);
+      emit("share", { origin: ORIGIN, userId: ANN, failure: "unsupported" });
       expect(made.state.shareError).toBe("unsupported");
-      listeners.get("share")?.({ origin: "https://other.example", failure: "failed" } as never);
+      emit("share", { origin: "https://other.example", failure: "failed" });
       expect(made.state.shareError).toBe("unsupported");
-      listeners.get("share")?.({ origin: ORIGIN, failure: null } as never);
+      emit("share", { origin: ORIGIN, userId: ANN, failure: null });
       expect(made.state.shareError).toBeNull();
       // The call's end starts the next one clean.
-      listeners.get("share")?.({ origin: ORIGIN, failure: "failed" } as never);
+      emit("share", { origin: ORIGIN, userId: ANN, failure: "failed" });
       publish(snapshot({ revision: 9, status: "idle" }));
       expect(made.state.shareError).toBeNull();
     });

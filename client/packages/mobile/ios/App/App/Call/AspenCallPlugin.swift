@@ -2,13 +2,13 @@ import Capacitor
 import Foundation
 
 /// The web view's way to the call engine (`AspenCall` in the app's `src/api/nativeCall.ts`,
-/// which Android's plugin of the same name answers too): the engine of each deployment the page
-/// names by its origin, from `CallEngines`, the process's one engine per deployment, which a DM's
-/// call ringing the phone drives too, so a ring answered from the lock screen is the call the page
-/// then shows; its snapshots are published to the page as `state` events and answered afresh by
-/// `state`, each the JSON the engine writes of its state (`call_bridge_schema.json`), handed on
-/// untouched beside the deployment's origin, the one set of routes the device's call plays
-/// through, published as
+/// which Android's plugin of the same name answers too): the engine of each account the page
+/// names by its origin and user id, from `CallEngines`, the process's one engine per account,
+/// which a DM's call ringing the phone drives too, so a ring answered from the lock screen is the
+/// call the page then shows; its snapshots are published to the page as `state` events and
+/// answered afresh by `state`, each the JSON the engine writes of its state
+/// (`call_bridge_schema.json`), handed on untouched beside the account's origin and user id, the
+/// one set of routes the device's call plays through, published as
 /// `routes` events, and the call's video: the cameras (`CallCamera`), the holes the page reports
 /// for the pictures (`setTiles`, laid out by `CallVideo`), each picture's shape back as a `shape`
 /// event, and the system's picture in picture as `pip` events. The call's files go to the engine
@@ -69,9 +69,8 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         var camera: CallSnapshots.Subscription?
     }
 
-    /// The engines the page has named, by the deployment's origin without a trailing slash, each
-    /// followed from its first naming.
-    private var followed: [String: Followed] = [:]
+    /// The engines the page has named, each followed from its first naming.
+    private var followed: [CallAccount: Followed] = [:]
     private var routes: CallRoutes.Subscription?
     private var shapes: CallVideo.Subscription?
     private var pictureInPicture: CallVideo.Subscription?
@@ -92,44 +91,44 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: Engines
 
-    /// The deployment the call names, or a rejected call.
-    private func origin(of call: CAPPluginCall) -> String? {
+    /// The account the call names, or a rejected call.
+    private func account(of call: CAPPluginCall) -> CallAccount? {
         guard let origin = call.getString("origin"), let url = URL(string: origin), url.host != nil else {
             call.reject("origin must be the deployment's address")
             return nil
         }
-        var trimmed = Substring(origin)
-        while trimmed.hasSuffix("/") {
-            trimmed.removeLast()
+        guard let userId = call.getString("userId"), !userId.isEmpty else {
+            call.reject("userId must name the account at the deployment")
+            return nil
         }
-        return String(trimmed)
+        return CallAccount(origin: origin, userId: userId)
     }
 
-    /// The deployment's engine (`CallEngines.shared.forOrigin`), followed for the page from the
-    /// first time the page names its origin: its snapshots go to the page as `state` events, and
+    /// The account's engine (`CallEngines.shared.forAccount`), followed for the page from the
+    /// first time the page names it: its snapshots go to the page as `state` events, and
     /// the camera follows its call. Call on the main queue. Internal so the bridge's proof can
     /// drive the engine the page's commands reach.
-    func engine(at origin: String) -> CallEngine {
-        let engine = CallEngines.shared.forOrigin(origin)
-        if followed[origin] == nil {
+    func engine(for account: CallAccount) -> CallEngine {
+        let engine = CallEngines.shared.forAccount(account)
+        if followed[account] == nil {
             let following = Followed()
             following.snapshots = engine.snapshots.listenJSON { [weak self] json in
-                self?.notifyListeners("state", data: Self.published(json, origin: origin))
+                self?.notifyListeners("state", data: Self.published(json, account: account))
             }
             following.camera = engine.snapshots.listen { [weak self] state in
-                Self.cameraFollows(state, origin: origin)
-                self?.shareFollows(state, origin: origin)
+                Self.cameraFollows(state, account: account)
+                self?.shareFollows(state, account: account)
             }
-            followed[origin] = following
+            followed[account] = following
         }
         return engine
     }
 
     /// The camera is on only while its engine sends it: the call ending, or the voice server
     /// refusing the camera, stops the capture, so the light goes off with the picture.
-    private static func cameraFollows(_ state: CallState, origin: String) {
+    private static func cameraFollows(_ state: CallState, account: CallAccount) {
         let camera = CallEngine.camera
-        guard camera.isOn, camera.origin == origin else {
+        guard camera.isOn, camera.account == account else {
             return
         }
         let ended = state.status == .idle || state.status == .failed
@@ -141,9 +140,9 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// The share is on only while its engine sends it: the call ending, or the voice server
     /// refusing the share, stops the capture, and the page hears why as a `share` event.
-    private func shareFollows(_ state: CallState, origin: String) {
+    private func shareFollows(_ state: CallState, account: CallAccount) {
         let screen = CallEngine.screen
-        guard screen.isActive, screen.origin == origin else {
+        guard screen.isActive, screen.account == account else {
             return
         }
         let ended = state.status == .idle || state.status == .failed
@@ -151,28 +150,28 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         if ended || refused {
             screen.stop()
             if refused {
-                notifyListeners("share", data: Self.shareData(origin: origin, failure: nil))
+                notifyListeners("share", data: Self.shareData(account: account, failure: nil))
             }
         }
     }
 
     /// Runs `body` with the call's engine on the main queue, resolving the call after it.
     private func withEngine(_ call: CAPPluginCall, _ body: @escaping (CallEngine) -> Void) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         DispatchQueue.main.async {
-            body(self.engine(at: origin))
+            body(self.engine(for: account))
             call.resolve()
         }
     }
 
     // MARK: Commands
 
-    /// Joins `channel`'s call at `origin`, shown by the system as `name`, once the system has
+    /// Joins `channel`'s call as the account, shown by the system as `name`, once the system has
     /// answered for the microphone.
     @objc func join(_ call: CAPPluginCall) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         guard let channel = call.getString("channel"), !channel.isEmpty else {
@@ -181,7 +180,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         let name = call.getString("name")
         DispatchQueue.main.async {
-            let engine = self.engine(at: origin)
+            let engine = self.engine(for: account)
             engine.askForMicrophone {
                 engine.join(channel: channel, name: name)
                 call.resolve()
@@ -422,7 +421,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     /// opened and its facing (`OpenedCamera` in `nativeCall.ts`), or rejects with the code
     /// `denied`, `none`, or `failed`.
     @objc func startCamera(_ call: CAPPluginCall) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         let device = call.getString("device")
@@ -432,8 +431,8 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("the camera is not allowed", CallCameraFailure.denied.rawValue)
                     return
                 }
-                let engine = self.engine(at: origin)
-                CallEngine.camera.start(device: device, origin: origin) { result in
+                let engine = self.engine(for: account)
+                CallEngine.camera.start(device: device, account: account) { result in
                     switch result {
                     case .success(let opened):
                         engine.engine.startSource(source: .camera, track: opened.track)
@@ -449,7 +448,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Moves a camera that is on to the one `device` names, the track and the engine's sender
     /// unchanged; resolves with the camera opened and its facing.
     @objc func switchCamera(_ call: CAPPluginCall) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         let device = call.getString("device")
@@ -458,7 +457,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("the camera is off", CallCameraFailure.failed.rawValue)
                 return
             }
-            CallEngine.camera.start(device: device, origin: origin) { result in
+            CallEngine.camera.start(device: device, account: account) { result in
                 switch result {
                 case .success(let opened):
                     call.resolve(Self.openedData(opened.device))
@@ -491,7 +490,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     /// through the snapshots (the share's sources) or a `share` event (why none came). A share
     /// already asked for is left as it is.
     @objc func startScreenShare(_ call: CAPPluginCall) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         let audio = call.getBool("audio") ?? true
@@ -501,9 +500,9 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
                 return
             }
-            let engine = self.engine(at: origin)
+            let engine = self.engine(for: account)
             screen.start(
-                origin: origin, audio: audio,
+                account: account, audio: audio,
                 onStarted: { video, audio in
                     engine.engine.startExternalSource(source: .screen, track: video)
                     if let audio {
@@ -513,7 +512,7 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
                 onEnded: { [weak self] failure in
                     engine.engine.stopSource(source: .screen)
                     engine.engine.stopSource(source: .screenAudio)
-                    self?.notifyListeners("share", data: Self.shareData(origin: origin, failure: failure))
+                    self?.notifyListeners("share", data: Self.shareData(account: account, failure: failure))
                 })
             call.resolve()
         }
@@ -536,8 +535,8 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// A share's end as the page reads it (`ShareEnded` in `nativeCall.ts`).
-    static func shareData(origin: String, failure: CallScreenFailure?) -> JSObject {
-        ["origin": origin, "failure": failure?.rawValue ?? NSNull()]
+    static func shareData(account: CallAccount, failure: CallScreenFailure?) -> JSObject {
+        ["origin": account.origin, "userId": account.userId, "failure": failure?.rawValue ?? NSNull()]
     }
 
     /// Asks the engine to watch `video`, each a user's screen or camera.
@@ -635,19 +634,19 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// The engine's latest snapshot, for a page that slept through the events.
     @objc func state(_ call: CAPPluginCall) {
-        guard let origin = origin(of: call) else {
+        guard let account = account(of: call) else {
             return
         }
         DispatchQueue.main.async {
-            let engine = self.engine(at: origin)
-            call.resolve(Self.published(engine.snapshots.latestJSON ?? engine.engine.stateJson(), origin: origin))
+            let engine = self.engine(for: account)
+            call.resolve(Self.published(engine.snapshots.latestJSON ?? engine.engine.stateJson(), account: account))
         }
     }
 
     /// A snapshot as the page reads it (`PublishedState` in `nativeCall.ts`): the engine's JSON
     /// as written, and whose it is.
-    static func published(_ json: String, origin: String) -> JSObject {
-        ["origin": origin, "state": json]
+    static func published(_ json: String, account: CallAccount) -> JSObject {
+        ["origin": account.origin, "userId": account.userId, "state": json]
     }
 
     // MARK: Routes

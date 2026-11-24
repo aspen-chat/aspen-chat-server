@@ -36,12 +36,26 @@ import {
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
 /**
- * One snapshot of a deployment's engine as the plugin publishes it: the JSON the engine writes
- * of its `CallState` (`EngineCallState`, generated from `call_bridge_schema.json`), untouched,
- * with the deployment it is of, so each deployment's `NativeCall` takes its own.
+ * An account the phone's call engines act as: the deployment's `public_url` and the user signed
+ * in there. The phone may hold several accounts on one deployment, each with an engine of its
+ * own, so the plugin names an engine by both, never by the deployment alone.
  */
-export interface PublishedState {
+export interface CallAccount {
   readonly origin: string;
+  readonly userId: string;
+}
+
+/** Whether `a` and `b` are the same account. */
+export function sameAccount(a: CallAccount, b: CallAccount): boolean {
+  return a.origin === b.origin && a.userId === b.userId;
+}
+
+/**
+ * One snapshot of an account's engine as the plugin publishes it: the JSON the engine writes
+ * of its `CallState` (`EngineCallState`, generated from `call_bridge_schema.json`), untouched,
+ * with the account it is of, so each account's `NativeCall` takes its own.
+ */
+export interface PublishedState extends CallAccount {
   readonly state: string;
 }
 
@@ -125,16 +139,15 @@ export interface OpenedCamera {
  * or the capture ending as the system ends it), else why it could not go on, which becomes the
  * page's `shareError`.
  */
-export interface ShareEnded {
-  readonly origin: string;
+export interface ShareEnded extends CallAccount {
   readonly failure: ShareFailure | null;
 }
 
 /**
  * The mobile apps' native side of a call (`AspenCallPlugin`, in each): the call engine for each
- * deployment the user is signed in to, which runs the call itself, its snapshots, where the
- * call plays, and the video it draws. Every method names the deployment by its `origin` (the
- * `public_url`), except the routes, the cameras, and the tiles, which are the phone's. `join`
+ * account the phone holds, which runs the call itself, its snapshots, where the
+ * call plays, and the video it draws. Every method names its engine's account (`CallAccount`),
+ * except the routes, the cameras, and the tiles, which are the phone's. `join`
  * asks the system for the microphone first, and joins through the system's call (CallKit,
  * Telecom); `state` is a fresh snapshot, for a page that slept through the `state` events.
  * `startCamera` asks the system for the camera and rejects with the code `denied`, `none`, or
@@ -148,57 +161,61 @@ export interface ShareEnded {
  * come of it is told by a `share` event. `stopScreenShare` ends one.
  */
 export interface AspenCallPlugin {
-  join(options: { origin: string; channel: string; name: string | null }): Promise<void>;
-  leave(options: { origin: string }): Promise<void>;
-  setMuted(options: { origin: string; muted: boolean }): Promise<void>;
-  setDeafened(options: { origin: string; deafened: boolean }): Promise<void>;
-  setHeld(options: { origin: string; held: boolean }): Promise<void>;
-  setServerMuted(options: { origin: string; serverMuted: boolean }): Promise<void>;
-  setUserVolume(options: {
-    origin: string;
-    user: string;
-    source: AudioSource;
-    gain: number;
-  }): Promise<void>;
-  sessionEnded(options: {
-    origin: string;
-    session: string;
-    channel: string;
-    reason: VoiceSessionEndReason;
-  }): Promise<void>;
-  acknowledgeEnd(options: { origin: string }): Promise<void>;
-  clearStateRefusal(options: { origin: string }): Promise<void>;
-  offerFile(options: {
-    origin: string;
-    offer: string;
-    reference: string;
-    name: string;
-    allowDirect: boolean;
-    validForSeconds: number;
-  }): Promise<void>;
-  withdrawOffer(options: { origin: string; offer: string }): Promise<void>;
-  acceptOffer(options: {
-    origin: string;
-    offer: string;
-    mode: TransferMode;
-    destination: string;
-  }): Promise<void>;
-  cancelTransfer(options: { origin: string; offer: string; peer: string }): Promise<void>;
-  dismissTransfer(options: { origin: string; offer: string; peer: string }): Promise<void>;
-  clearFileFailure(options: { origin: string }): Promise<void>;
-  state(options: { origin: string }): Promise<PublishedState>;
+  join(options: CallAccount & { channel: string; name: string | null }): Promise<void>;
+  leave(options: CallAccount): Promise<void>;
+  setMuted(options: CallAccount & { muted: boolean }): Promise<void>;
+  setDeafened(options: CallAccount & { deafened: boolean }): Promise<void>;
+  setHeld(options: CallAccount & { held: boolean }): Promise<void>;
+  setServerMuted(options: CallAccount & { serverMuted: boolean }): Promise<void>;
+  setUserVolume(
+    options: CallAccount & {
+      user: string;
+      source: AudioSource;
+      gain: number;
+    },
+  ): Promise<void>;
+  sessionEnded(
+    options: CallAccount & {
+      session: string;
+      channel: string;
+      reason: VoiceSessionEndReason;
+    },
+  ): Promise<void>;
+  acknowledgeEnd(options: CallAccount): Promise<void>;
+  clearStateRefusal(options: CallAccount): Promise<void>;
+  offerFile(
+    options: CallAccount & {
+      offer: string;
+      reference: string;
+      name: string;
+      allowDirect: boolean;
+      validForSeconds: number;
+    },
+  ): Promise<void>;
+  withdrawOffer(options: CallAccount & { offer: string }): Promise<void>;
+  acceptOffer(
+    options: CallAccount & {
+      offer: string;
+      mode: TransferMode;
+      destination: string;
+    },
+  ): Promise<void>;
+  cancelTransfer(options: CallAccount & { offer: string; peer: string }): Promise<void>;
+  dismissTransfer(options: CallAccount & { offer: string; peer: string }): Promise<void>;
+  clearFileFailure(options: CallAccount): Promise<void>;
+  state(options: CallAccount): Promise<PublishedState>;
   routes(): Promise<PhoneRoutes>;
   setRoute(options: { kind: RouteKind }): Promise<void>;
   clearRoute(): Promise<void>;
   cameras(): Promise<{ cameras: readonly PhoneCamera[] }>;
-  startCamera(options: { origin: string; device: string | null }): Promise<OpenedCamera>;
-  switchCamera(options: { origin: string; device: string | null }): Promise<OpenedCamera>;
-  stopCamera(options: { origin: string }): Promise<void>;
-  clearCameraError(options: { origin: string }): Promise<void>;
-  startScreenShare(options: { origin: string; audio: boolean }): Promise<void>;
-  stopScreenShare(options: { origin: string }): Promise<void>;
-  clearShareError(options: { origin: string }): Promise<void>;
-  setWatched(options: { origin: string; video: readonly WatchedVideo[] }): Promise<void>;
+  startCamera(options: CallAccount & { device: string | null }): Promise<OpenedCamera>;
+  switchCamera(options: CallAccount & { device: string | null }): Promise<OpenedCamera>;
+  stopCamera(options: CallAccount): Promise<void>;
+  clearCameraError(options: CallAccount): Promise<void>;
+  startScreenShare(options: CallAccount & { audio: boolean }): Promise<void>;
+  stopScreenShare(options: CallAccount): Promise<void>;
+  clearShareError(options: CallAccount): Promise<void>;
+  setWatched(options: CallAccount & { video: readonly WatchedVideo[] }): Promise<void>;
   setTiles(options: { tiles: readonly TileReport[] }): Promise<void>;
   addListener(
     event: "state",
@@ -605,7 +622,7 @@ export function onPageWake(listener: () => void): void {
 
 /**
  * The user's call in a mobile app, carried by the phone's call engine: every command goes to the
- * `AspenCall` plugin for this deployment, and the state is the engine's, mirrored from whole
+ * `AspenCall` plugin for this account's engine, and the state is the engine's, mirrored from whole
  * snapshots (the JSON the engine writes of its `CallState`, typed from `call_bridge_schema.json`
  * as `EngineCallState`) in the order of their revisions, so one that arrives late changes
  * nothing, with what the page alone knows of the video laid over it (`LocalVideo`). The page
@@ -628,7 +645,7 @@ export function onPageWake(listener: () => void): void {
  * routes' (`hasAudioDeviceChoice` is false).
  */
 export class NativeCall implements Call {
-  readonly #origin: string;
+  readonly #account: CallAccount;
   readonly #userVolume: (userId: string, source: AudioSource) => number;
   readonly #nameOf: (channelId: string) => string | null;
   readonly #report: (error: unknown) => void;
@@ -655,7 +672,13 @@ export class NativeCall implements Call {
   } | null = null;
 
   constructor(options: VoiceCallOptions, native: NativeCallOptions = {}) {
-    this.#origin = options.client.baseUrl;
+    const userId = options.client.session?.userId;
+    if (userId === undefined) {
+      throw new Error(
+        "a NativeCall is made for a signed-in account, and this client has no session",
+      );
+    }
+    this.#account = { origin: options.client.baseUrl, userId };
     this.#userVolume = options.userVolume ?? (() => 1);
     this.#nameOf = native.nameOf ?? (() => null);
     this.#report =
@@ -667,12 +690,12 @@ export class NativeCall implements Call {
       this.#take(published);
     });
     void AspenCall.addListener("share", (ended) => {
-      if (ended.origin === this.#origin) {
+      if (sameAccount(ended, this.#account)) {
         this.#setLocal({ shareFailure: ended.failure });
       }
     });
     const read = () => {
-      AspenCall.state({ origin: this.#origin }).then(
+      AspenCall.state(this.#account).then(
         (published) => {
           this.#take(published);
         },
@@ -696,9 +719,9 @@ export class NativeCall implements Call {
     };
   };
 
-  /** Shows the published snapshot when it is this deployment's and newer than the one shown. */
+  /** Shows the published snapshot when it is this account's and newer than the one shown. */
   #take(published: PublishedState): void {
-    if (published.origin !== this.#origin) {
+    if (!sameAccount(published, this.#account)) {
       return;
     }
     let snapshot: EngineCallState;
@@ -758,7 +781,7 @@ export class NativeCall implements Call {
     const key = JSON.stringify(video);
     if (key !== this.#watching) {
       this.#watching = key;
-      this.#command(AspenCall.setWatched({ origin: this.#origin, video }));
+      this.#command(AspenCall.setWatched({ ...this.#account, video }));
     }
   }
 
@@ -775,7 +798,7 @@ export class NativeCall implements Call {
 
   #tell(userId: string, source: AudioSource, gain: number): void {
     this.#told.set(`${userId} ${source}`, gain);
-    this.#command(AspenCall.setUserVolume({ origin: this.#origin, user: userId, source, gain }));
+    this.#command(AspenCall.setUserVolume({ ...this.#account, user: userId, source, gain }));
   }
 
   /**
@@ -814,7 +837,7 @@ export class NativeCall implements Call {
       this.#joining = { channelId, resolve, reject };
     });
     try {
-      await AspenCall.join({ origin: this.#origin, channel: channelId, name });
+      await AspenCall.join({ ...this.#account, channel: channelId, name });
     } catch (error) {
       if (this.#joining?.channelId === channelId) {
         this.#joining = null;
@@ -825,11 +848,11 @@ export class NativeCall implements Call {
   }
 
   leave(): void {
-    this.#command(AspenCall.leave({ origin: this.#origin }));
+    this.#command(AspenCall.leave(this.#account));
   }
 
   acknowledgeEnd(): void {
-    this.#command(AspenCall.acknowledgeEnd({ origin: this.#origin }));
+    this.#command(AspenCall.acknowledgeEnd(this.#account));
   }
 
   /**
@@ -868,7 +891,7 @@ export class NativeCall implements Call {
     const offer = crypto.randomUUID();
     this.#command(
       AspenCall.offerFile({
-        origin: this.#origin,
+        ...this.#account,
         offer,
         reference: file.reference,
         name,
@@ -880,7 +903,7 @@ export class NativeCall implements Call {
   }
 
   withdrawOffer(offer: string): void {
-    this.#command(AspenCall.withdrawOffer({ origin: this.#origin, offer }));
+    this.#command(AspenCall.withdrawOffer({ ...this.#account, offer }));
   }
 
   /**
@@ -895,39 +918,39 @@ export class NativeCall implements Call {
       this.#report(new NativeCallUnavailableError("Receiving a file with no place chosen for it"));
       return;
     }
-    this.#command(AspenCall.acceptOffer({ origin: this.#origin, offer, mode, destination }));
+    this.#command(AspenCall.acceptOffer({ ...this.#account, offer, mode, destination }));
   }
 
   cancelTransfer(offer: string, peer: string): void {
-    this.#command(AspenCall.cancelTransfer({ origin: this.#origin, offer, peer }));
+    this.#command(AspenCall.cancelTransfer({ ...this.#account, offer, peer }));
   }
 
   dismissTransfer(offer: string, peer: string): void {
-    this.#command(AspenCall.dismissTransfer({ origin: this.#origin, offer, peer }));
+    this.#command(AspenCall.dismissTransfer({ ...this.#account, offer, peer }));
   }
 
   dismissFileFailure(): void {
-    this.#command(AspenCall.clearFileFailure({ origin: this.#origin }));
+    this.#command(AspenCall.clearFileFailure(this.#account));
   }
 
   setMuted(muted: boolean): void {
-    this.#command(AspenCall.setMuted({ origin: this.#origin, muted }));
+    this.#command(AspenCall.setMuted({ ...this.#account, muted }));
   }
 
   setDeafened(deafened: boolean): void {
-    this.#command(AspenCall.setDeafened({ origin: this.#origin, deafened }));
+    this.#command(AspenCall.setDeafened({ ...this.#account, deafened }));
   }
 
   setHeld(held: boolean): void {
-    this.#command(AspenCall.setHeld({ origin: this.#origin, held }));
+    this.#command(AspenCall.setHeld({ ...this.#account, held }));
   }
 
   setServerMuted(serverMuted: boolean): void {
-    this.#command(AspenCall.setServerMuted({ origin: this.#origin, serverMuted }));
+    this.#command(AspenCall.setServerMuted({ ...this.#account, serverMuted }));
   }
 
   clearStateRefusal(): void {
-    this.#command(AspenCall.clearStateRefusal({ origin: this.#origin }));
+    this.#command(AspenCall.clearStateRefusal(this.#account));
   }
 
   /**
@@ -960,7 +983,7 @@ export class NativeCall implements Call {
     }
     this.#setLocal({ shareFailure: null });
     try {
-      await AspenCall.startScreenShare({ origin: this.#origin, audio: true });
+      await AspenCall.startScreenShare({ ...this.#account, audio: true });
     } catch (error) {
       const failure = shareFailureOfCode(codeOf(error));
       this.#setLocal({ shareFailure: failure });
@@ -975,13 +998,13 @@ export class NativeCall implements Call {
   /** Stops the share, if one is on or asked for; the engine's snapshot then shows it gone. */
   stopScreenShare(): void {
     this.#setLocal({ shareFailure: null });
-    this.#command(AspenCall.stopScreenShare({ origin: this.#origin }));
+    this.#command(AspenCall.stopScreenShare(this.#account));
   }
 
   /** Dismisses the reason the screen last failed to be shared, the phone's and the voice server's alike. */
   clearShareError(): void {
     this.#setLocal({ shareFailure: null });
-    this.#command(AspenCall.clearShareError({ origin: this.#origin }));
+    this.#command(AspenCall.clearShareError(this.#account));
   }
 
   /**
@@ -997,7 +1020,7 @@ export class NativeCall implements Call {
     }
     try {
       const opened = await AspenCall.startCamera({
-        origin: this.#origin,
+        ...this.#account,
         device: this.#cameraDevice,
       });
       this.#setLocal({ facing: opened.facing, cameraFailure: null });
@@ -1011,12 +1034,12 @@ export class NativeCall implements Call {
   /** Dismisses the reason the camera last failed, the phone's and the voice server's alike. */
   clearCameraError(): void {
     this.#setLocal({ cameraFailure: null });
-    this.#command(AspenCall.clearCameraError({ origin: this.#origin }));
+    this.#command(AspenCall.clearCameraError(this.#account));
   }
 
   /** Turns the camera off, if it is on; the engine's snapshot then shows it gone. */
   stopCamera(): void {
-    this.#command(AspenCall.stopCamera({ origin: this.#origin }));
+    this.#command(AspenCall.stopCamera(this.#account));
   }
 
   /**
@@ -1037,7 +1060,7 @@ export class NativeCall implements Call {
     if (device !== this.#cameraDevice) {
       this.#cameraDevice = device;
       if (this.#state.localCamera !== null) {
-        const opened = await AspenCall.switchCamera({ origin: this.#origin, device });
+        const opened = await AspenCall.switchCamera({ ...this.#account, device });
         this.#setLocal({ facing: opened.facing });
       }
     }
@@ -1085,7 +1108,7 @@ export class NativeCall implements Call {
   onSessionEnded(event: { id: string; channel: string; reason: VoiceSessionEndReason }): void {
     this.#command(
       AspenCall.sessionEnded({
-        origin: this.#origin,
+        ...this.#account,
         session: event.id,
         channel: event.channel,
         reason: event.reason,

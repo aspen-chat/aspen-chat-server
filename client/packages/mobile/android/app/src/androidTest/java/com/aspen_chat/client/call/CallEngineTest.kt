@@ -299,7 +299,7 @@ class CallEngineTest {
         val media = CallEngine.peerConnections(context)
         val sockets = CuttableSockets()
         val peerConnections = RecordingPeerConnections(media)
-        val call = CallEngine(context, api, loopbackPlainText = true, media = media, sockets = sockets, peerConnections = peerConnections)
+        val call = CallEngine(context, CallAccount(api, user), loopbackPlainText = true, media = media, sockets = sockets, peerConnections = peerConnections)
         val seen = Seen()
         val listening = call.snapshots.listen(seen)
         val audioManager = context.getSystemService(AudioManager::class.java)
@@ -482,7 +482,7 @@ class CallEngineTest {
             val camera = CallEngine.camera(context)
             val cameras = camera.devices
             assertTrue("the emulator has cameras: $cameras", cameras.isNotEmpty())
-            val opened = cameraStarted(camera, null, api)
+            val opened = cameraStarted(camera, null, CallAccount(api, user))
             // The default is the front camera, or the first where the phone (this emulator) has none.
             assertEquals(cameras.firstOrNull { it.facing == CallCameraDevice.Facing.FRONT } ?: cameras.first(), opened.second)
             val selfFrames = CountingSink()
@@ -499,7 +499,7 @@ class CallEngineTest {
             assertTrue("a picture, not a point: $sample", sample.width > 0 && sample.height > 0)
             val other = cameras.firstOrNull { it.id != opened.second.id }
             val moved = if (other != null) {
-                val moved = cameraStarted(camera, other.id, api)
+                val moved = cameraStarted(camera, other.id, CallAccount(api, user))
                 assertEquals(other, moved.second)
                 assertEquals("the same track", opened.first, moved.first)
                 "moved to ${other.id} (${other.facing})"
@@ -669,11 +669,11 @@ class CallEngineTest {
 
     // --- Helpers the camera and the files need; the rest are `CallTestSupport`'s ------------
 
-    /** Opens `camera` on `id` for `origin`'s engine, on the main thread, and answers the track and the camera opened. */
-    private suspend fun cameraStarted(camera: CallCamera, id: String?, origin: String): Pair<TrackId, CallCameraDevice> =
+    /** Opens `camera` on `id` for `account`'s engine, on the main thread, and answers the track and the camera opened. */
+    private suspend fun cameraStarted(camera: CallCamera, id: String?, account: CallAccount): Pair<TrackId, CallCameraDevice> =
         withContext(Dispatchers.Main) {
             suspendCoroutine { continuation ->
-                camera.start(id, origin) { result ->
+                camera.start(id, account) { result ->
                     result.fold({ continuation.resume(it) }, { continuation.resumeWithException(it) })
                 }
             }

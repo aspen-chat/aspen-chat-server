@@ -18,8 +18,8 @@ final class CallRings: NSObject, PKPushRegistryDelegate {
 
     /// What a `call` pointer says, read for `CallSystem`.
     struct IncomingRing: Equatable {
-        /// The deployment's `public_url`, from the account the push's subscription names.
-        let origin: String
+        /// The account the push's subscription names, which the ring is for.
+        let account: CallAccount
         let channel: String
         let session: String
         let callerName: String
@@ -198,7 +198,7 @@ final class CallRings: NSObject, PKPushRegistryDelegate {
             return .failure(.notACall)
         }
         return .success(IncomingRing(
-            origin: account.origin,
+            account: CallAccount(origin: account.origin, userId: account.userId),
             channel: channel,
             session: session,
             callerName: callerName,
@@ -212,13 +212,11 @@ final class CallRings: NSObject, PKPushRegistryDelegate {
     /// account, so the person's other devices stop ringing too; the session token is renewed
     /// once when the deployment refuses it. Fire and forget: the system's end action does not
     /// wait on the network.
-    func decline(origin: String, channel: String) {
-        guard let account = PushStateStore.load()?.accounts.first(where: {
-            CallEngines.trimmed($0.origin) == CallEngines.trimmed(origin)
-        }) else {
+    func decline(as ringing: CallAccount, channel: String) {
+        guard let account = PushStateStore.load()?.accounts.first(where: { ringing.names($0) }) else {
             return
         }
-        let url = "\(CallEngines.trimmed(origin))/api/v1/channels/\(channel)/voice/rings/@me"
+        let url = "\(ringing.origin)/api/v1/channels/\(channel)/voice/rings/@me"
         send(delete: url, token: account.sessionToken) { [self] status in
             guard status == 401 else {
                 if status != 204 {

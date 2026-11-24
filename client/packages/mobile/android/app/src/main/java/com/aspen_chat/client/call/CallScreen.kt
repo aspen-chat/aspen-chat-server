@@ -81,14 +81,14 @@ class CallScreen(
         private set
     var audioTrack: AudioTrack? = null
         private set
-    /** The deployment whose engine the share is for, while one is asked for or on. */
-    var origin: String? = null
+    /** The account whose engine the share is for, while one is asked for or on. */
+    var account: CallAccount? = null
         private set
     private var onEnded: ((CallScreenFailure?) -> Unit)? = null
 
     /** Whether a share is asked for or on. */
     val isActive: Boolean
-        get() = origin != null
+        get() = account != null
 
     /** Whether the share's media flows. */
     val isOn: Boolean
@@ -107,26 +107,26 @@ class CallScreen(
 
     /**
      * Starts capturing the screen the user consented to (`projection`, the consent's answer) for
-     * `origin`'s engine, with the sound of other apps when `audio` and the system can capture it;
+     * `account`'s engine, with the sound of other apps when `audio` and the system can capture it;
      * `onStarted` is called with the video track and, with sound, the audio track once the
      * capture runs, which is when the engine is given them; `onEnded` when the share is over,
      * with why when it did not simply stop. A share already asked for is left as it is.
      */
     fun start(
-        origin: String,
+        account: CallAccount,
         projection: Intent,
         audio: Boolean,
         onStarted: (TrackId, TrackId?) -> Unit,
         onEnded: (CallScreenFailure?) -> Unit,
     ) {
-        if (this.origin != null) {
+        if (this.account != null) {
             return
         }
-        this.origin = origin
+        this.account = account
         this.onEnded = onEnded
         CallService.setProjection(context, true) { allowed ->
             main.post {
-                if (this.origin != origin) {
+                if (this.account != account) {
                     return@post
                 }
                 if (!allowed) {
@@ -269,7 +269,7 @@ class CallScreen(
 
     /** Ends the share: the capture and the projection now, the factory once its connection has closed. */
     fun stop() {
-        if (origin != null) {
+        if (account != null) {
             Log.i(TAG, "the share is stopped")
         }
         release()
@@ -311,8 +311,8 @@ class CallScreen(
         factory = null
         size = null
         onEnded = null
-        if (origin != null) {
-            origin = null
+        if (account != null) {
+            account = null
             CallService.setProjection(context, false)
         }
     }

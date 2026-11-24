@@ -35,12 +35,12 @@ import org.json.JSONObject
 
 /**
  * The web view's way to the call engine (`AspenCall` in the app's `src/api/nativeCall.ts`, which
- * iOS's plugin of the same name answers too): the engine of each deployment the page names by its
- * origin, from `CallEngines`, the process's one engine per deployment, which a DM's call ringing
- * the phone drives too, so a ring answered from the lock screen is the call the page then shows;
- * its snapshots are published to the page as `state` events and answered afresh by `state`, each
- * the JSON the engine writes of its state (`call_bridge_schema.json`), handed on untouched beside
- * the deployment's origin, the
+ * iOS's plugin of the same name answers too): the engine of each account the page names by its
+ * origin and user id, from `CallEngines`, the process's one engine per account, which a DM's call
+ * ringing the phone drives too, so a ring answered from the lock screen is the call the page then
+ * shows; its snapshots are published to the page as `state` events and answered afresh by
+ * `state`, each the JSON the engine writes of its state (`call_bridge_schema.json`), handed on
+ * untouched beside the account's origin and user id, the
  * routes of the call Telecom holds, published as `routes` events, and the call's video: the
  * cameras (`CallCamera`), the holes the page reports for the pictures (`setTiles`, laid out by
  * `CallVideo` in the activity's `video_container` behind the web view, attached as the plugin
@@ -81,8 +81,8 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     }
 
     private val main = Handler(Looper.getMainLooper())
-    /** The engines the page has named, by the deployment's origin without a trailing slash, each followed from its first naming. Main thread. */
-    private val followed = HashMap<String, Followed>()
+    /** The engines the page has named, each followed from its first naming. Main thread. */
+    private val followed = HashMap<CallAccount, Followed>()
     private var shapes: CallVideo.Subscription? = null
 
     /**
@@ -107,33 +107,38 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
 
     // --- Engines ----------------------------------------------------------------------------------
 
-    /** The deployment the call names, or `null` with the call rejected. */
-    private fun originOf(call: PluginCall): String? {
+    /** The account the call names, or `null` with the call rejected. */
+    private fun accountOf(call: PluginCall): CallAccount? {
         val origin = call.getString("origin")
         val parsed = origin?.let(Uri::parse)
         if (origin == null || parsed == null || parsed.host.isNullOrEmpty() || parsed.scheme.isNullOrEmpty()) {
             call.reject("origin must be the deployment's address")
             return null
         }
-        return origin.trimEnd('/')
+        val userId = call.getString("userId")
+        if (userId.isNullOrEmpty()) {
+            call.reject("userId must name the account at the deployment")
+            return null
+        }
+        return CallAccount(origin, userId)
     }
 
     /**
-     * The deployment's engine (`CallEngines.forOrigin`), followed for the page from the first time
-     * the page names its origin: its snapshots go to the page as `state` events, its routes as
+     * The account's engine (`CallEngines.forAccount`), followed for the page from the first time
+     * the page names it: its snapshots go to the page as `state` events, its routes as
      * `routes` events, and the camera follows its call. Main thread.
      */
-    private fun engineAt(origin: String): CallEngine {
-        val engine = CallEngines.forOrigin(context, origin)
-        if (origin !in followed) {
+    private fun engineFor(account: CallAccount): CallEngine {
+        val engine = CallEngines.forAccount(context, account)
+        if (account !in followed) {
             val following = Followed()
-            following.snapshots = engine.snapshots.listenJson { json -> notifyListeners("state", published(json, origin)) }
+            following.snapshots = engine.snapshots.listenJson { json -> notifyListeners("state", published(json, account)) }
             following.routes = engine.routes.listen { notifyListeners("routes", routesData()) }
             following.camera = engine.snapshots.listen { state ->
-                cameraFollows(state, origin)
-                shareFollows(state, origin)
+                cameraFollows(state, account)
+                shareFollows(state, account)
             }
-            followed[origin] = following
+            followed[account] = following
         }
         return engine
     }
@@ -143,9 +148,9 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
      * refusing the camera, stops the capture, so the light goes off with the picture and the
      * service is no longer one that uses the camera.
      */
-    private fun cameraFollows(state: CallState, origin: String) {
+    private fun cameraFollows(state: CallState, account: CallAccount) {
         val camera = CallEngine.camera(context)
-        if (!camera.isOn || camera.origin != origin) {
+        if (!camera.isOn || camera.account != account) {
             return
         }
         val ended = state.status == CallStatus.IDLE || state.status == CallStatus.FAILED
@@ -160,9 +165,9 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
      * The share is on only while its engine sends it: the call ending, or the voice server
      * refusing the share, stops the capture, and the page hears why as a `share` event.
      */
-    private fun shareFollows(state: CallState, origin: String) {
+    private fun shareFollows(state: CallState, account: CallAccount) {
         val screen = CallEngine.screen(context)
-        if (!screen.isActive || screen.origin != origin) {
+        if (!screen.isActive || screen.account != account) {
             return
         }
         val ended = state.status == CallStatus.IDLE || state.status == CallStatus.FAILED
@@ -170,26 +175,26 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
         if (ended || refused) {
             screen.stop()
             if (refused) {
-                notifyListeners("share", shareData(origin, null))
+                notifyListeners("share", shareData(account, null))
             }
         }
     }
 
     /** Runs `body` with the call's engine on the main thread, resolving the call after it. */
     private fun withEngine(call: PluginCall, body: (CallEngine) -> Unit) {
-        val origin = originOf(call) ?: return
+        val account = accountOf(call) ?: return
         main.post {
-            body(engineAt(origin))
+            body(engineFor(account))
             call.resolve()
         }
     }
 
     // --- Commands ---------------------------------------------------------------------------------
 
-    /** Joins `channel`'s call at `origin`, shown by the system as `name`, once the microphone is answered for. */
+    /** Joins `channel`'s call as the account the call names, shown by the system as `name`, once the microphone is answered for. */
     @PluginMethod
     fun join(call: PluginCall) {
-        if (originOf(call) == null) {
+        if (accountOf(call) == null) {
             return
         }
         if (call.getString("channel").isNullOrEmpty()) {
@@ -396,7 +401,7 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
      */
     @PluginMethod
     fun startCamera(call: PluginCall) {
-        if (originOf(call) == null) {
+        if (accountOf(call) == null) {
             return
         }
         if (getPermissionState(CAMERA) == PermissionState.GRANTED) {
@@ -417,11 +422,11 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     }
 
     private fun openCamera(call: PluginCall) {
-        val origin = originOf(call) ?: return
+        val account = accountOf(call) ?: return
         val device = call.getString("device")
         main.post {
-            val engine = engineAt(origin)
-            CallEngine.camera(context).start(device, origin) { result ->
+            val engine = engineFor(account)
+            CallEngine.camera(context).start(device, account) { result ->
                 result.fold(
                     onSuccess = { (track, opened) ->
                         engine.engine.startSource(MediaSource.CAMERA, track)
@@ -437,14 +442,14 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     /** Moves a camera that is on to the one `device` names, the track and the engine's sender unchanged. */
     @PluginMethod
     fun switchCamera(call: PluginCall) {
-        val origin = originOf(call) ?: return
+        val account = accountOf(call) ?: return
         val device = call.getString("device")
         main.post {
             val camera = CallEngine.camera(context)
             if (!camera.isOn) {
                 return@post call.reject("the camera is off", CallCameraFailure.FAILED.code)
             }
-            camera.start(device, origin) { result ->
+            camera.start(device, account) { result ->
                 result.fold(
                     onSuccess = { (_, opened) -> call.resolve(openedData(opened)) },
                     onFailure = { failure -> rejectCamera(call, failure) },
@@ -489,7 +494,7 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
      */
     @PluginMethod
     fun startScreenShare(call: PluginCall) {
-        if (originOf(call) == null) {
+        if (accountOf(call) == null) {
             return
         }
         val screen = CallEngine.screen(context)
@@ -504,16 +509,16 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     /** The user has answered the media projection dialog. */
     @ActivityCallback
     fun projectionAnswered(call: PluginCall, result: ActivityResult) {
-        val origin = originOf(call) ?: return
+        val account = accountOf(call) ?: return
         val data = result.data
         if (result.resultCode != android.app.Activity.RESULT_OK || data == null) {
             return call.reject("sharing the screen is not allowed", CallScreenFailure.DENIED.code)
         }
         val audio = call.getBoolean("audio") ?: true
         main.post {
-            val engine = engineAt(origin)
+            val engine = engineFor(account)
             CallEngine.screen(context).start(
-                origin, data, audio,
+                account, data, audio,
                 onStarted = { video, sound ->
                     engine.engine.startExternalSource(MediaSource.SCREEN, video)
                     if (sound != null) {
@@ -523,7 +528,7 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
                 onEnded = { failure ->
                     engine.engine.stopSource(MediaSource.SCREEN)
                     engine.engine.stopSource(MediaSource.SCREEN_AUDIO)
-                    notifyListeners("share", shareData(origin, failure))
+                    notifyListeners("share", shareData(account, failure))
                 },
             )
             call.resolve()
@@ -630,10 +635,10 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     /** The engine's latest snapshot, for a page that slept through the events. */
     @PluginMethod
     fun state(call: PluginCall) {
-        val origin = originOf(call) ?: return
+        val account = accountOf(call) ?: return
         main.post {
-            val engine = engineAt(origin)
-            call.resolve(published(engine.snapshots.latestJson ?: engine.engine.stateJson(), origin))
+            val engine = engineFor(account)
+            call.resolve(published(engine.snapshots.latestJson ?: engine.engine.stateJson(), account))
         }
     }
 
@@ -750,8 +755,9 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
             .put("facing", device.facing?.wire ?: JSONObject.NULL)
 
         /** A share's end as the page reads it (`ShareEnded` in `nativeCall.ts`). */
-        fun shareData(origin: String, failure: CallScreenFailure?): JSObject = JSObject()
-            .put("origin", origin)
+        fun shareData(account: CallAccount, failure: CallScreenFailure?): JSObject = JSObject()
+            .put("origin", account.origin)
+            .put("userId", account.userId)
             .put("failure", failure?.code ?: JSONObject.NULL)
 
         /** `CallVideoShape` as the page reads it (`PictureShape` in `nativeCall.ts`). */
@@ -803,6 +809,7 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
          * A snapshot as the page reads it (`PublishedState` in `nativeCall.ts`): the engine's JSON
          * as written, and whose it is.
          */
-        fun published(json: String, origin: String): JSObject = JSObject().put("origin", origin).put("state", json)
+        fun published(json: String, account: CallAccount): JSObject =
+            JSObject().put("origin", account.origin).put("userId", account.userId).put("state", json)
     }
 }

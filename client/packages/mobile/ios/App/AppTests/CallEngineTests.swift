@@ -227,7 +227,7 @@ final class CallEngineTests: XCTestCase {
         let sockets = CuttableSockets()
         let peerConnections = RecordingPeerConnections(real: media)
         let call = CallEngine(
-            origin: api, loopbackPlainText: true, media: media, sockets: sockets, peerConnections: peerConnections
+            account: CallAccount(origin: api, userId: user), loopbackPlainText: true, media: media, sockets: sockets, peerConnections: peerConnections
         )
         let seen = Seen()
         let listening = call.snapshots.listen { seen.add($0) }
@@ -479,7 +479,7 @@ final class CallEngineTests: XCTestCase {
         // rather than black.
         let camera = CallCamera(factory: media.factory, tracks: CallEngine.tracks)
         camera.makeCapturer = { SyntheticVideoCapturer() }
-        let opened = try await cameraStarted(camera, device: nil, origin: api)
+        let opened = try await cameraStarted(camera, device: nil, account: CallAccount(origin: api, userId: user))
         XCTAssertEqual(opened.device, SyntheticVideoCapturer.front)
         call.engine.startSource(source: .camera, track: opened.track)
         _ = try await until("the camera is live at the server", seconds: 20, call) {
@@ -503,7 +503,7 @@ final class CallEngineTests: XCTestCase {
         XCTAssertGreaterThan(sample.brightness, 40, "not black: \(sample)")
         XCTAssertLessThan(sample.width, sample.height, "upright, as the phone holds it: \(sample)")
         // Moved to the other camera: the same track, so the engine's sender needs nothing.
-        let moved = try await cameraStarted(camera, device: SyntheticVideoCapturer.back.id, origin: api)
+        let moved = try await cameraStarted(camera, device: SyntheticVideoCapturer.back.id, account: CallAccount(origin: api, userId: user))
         XCTAssertEqual(moved.device, SyntheticVideoCapturer.back)
         XCTAssertEqual(moved.track, opened.track)
         let video = "watched the browser's camera (\(remoteRenderer.framesRendered) frames drawn, \(remoteShape.width)×\(remoteShape.height)) in its hole \(remoteBox); sent a camera the browser decoded (\(try await browserVideoFrames()) frames, a frame of brightness \(Int(sample.brightness)) at \(sample.width)×\(sample.height)) with its preview \(selfShape.width)×\(selfShape.height) (rotation \(selfShape.rotation)°) in \(selfBox); moved it to \(moved.device.id)"
@@ -899,14 +899,14 @@ final class CallEngineTests: XCTestCase {
         return try XCTUnwrap(report["onHold"] as? [String])
     }
 
-    /// Opens `camera` on `device` for `origin`'s engine, on the main queue, and answers the track
+    /// Opens `camera` on `device` for `account`'s engine, on the main queue, and answers the track
     /// and the camera opened.
     private func cameraStarted(
-        _ camera: CallCamera, device: String?, origin: String
+        _ camera: CallCamera, device: String?, account: CallAccount
     ) async throws -> (track: TrackId, device: CallCameraDevice) {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async {
-                camera.start(device: device, origin: origin) { result in
+                camera.start(device: device, account: account) { result in
                     switch result {
                     case .success(let opened): continuation.resume(returning: opened)
                     case .failure(let failure): continuation.resume(throwing: failure)

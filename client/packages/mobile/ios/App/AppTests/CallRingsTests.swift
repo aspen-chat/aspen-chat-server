@@ -34,16 +34,27 @@ final class CallRingsTests: XCTestCase {
         let key = P256.KeyAgreement.PrivateKey()
         let auth = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         let subscription = "ring-test-\(UUID().uuidString.lowercased())"
+        let userId = UUID().uuidString.lowercased()
 
         var publicKey: Data {
             key.publicKey.x963Representation
         }
 
+        /// The account the pushes are for, kept after another account on the same deployment,
+        /// so a ring found by its deployment alone is the other's.
         func keep(origin: String) throws {
+            let other: [String: Any] = [
+                "subscription": "\(subscription)-other",
+                "origin": origin,
+                "userId": UUID().uuidString.lowercased(),
+                "refreshToken": "other-refresh",
+                "sessionToken": "other-session",
+                "keys": ["privateKey": ["d": "AA"], "publicKey": "AA", "auth": "AA"],
+            ]
             let account: [String: Any] = [
                 "subscription": subscription,
                 "origin": origin,
-                "userId": UUID().uuidString.lowercased(),
+                "userId": userId,
                 "refreshToken": "refresh",
                 "sessionToken": "session",
                 "keys": [
@@ -55,7 +66,7 @@ final class CallRingsTests: XCTestCase {
             let state = try JSONSerialization.data(withJSONObject: [
                 "version": 1,
                 "device": ["id": "device-1", "secret": "secret-1", "token": "t"],
-                "accounts": [account],
+                "accounts": [other, account],
             ])
             XCTAssertTrue(PushStateStore.save(json: String(decoding: state, as: UTF8.self)))
         }
@@ -246,7 +257,8 @@ final class CallRingsTests: XCTestCase {
         XCTAssertEqual(
             try read.get(),
             CallRings.IncomingRing(
-                origin: origin, channel: channel, session: pointer["session"] as! String,
+                account: CallAccount(origin: origin, userId: phone.userId), channel: channel,
+                session: pointer["session"] as! String,
                 callerName: "Alice", until: until
             )
         )
@@ -327,10 +339,10 @@ final class CallRingsTests: XCTestCase {
         let calls = Calls()
         CallRings.shared.handle(payload: phone.payload(ciphertext: try phone.encrypt(JSONSerialization.data(withJSONObject: pointer))), mustReport: true)
         let ringing = try XCTUnwrap(CallSystem.shared.latest.incoming, "the call is reported before the handler returns")
-        XCTAssertNil(CallEngines.shared.existing(origin), "no engine runs for a ring that is only ringing")
+        XCTAssertNil(CallEngines.shared.existing(CallAccount(origin: origin, userId: phone.userId)), "no engine runs for a ring that is only ringing")
 
         let snapshots = Snapshots()
-        let engine = CallEngines.shared.forOrigin(origin)
+        let engine = CallEngines.shared.forAccount(CallAccount(origin: origin, userId: phone.userId))
         let listening = engine.snapshots.listen { snapshots.add($0) }
         defer { listening.cancel() }
         XCTAssertNil(engine.engine.state().microphone)

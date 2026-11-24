@@ -30,6 +30,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -105,16 +106,34 @@ class AspenCallPluginTest {
             .put("refreshToken", refreshToken)
             .put("sessionToken", "stale-session-token")
             .put("keys", JSONObject().put("privateKey", JSONObject().put("d", "AA")).put("publicKey", "AA").put("auth", "AA"))
-        store.save(JSONObject().put("version", 1).put("accounts", JSONArray().put(account)).toString())
+        // Another account at the same deployment, kept first, with a session of its own: an
+        // engine that found its account by the deployment alone would act as this one.
+        val otherAccount = JSONObject()
+            .put("subscription", "call-plugin-test-other")
+            .put("origin", api)
+            .put("userId", "$user-other")
+            .put("refreshToken", "other-refresh-token")
+            .put("sessionToken", "other-session-token")
+            .put("keys", JSONObject().put("privateKey", JSONObject().put("d", "AA")).put("publicKey", "AA").put("auth", "AA"))
+        store.save(JSONObject().put("version", 1).put("accounts", JSONArray().put(otherAccount).put(account)).toString())
 
         scenario = ActivityScenario.launch(MainActivity::class.java)
         awaitTrue("the page's Capacitor is up", 60) { evaluate("typeof window.Capacitor?.registerPlugin") == "\"function\"" }
         assertEquals("\"ready\"", evaluate(RECORDER))
 
         // A fresh snapshot, for a page that slept: the engine's idle state as its JSON, numbered,
-        // of this origin.
-        val published = run("state", JSONObject().put("origin", api))
+        // of this account.
+        val published = run("state", JSONObject().put("origin", api).put("userId", user))
         assertEquals(api, published.getString("origin"))
+        assertEquals(user, published.getString("userId"))
+        // The other account on the deployment has an engine of its own, and its snapshots name it.
+        val another = run("state", JSONObject().put("origin", api).put("userId", "$user-other"))
+        assertEquals("$user-other", another.getString("userId"))
+        assertNotSame(
+            "two accounts on one deployment share no engine",
+            CallEngines.existing(CallAccount(api, user)),
+            CallEngines.existing(CallAccount(api, "$user-other")),
+        )
         val idle = JSONObject(published.getString("state"))
         assertEquals("idle", idle.getString("status"))
         assertEquals(0L, idle.getLong("revision"))
@@ -132,14 +151,15 @@ class AspenCallPluginTest {
         assertTrue(before.isNull("chosen"))
 
         // A command the plugin cannot read is refused by name.
-        assertTrue(refusal("setUserVolume", JSONObject().put("origin", api).put("user", "u").put("source", "video").put("gain", 1)).contains("source"))
-        assertTrue(refusal("sessionEnded", JSONObject().put("origin", api).put("session", "s").put("channel", "c").put("reason", "bored")).contains("reason"))
+        assertTrue(refusal("setUserVolume", JSONObject().put("origin", api).put("userId", user).put("user", "u").put("source", "video").put("gain", 1)).contains("source"))
+        assertTrue(refusal("sessionEnded", JSONObject().put("origin", api).put("userId", user).put("session", "s").put("channel", "c").put("reason", "bored")).contains("reason"))
         assertTrue(refusal("state", JSONObject().put("origin", "not a url")).contains("origin"))
+        assertTrue(refusal("state", JSONObject().put("origin", api)).contains("userId"))
         assertTrue(refusal("setRoute", JSONObject().put("kind", "car")).contains("kind"))
 
         // The join: the engine's snapshots reach the page as it connects, Telecom holding the call.
         val statesBefore = states().length()
-        run("join", JSONObject().put("origin", api).put("channel", channel).put("name", "Bridge test"))
+        run("join", JSONObject().put("origin", api).put("userId", user).put("channel", channel).put("name", "Bridge test"))
         val joining = untilState("the join's snapshot reaches the page", 15) { it.getString("status") == "joining" && it.optString("channel") == channel }
         assertEquals(api, joining.getString("origin"))
         val connected = untilState("the connected snapshot reaches the page", 40) { it.getString("status") == "connected" && it.optString("channel") == channel }
@@ -164,9 +184,9 @@ class AspenCallPluginTest {
         untilRoutes("the choice is let go", 5) { it.isNull("chosen") }
 
         // Muting shows at once; unmuting waits for the server's word.
-        run("setMuted", JSONObject().put("origin", api).put("muted", true))
+        run("setMuted", JSONObject().put("origin", api).put("userId", user).put("muted", true))
         untilState("the mute reaches the page", 10) { it.getBoolean("muted") }
-        run("setMuted", JSONObject().put("origin", api).put("muted", false))
+        run("setMuted", JSONObject().put("origin", api).put("userId", user).put("muted", false))
         untilState("the unmute reaches the page", 15) { it.getLong("revision") > connected.getLong("revision") && !it.getBoolean("muted") && it.getString("status") == "connected" }
 
         // Video through the bridge. The cameras, as Camera2 lists the emulator's, each facing a way.
@@ -181,7 +201,7 @@ class AspenCallPluginTest {
         // then reports a hole for its preview, mirrored, and hears the picture's shape back, while
         // the surface view behind the page draws the frames in that hole, in device pixels of the
         // page's CSS pixels.
-        val opened = run("startCamera", JSONObject().put("origin", api).put("device", JSONObject.NULL))
+        val opened = run("startCamera", JSONObject().put("origin", api).put("userId", user).put("device", JSONObject.NULL))
         val expectedCamera = cameras.firstOrNull { it.optString("facing") == "front" } ?: cameras.first()
         assertEquals(expectedCamera.getString("id"), opened.getString("device"))
         assertEquals(expectedCamera.getString("facing"), opened.getString("facing"))
@@ -199,7 +219,7 @@ class AspenCallPluginTest {
         awaitTrue("the preview is drawn", 15) { onActivity { CallEngine.video.renderer("self")?.firstFrameRendered } == true }
         val other = cameras.firstOrNull { it.getString("id") != opened.getString("device") }
         val cameraMoved = if (other != null) {
-            val switched = run("switchCamera", JSONObject().put("origin", api).put("device", other.getString("id")))
+            val switched = run("switchCamera", JSONObject().put("origin", api).put("userId", user).put("device", other.getString("id")))
             assertEquals(other.getString("facing"), switched.getString("facing"))
             "moved to ${other.getString("id")} (${other.getString("facing")})"
         } else {
@@ -213,7 +233,7 @@ class AspenCallPluginTest {
         val bob = JSONObject(http("POST", "$helper/second-participant")).getString("user")
         http("POST", "$helper/second-participant/show-video")
         http("POST", "$helper/second-participant/camera/start")
-        run("setWatched", JSONObject().put("origin", api).put("video", JSONArray().put(JSONObject().put("user", bob).put("source", "camera"))))
+        run("setWatched", JSONObject().put("origin", api).put("userId", user).put("video", JSONArray().put(JSONObject().put("user", bob).put("source", "camera"))))
         val watching = untilState("the browser's camera is received", 30) { snapshot ->
             videosOf(snapshot).any { it.getString("user") == bob && it.getString("source") == "camera" }
         }
@@ -234,11 +254,11 @@ class AspenCallPluginTest {
         awaitTrue("the browser decodes the camera", 20) { browserVideoFrames(helper) > 10 }
 
         // Malformed video commands are refused by name.
-        assertTrue(refusal("setWatched", JSONObject().put("origin", api).put("video", JSONArray().put(JSONObject().put("user", bob).put("source", "microphone")))).contains("source"))
+        assertTrue(refusal("setWatched", JSONObject().put("origin", api).put("userId", user).put("video", JSONArray().put(JSONObject().put("user", bob).put("source", "microphone")))).contains("source"))
         assertTrue(refusal("setTiles", JSONObject().put("tiles", JSONArray().put(JSONObject().put("tile", "t").put("surface", "s")))).contains("rect"))
 
         // The camera off from the page: the source leaves the snapshot and the capture stops.
-        run("stopCamera", JSONObject().put("origin", api))
+        run("stopCamera", JSONObject().put("origin", api).put("userId", user))
         untilState("the camera leaves the sources", 15) { snapshot ->
             snapshot.getLong("revision") > sendingCamera.getLong("revision") && sourcesOf(snapshot).none { it.getString("source") == "camera" }
         }
@@ -259,11 +279,11 @@ class AspenCallPluginTest {
         untilState("the browser's offer reaches the page", 15) { snapshot ->
             filesOf(snapshot, "offers").any { it.getString("id") == browserOfferId }
         }
-        val badAccept = refusal("acceptOffer", JSONObject().put("origin", api).put("offer", browserOfferId).put("mode", "directPreferred"))
+        val badAccept = refusal("acceptOffer", JSONObject().put("origin", api).put("userId", user).put("offer", browserOfferId).put("mode", "directPreferred"))
         assertTrue(badAccept, badAccept.contains("destination"))
         val receivedFile = File(context.cacheDir, "received-$browserOfferId.bin")
         val destination = FileRegistry.shared().addReceived(DocumentSink.open(context.contentResolver, Uri.fromFile(receivedFile)))
-        run("acceptOffer", JSONObject().put("origin", api).put("offer", browserOfferId).put("mode", "directPreferred").put("destination", destination))
+        run("acceptOffer", JSONObject().put("origin", api).put("userId", user).put("offer", browserOfferId).put("mode", "directPreferred").put("destination", destination))
         val received = untilState("the browser's file arrives", 60) { snapshot ->
             filesOf(snapshot, "transfers").any { it.getString("offer") == browserOfferId && it.getString("status") == "completed" }
         }
@@ -299,7 +319,7 @@ class AspenCallPluginTest {
             // This share's snapshots alone: the first share's, live and then gone, are still recorded.
             val revisionBefore = states().getJSONObject(before - 1).getLong("revision")
             val thisShareLive = { snapshot: JSONObject -> snapshot.getLong("revision") > revisionBefore && sharesLive(snapshot) }
-            val shareStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
+            val shareStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("userId", user).put("audio", true))
             acceptProjectionDialog()
             val shareAnswer = shareStarted()
             assertTrue("the $nth consent resolved: $shareAnswer", !shareAnswer.has("error"))
@@ -340,7 +360,7 @@ class AspenCallPluginTest {
                 shareAudioPackets = browserShareAudioPackets(helper, user) - audioPacketsBefore
                 shareAudioPackets > 20
             }
-            run("stopScreenShare", JSONObject().put("origin", api))
+            run("stopScreenShare", JSONObject().put("origin", api).put("userId", user))
             evaluate("document.getElementById('aspen-moving')?.remove(); 'removed'")
             untilState("the $nth share leaves the sources", 15) { snapshot ->
                 snapshot.getLong("revision") > sharing.getLong("revision") && sourcesOf(snapshot).none { it.getString("source").startsWith("screen") }
@@ -353,7 +373,7 @@ class AspenCallPluginTest {
             // The call outlives the share: the crash came within half a second of the stop.
             val (packetsAtStop, _) = browserInbound(helper)
             Thread.sleep(3_000)
-            val latest = JSONObject(run("state", JSONObject().put("origin", api)).getString("state"))
+            val latest = JSONObject(run("state", JSONObject().put("origin", api).put("userId", user)).getString("state"))
             assertEquals("the call goes on after the $nth share: $latest", "connected", latest.getString("status"))
             val (packetsAfter, _) = browserInbound(helper)
             assertTrue("the browser still receives the microphone after the $nth share ($packetsAtStop → $packetsAfter packets)", packetsAfter > packetsAtStop)
@@ -362,23 +382,23 @@ class AspenCallPluginTest {
         val (shareShape, shareSample, shareAudioPackets) = share("first")
         share("second")
         // The dialog declined: the plugin rejects with `denied`, and no source is asked for.
-        val declinedStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("audio", true))
+        val declinedStarted = outcomeLater("startScreenShare", JSONObject().put("origin", api).put("userId", user).put("audio", true))
         declineProjectionDialog()
         val declined = declinedStarted()
         assertTrue("declined: $declined", declined.optString("error").contains("not allowed"))
         assertTrue(!CallEngine.screen(context).isActive)
 
         // Leaving: the page sees the call idle, in order, and a fresh read is the latest published.
-        run("leave", JSONObject().put("origin", api))
+        run("leave", JSONObject().put("origin", api).put("userId", user))
         val left = untilState("the leave reaches the page", 15) { it.getLong("revision") > connected.getLong("revision") && it.getString("status") == "idle" }
         assertTrue(left.isNull("session"))
         val all = states()
         val revisions = (statesBefore until all.length()).map { all.getJSONObject(it).getLong("revision") }
         assertEquals("snapshots arrive in revision order: $revisions", revisions.sorted(), revisions)
         assertEquals("no snapshot twice: $revisions", revisions.toSet().size, revisions.size)
-        val fresh = JSONObject(run("state", JSONObject().put("origin", api)).getString("state"))
+        val fresh = JSONObject(run("state", JSONObject().put("origin", api).put("userId", user)).getString("state"))
         assertEquals("a fresh read is the latest published", revisions.last(), fresh.getLong("revision"))
-        assertNotEquals("the renewed token is kept", "stale-session-token", store.accountAt(api)?.optString("sessionToken"))
+        assertNotEquals("the renewed token is kept", "stale-session-token", store.accountWhere(CallAccount(api, user)::names)?.optString("sessionToken"))
         untilRoutes("the routes empty after the call", 15) { it.getJSONArray("routes").length() == 0 }
         println(
             "call-plugin-test: the page read the idle snapshot (receiver $hasReceiver), joined $channel through the plugin and heard " +
@@ -412,7 +432,7 @@ class AspenCallPluginTest {
         var surface: String? = null
         val latch = CountDownLatch(1)
         scenario!!.onActivity {
-            camera.start(null, "trailing") { result ->
+            camera.start(null, CallAccount("trailing", "trailing")) { result ->
                 surface = result.getOrNull()?.first
                 latch.countDown()
             }
@@ -765,7 +785,7 @@ class AspenCallPluginTest {
               const plugin = window.Capacitor.registerPlugin("AspenCall");
               const record = { states: [], routes: [], shapes: [], pips: [], shares: [], results: {} };
               window.__aspenCallTest = record;
-              plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin }));
+              plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin, userId: published.userId }));
               plugin.addListener("routes", (routes) => record.routes.push(routes));
               plugin.addListener("shape", (shape) => record.shapes.push(shape));
               plugin.addListener("pip", (pip) => record.pips.push(pip));

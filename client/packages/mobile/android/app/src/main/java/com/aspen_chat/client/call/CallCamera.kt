@@ -63,8 +63,8 @@ class CallCamera(
     /** The camera open now. */
     var device: CallCameraDevice? = null
         private set
-    /** The deployment whose engine was given the track (`startSource`), while the camera is on. */
-    var origin: String? = null
+    /** The account whose engine was given the track (`startSource`), while the camera is on. */
+    var account: CallAccount? = null
         private set
 
     /** The cameras the phone has, listed without asking the user, who is asked as one opens. */
@@ -85,11 +85,11 @@ class CallCamera(
 
     /**
      * Opens the camera `id` names (the phone's default, its front camera, for `null`) for
-     * `origin`'s engine, answering the track to send and the camera opened once its first frame
+     * `account`'s engine, answering the track to send and the camera opened once its first frame
      * has arrived, or why none opened. A camera already on is moved instead, with no gap in the
      * frames but the camera's own.
      */
-    fun start(id: String?, origin: String, completion: (Result<Pair<TrackId, CallCameraDevice>>) -> Unit) {
+    fun start(id: String?, account: CallAccount, completion: (Result<Pair<TrackId, CallCameraDevice>>) -> Unit) {
         val names = enumerator.deviceNames.toList()
         val chosen = when {
             id != null -> names.firstOrNull { it == id }
@@ -99,7 +99,7 @@ class CallCamera(
             completion(Result.failure(CameraException(CallCameraFailure.NONE)))
             return
         }
-        this.origin = origin
+        this.account = account
         val running = capturer
         if (running != null) {
             running.switchCamera(
@@ -200,7 +200,7 @@ class CallCamera(
         source = null
         helper = null
         device = null
-        origin = null
+        account = null
     }
 
     class CameraException(val failure: CallCameraFailure) : Exception(failure.code)

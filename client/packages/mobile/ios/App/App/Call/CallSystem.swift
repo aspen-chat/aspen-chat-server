@@ -332,8 +332,8 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         made.watch = RingWatch.start(
             platform: RingPlatform(http: CallHttp(), sockets: CallSockets()),
             options: RingOptions(
-                apiUrl: CallEngines.trimmed(ring.origin),
-                credentials: CallCredentials(origin: ring.origin),
+                apiUrl: ring.account.origin,
+                credentials: CallCredentials(account: ring.account),
                 loopbackPlainText: Self.loopbackPlainText
             ),
             ring: Ring(channel: ring.channel, session: ring.session, until: ring.until),
@@ -533,7 +533,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             current.engine.engine.leave()
             ended(current, reason: .remoteEnded)
         }
-        let engine = CallEngines.shared.forOrigin(incoming.ring.origin)
+        let engine = CallEngines.shared.forAccount(incoming.ring.account)
         let made = Current(
             uuid: incoming.uuid,
             engine: engine,
@@ -584,7 +584,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             self.incoming = nil
             incoming.watch?.stop()
             incoming.watch = nil
-            CallRings.shared.decline(origin: incoming.ring.origin, channel: incoming.ring.channel)
+            CallRings.shared.decline(as: incoming.ring.account, channel: incoming.ring.channel)
             action.fulfill()
             update { $0.incoming = nil }
             return

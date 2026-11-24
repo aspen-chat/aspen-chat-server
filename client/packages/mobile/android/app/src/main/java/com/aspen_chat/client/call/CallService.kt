@@ -155,10 +155,10 @@ class CallService : Service() {
         /**
          * Shows a DM's call from `name` ringing the phone: the incoming call's notification, with
          * the system's Answer and Decline, a full-screen intent that opens the incoming call screen
-         * for the ring's deployment over the lock screen, and a tap that opens the app. The same
+         * for the ring's account over the lock screen, and a tap that opens the app. The same
          * notification id as the ongoing call's, which replaces it on answering.
          */
-        fun showIncoming(context: Context, origin: String, name: CharSequence, answer: () -> Unit, decline: () -> Unit) {
+        fun showIncoming(context: Context, account: CallAccount, name: CharSequence, answer: () -> Unit, decline: () -> Unit) {
             synchronized(this) { ring = Ringing(answer, decline) }
             val manager = context.getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(RING_CHANNEL, context.getString(R.string.aspen_rings_channel_name), NotificationManager.IMPORTANCE_HIGH)
@@ -189,7 +189,7 @@ class CallService : Service() {
                 builder.setContentIntent(PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             }
             builder.setFullScreenIntent(
-                PendingIntent.getActivity(context, 3, IncomingCallActivity.intent(context, origin), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE),
+                PendingIntent.getActivity(context, 3, IncomingCallActivity.intent(context, account), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE),
                 true,
             )
             manager.notify(NOTIFICATION_ID, builder.build())

@@ -2,6 +2,7 @@ package com.aspen_chat.client.push;
 
 import android.content.Context;
 import com.aspen_chat.client.secrets.SecretStore;
+import java.util.function.Predicate;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -42,32 +43,22 @@ public final class PushStore {
      * of a version this code does not know, whose fields may mean something else.
      */
     public synchronized JSONObject account(String subscription) {
-        return find("subscription", subscription);
+        return accountWhere(account -> subscription.equals(account.optString("subscription")));
     }
 
     /**
-     * The account at the deployment whose {@code public_url} is {@code origin}, with or without a
-     * trailing slash; {@code null} as {@link #account} is.
+     * The first account {@code wanted} accepts; {@code null} when none does, or as {@link #account}
+     * is.
      */
-    public synchronized JSONObject accountAt(String origin) {
-        return find("origin", trimSlashes(origin));
-    }
-
-    private JSONObject find(String field, String value) {
-        String state = load();
-        if (state == null) {
+    public synchronized JSONObject accountWhere(Predicate<JSONObject> wanted) {
+        JSONArray accounts = accounts();
+        if (accounts == null) {
             return null;
         }
         try {
-            JSONObject parsed = new JSONObject(state);
-            if (parsed.optInt("version") != VERSION) {
-                return null;
-            }
-            JSONArray accounts = parsed.getJSONArray("accounts");
             for (int i = 0; i < accounts.length(); i++) {
                 JSONObject account = accounts.getJSONObject(i);
-                String held = account.optString(field);
-                if (value.equals("origin".equals(field) ? trimSlashes(held) : held)) {
+                if (wanted.test(account)) {
                     return account;
                 }
             }
@@ -77,12 +68,18 @@ public final class PushStore {
         return null;
     }
 
-    private static String trimSlashes(String origin) {
-        int end = origin.length();
-        while (end > 0 && origin.charAt(end - 1) == '/') {
-            end--;
+    /** The accounts kept; {@code null} when there is no state, or one of a version this code does not know. */
+    private JSONArray accounts() {
+        String state = load();
+        if (state == null) {
+            return null;
         }
-        return origin.substring(0, end);
+        try {
+            JSONObject parsed = new JSONObject(state);
+            return parsed.optInt("version") == VERSION ? parsed.getJSONArray("accounts") : null;
+        } catch (JSONException e) {
+            return null;
+        }
     }
 
     /** Keeps a session token the notification code got, so the next push need not get another. */
