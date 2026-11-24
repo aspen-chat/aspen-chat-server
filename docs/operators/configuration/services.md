@@ -36,7 +36,9 @@ Each attempt to open a connection gives up after 10 seconds unless `connect_time
 `connect_timeout=0` waits as long as the operating system does, about two minutes on Linux when
 PostgreSQL does not answer.
 
-`aspen-migrate` and the operator commands read it the same way. See
+`aspen-migrate` and the operator commands read it the same way, but `aspen-migrate` refuses a
+connection through a pooler such as PgBouncer: give it PostgreSQL's own address with
+`--database-url` (see [Step 3](../installing/3-configuring.md#create-the-tables)). See
 [Network exposure](../installing/network-exposure.md#postgresql) for how to set PostgreSQL up for
 TLS.
 

@@ -74,6 +74,12 @@ Run it again after every upgrade, before starting the new servers. It applies on
 applied. Runs started at once against one database take turns: each waits for the one before it to
 finish, then finds its migrations applied.
 
+It needs a connection to PostgreSQL itself, not through a connection pooler such as PgBouncer, and
+refuses one through a pooler (see
+[Troubleshooting](../troubleshooting/server.md#aspen-migrate-refuses-a-connection-pooler)). Where
+the servers' `database_url` goes through one, give `aspen-migrate` the direct address with
+`--database-url`.
+
 ---
 
 Previous: [Step 2: Building](2-building.md) · Next:

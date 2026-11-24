@@ -19,6 +19,18 @@ Why the operator's installation guide
   the crypto rustls uses in both servers, so the voice server has one crypto library compiled in and
   nothing of the system's to match, and its build needs only a C compiler and `make`.
 
+## Migrating
+
+- **`aspen-migrate` refuses a connection through a pooler rather than working through one.** Runs
+  take turns through a session-level advisory lock, which lasts as long as the session, so that
+  nothing has to let it go when a run fails or is killed. A pooler lends its server connections to
+  one client after another, so the lock stays on the server connection after the run exits, where
+  nothing ends it, and every later run waits for it without end. A lock held by a transaction would
+  survive a pooler, but migrations run in transactions of their own, and some statements cannot run
+  in one at all. A connection is told to be a pooler's by its cancellation key, which a pooler makes
+  up and PostgreSQL makes from the process serving the session (`aspen_database::session`). See
+  [Step 3](../../operators/installing/3-configuring.md#create-the-tables).
+
 ## The deployment's address
 
 - **`public_url` is chosen for good.** Its host is the federation domain and the domain passkeys
