@@ -4,6 +4,7 @@ import {
   DownloadSimpleIcon,
   EyeIcon,
   LinkIcon,
+  TrashIcon,
 } from "@phosphor-icons/react";
 import type { ComponentProps, RefObject } from "react";
 import { Menu, MenuSection } from "react-aria-components";
@@ -38,10 +39,11 @@ function openElsewhere(url: string) {
  * (`button`), beside which it then opens: the reader's quick reactions, where they may react,
  * with Add a reaction beside them; what was right-clicked, when it is an attachment or a link's
  * picture (view it in the gallery, download it, copy it, copy its address), another file (open
- * it, save it, copy its address), or a link (open it, copy its
- * address); and then every action the message has, by name, through the same `MessageActions`,
- * those the row offers and those it leaves to the menu. What an action opens goes through
- * `open`, outside the menu, which closes as it is chosen.
+ * it, save it, copy its address), each of the message's own attachments (`attachmentIds`, not
+ * those of a message it links to) then offering, with `onRemoveAttachment`, to take it off the
+ * message, or a link (open it, copy its address); and then every action the message has, by
+ * name, through the same `MessageActions`, those the row offers and those it leaves to the menu.
+ * What an action opens goes through `open`, outside the menu, which closes as it is chosen.
  */
 export function MessageContextMenu({
   menu,
@@ -50,6 +52,8 @@ export function MessageContextMenu({
   actions,
   open,
   button,
+  attachmentIds,
+  onRemoveAttachment,
 }: {
   menu: ContextMenuState;
   under: UnderPointer;
@@ -57,6 +61,9 @@ export function MessageContextMenu({
   actions: Omit<ComponentProps<typeof MessageActions>, "open" | "onDone">;
   open: (sheet: MessageSheet) => void;
   button: RefObject<HTMLElement | null>;
+  attachmentIds: readonly string[];
+  /** Asks to take an attachment off the message, for its author and those who manage messages. */
+  onRemoveAttachment?: (attachmentId: string, name: string) => void;
 }) {
   const m = useMessages();
   const close = () => {
@@ -101,7 +108,7 @@ export function MessageContextMenu({
             >
               {under.kind === "media" && under.picture ? (
                 // Pressing the picture opens the gallery on it, where the original is also
-                // opened in a new tab; the same as a finger's long press offers (`PictureMenu`).
+                // opened in a new tab; the same as a finger's long press offers (`AttachmentMenu`).
                 <MenuAction
                   label={m.contextMenu.viewImage}
                   icon={<EyeIcon aria-hidden="true" />}
@@ -155,6 +162,21 @@ export function MessageContextMenu({
                   copy(under.url);
                 }}
               />
+              {under.kind === "media" &&
+                under.attachmentId !== null &&
+                attachmentIds.includes(under.attachmentId) &&
+                onRemoveAttachment !== undefined && (
+                  <MenuAction
+                    label={m.contextMenu.removeAttachment}
+                    icon={<TrashIcon aria-hidden="true" />}
+                    danger
+                    onAction={() => {
+                      if (under.attachmentId !== null) {
+                        onRemoveAttachment(under.attachmentId, under.name);
+                      }
+                    }}
+                  />
+                )}
             </MenuSection>
             <MenuRule />
           </>

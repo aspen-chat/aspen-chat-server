@@ -58,18 +58,28 @@ into place unless motion is reduced; pulled past the first or last picture they 
 they would take width from the picture on a phone.
 
 A finger resting on an inline picture for `LONG_PRESS_MS` opens the picture's own menu
-(`PictureMenu.tsx`), a popover beneath it (above it when there is no room beneath): View image,
+(`AttachmentMenu.tsx`), a popover beneath it (above it when there is no room beneath): View image,
 which opens the gallery on it, Download image, where the clipboard takes a picture, Copy picture,
-and last, where the message has a sheet of its actions (a touch-only screen, the message not being
-edited), More options, which opens that sheet as the message's own long press does
-(`OpenMessageActionsContext`, which `MessageItem` provides). Every picture action takes the original
-(`Picture.src`), never the smaller copy shown inline, but Copy picture of one whose original is
-served to be saved, which copies what is shown of it (`Picture.shown`, `shownSrc`). The timer is the
-picture's own, on the button's press events: the button's press goes no further, so the message's
-long press never sees it, and letting go once the menu has opened is not a press on the picture.
-Android answers a finger's long press with `contextmenu`, which the picture keeps from the message's
-menu while a finger presses it; a pointer's right click goes on up to the message's context menu,
-which offers the same actions (see [context menus](../context-menus.md)).
+for the message's author and those who may manage messages Remove attachment, and last, where the
+message has a sheet of its actions (a touch-only screen, the message not being edited), More
+options, which opens that sheet as the message's own long press does (`OpenMessageActionsContext`,
+which `MessageItem` provides). Every picture action takes the original (`Picture.src`), never the
+smaller copy shown inline, but Copy picture of one whose original is served to be saved, which
+copies what is shown of it (`Picture.shown`, `shownSrc`). The timer is the picture's own, on the
+button's press events: the button's press goes no further, so the message's long press never sees
+it, and letting go once the menu has opened is not a press on the picture. Android answers a
+finger's long press with `contextmenu`, which the picture keeps from the message's menu while a
+finger presses it; a pointer's right click goes on up to the message's context menu, which offers
+the same actions (see [context menus](../context-menus.md)).
+
+Every other attachment (a file chip, a sound's player, a text file's card, a video's poster) opens
+the same menu under a finger's long press on its item of the list (`FileItem`, through React Aria's
+`useLongPress`, on touch-only screens): Open original, Save file, Copy file address, Remove
+attachment where the reader may, and More options. The item's long press goes no further, so the
+message's sheet does not open as well; what inside it takes presses of its own (the player's
+controls) keeps them. Remove attachment, here and in the context menu, opens a confirmation that
+`MessageItem` holds (`ConfirmModal`), which takes the file off only once confirmed and says why when
+the server refuses.
 
 ### Zooming
 
@@ -201,7 +211,7 @@ each reader reveals it.
   reading under a Reveal spoiler button, and what it covers is `inert`, as a covered link card is
   (see [link and video cards](link-cards.md#links-inside-spoilers)). It keeps its room, and a text
   file's lines are read all the same, so revealing moves nothing.
-- The attachment's own controls (remove, copy ID) stay usable over the cover.
+- The attachment's own controls (copy ID) stay usable over the cover.
 - What a reader has revealed stays revealed while the message is shown (`MessageMedia`'s
   `revealed`), the gallery included. In the gallery a covered picture is covered too, its thumbnail
   blurred, its description left out, and its thumbnail named "Spoiler image".

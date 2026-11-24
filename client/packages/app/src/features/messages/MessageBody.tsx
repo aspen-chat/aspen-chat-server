@@ -30,16 +30,17 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * poll or plugin's card, its pictures and files, and cards for its links. A message that is
  * nothing but links to pictures the server has previews of shows the pictures alone.
  * `hideText` leaves the text out where something takes its place (the editor, an echo's
- * reply); `onRemoveAttachment` offers each attachment's removal to those who may. `still` draws
- * it for reference only, as another message shows it: no poll to vote in, no card's buttons to
- * press. The reader's mark on a message they saved, then `trailing`, follow whatever the
- * message ends with: its text, after its edited mark, or beside its last card or its pictures
- * where the line has room, and under them where it has not (`Trailed`). After the text, the
- * marks end its last line, as a word would, wrapping under it where the line has no room, and
- * sit beside a code block, table, or rule it ends with, under it only where the line has no
- * room (`Markdown`'s `after`). A message that fails to draw shows its text alone, plainly,
- * rather than taking the list it is in down with it. Without `savedMark` the saved mark is left
- * to whoever draws the message, as `MessageItem` gives it to its header on a touch screen.
+ * reply); `onRemoveAttachment`, for those who may, puts Remove attachment in each attachment's
+ * menu, which asks before it is removed. `still` draws it for reference only, as another message
+ * shows it: no poll to vote in, no card's buttons to press. The reader's mark on a message they
+ * saved, then `trailing`, follow whatever the message ends with: its text, after its edited
+ * mark, or beside its last card or its pictures where the line has room, and under them where it
+ * has not (`Trailed`). After the text, the marks end its last line, as a word would, wrapping
+ * under it where the line has no room, and sit beside a code block, table, or rule it ends
+ * with, under it only where the line has no room (`Markdown`'s `after`). A message that fails to
+ * draw shows its text alone, plainly, rather than taking the list it is in down with it. Without
+ * `savedMark` the saved mark is left to whoever draws the message, as `MessageItem` gives it to
+ * its header on a touch screen.
  */
 export function MessageBody(props: MessageBodyProps) {
   const { message, hideText = false } = props;
@@ -60,7 +61,7 @@ interface MessageBodyProps {
   home: ChannelHome;
   hideText?: boolean;
   still?: boolean;
-  onRemoveAttachment?: (attachmentId: string) => void;
+  onRemoveAttachment?: (attachmentId: string, name: string) => void;
   trailing?: ReactNode;
   /** Whether the reader's mark on a message they saved trails it; it does by default. */
   savedMark?: boolean;

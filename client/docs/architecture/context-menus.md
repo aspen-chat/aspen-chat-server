@@ -92,9 +92,12 @@ edited.
      chips, with `data-media-name` and, on a picture, `data-media-picture`): on a picture, View
      image (which presses the picture's own button, opening the gallery on it), Download image, Copy
      picture (where the clipboard takes one), and Copy file address; on any other file, Open
-     original, Save file, and Copy file address. Every address is the original's, never the smaller
-     copy a picture shows inline. A finger's long press on a picture opens the same picture actions
-     in a popover beneath it instead (`PictureMenu`; see
+     original, Save file, and Copy file address. Then, on one of the message's own attachments (not
+     a linked message's, nor a link's picture), for its author and those who may manage messages,
+     Remove attachment, which asks first (`ConfirmModal`, held by `MessageItem`) and is the one way
+     to take a file off a sent message. Every address is the original's, never the smaller copy a
+     picture shows inline. A finger's long press on a picture opens the same picture actions in a
+     popover beneath it instead (`AttachmentMenu`; see
      [inline pictures](message-rendering/attachments.md#inline-pictures)). Saving and copying read
      the file from the deployment's storage (`mediaFile.ts`), whose read path lets any origin read
      it (`docs/operators/installing/storage-read-path.md`); a picture is copied as a PNG. A storage

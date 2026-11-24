@@ -50,6 +50,8 @@ import {
   ReactionsDialog,
 } from "@/features/messages/Reactions";
 import { DeleteMessageModal } from "@/features/messages/DeleteMessageDialog";
+import { ConfirmModal } from "@/features/layout/ConfirmModal";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 import {
   messageLink,
   messageUrl,
@@ -234,6 +236,10 @@ export const MessageItem = memo(function MessageItem({
   const [under, setUnder] = useState<UnderPointer>(null);
   // The last of the pointer's actions, which opens the same menu beside it.
   const moreButton = useRef<HTMLButtonElement>(null);
+  // The attachment whose removal is being confirmed, kept once the confirmation closes so that it
+  // says the same while it goes.
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   // The reader's most used emoji are read as the finger goes down, or the menu opens, so the
   // quick reactions have them by the time they show.
   const readQuickReactions = () => {
@@ -308,6 +314,15 @@ export const MessageItem = memo(function MessageItem({
   // manage messages here.
   const own = me !== null && me.id === message.author;
   const deletable = own || permissions.has("manageMessages");
+  // Taking one of its files off asks first, as deleting it does, for whoever may delete it.
+  const removeAttachment = deletable
+    ? {
+        onRemoveAttachment: (attachmentId: string, name: string) => {
+          setRemoving({ id: attachmentId, name });
+          setConfirmingRemoval(true);
+        },
+      }
+    : {};
   // The system account's notices are no one's to report, nor are the kinds that record an event.
   const reportable = me !== null && !own && author?.system !== true && ofKind.reportable;
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
@@ -442,8 +457,24 @@ export const MessageItem = memo(function MessageItem({
             actions={actions}
             open={setSheet}
             button={moreButton}
+            attachmentIds={message.attachments}
+            {...removeAttachment}
           />
         )}
+        <OnceOpen isOpen={confirmingRemoval}>
+          <ConfirmModal
+            // A new attachment's confirmation starts afresh, with no refusal of another's.
+            key={removing?.id}
+            heading={format(m.removeSentAttachmentHeading, { name: removing?.name ?? "" })}
+            explanation={m.removeSentAttachmentHint}
+            action={m.removeSentAttachmentAction}
+            run={() =>
+              removing === null ? Promise.resolve() : sync.removeAttachment(id, removing.id)
+            }
+            isOpen={confirmingRemoval}
+            onOpenChange={setConfirmingRemoval}
+          />
+        </OnceOpen>
         {(pressed || menu.opened) && (
           <>
             {touchOnly && (
@@ -609,13 +640,7 @@ export const MessageItem = memo(function MessageItem({
                     ),
                   }
                 : {})}
-              {...(own || permissions.has("manageMessages")
-                ? {
-                    onRemoveAttachment: (attachmentId: string) => {
-                      void sync.removeAttachment(id, attachmentId).catch(() => undefined);
-                    },
-                  }
-                : {})}
+              {...removeAttachment}
             />
           )}
           {!editing && <LinkedMessages message={message} />}

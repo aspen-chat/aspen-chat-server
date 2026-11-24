@@ -8,16 +8,17 @@ import {
   SpeakerHighIcon,
   SpeakerLowIcon,
   SpeakerSlashIcon,
-  XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
+import { useLongPress } from "react-aria";
 import { Button, Slider, useLocale } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
+import { AttachmentMenu } from "@/features/messages/AttachmentMenu";
 import { feelPress } from "@/features/messages/haptics";
 import { ImageGallery } from "@/features/messages/ImageGallery";
-import { PictureMenu } from "@/features/messages/PictureMenu";
 import {
   inlinePreview,
   isAudioType,
@@ -57,8 +58,8 @@ const imageClass = "block max-h-80 max-w-full rounded-md border border-line obje
  * smaller copy the server made of it where there is one; the gallery shows the original. A
  * picture whose original is served to be saved (`Attachment.inline` false, an SVG) is shown by
  * its copy alone, inline and in the gallery, and until it has one is offered as the file it is
- * (as text, for an SVG, or a download chip). With
- * `onRemove`, each attachment shown carries a control that takes it off the message. An
+ * (as text, for an SVG, or a download chip). A finger's long press on an attachment opens its
+ * own menu (`AttachmentMenu`), which with `onRemove` offers to take it off the message. An
  * attachment its uploader marked a spoiler is covered (`SpoilerCover`), whatever it is, until the
  * reader reveals it, its own controls left usable over the cover.
  */
@@ -70,8 +71,11 @@ export function MessageMedia({
   attachmentIds: readonly string[];
   /** Pictures the server found behind links, as `{ src, name }` with the link as the name. */
   previewImages: readonly Picture[];
-  /** Takes an attachment off the message, for its author and those who manage messages. */
-  onRemove?: (attachmentId: string) => void;
+  /**
+   * Asks to take an attachment off the message, named as it is shown, for its author and those
+   * who manage messages.
+   */
+  onRemove?: (attachmentId: string, name: string) => void;
 }) {
   const m = useMessages();
   const attachments = useAttachments(attachmentIds);
@@ -151,23 +155,21 @@ export function MessageMedia({
   const { shown, hidden } = splitInline(pictures);
   // An attachment's own controls, which stay usable over its spoiler's cover; `overlay` draws
   // them over a picture or card rather than beside a chip.
-  const controls = (id: string, name: string, overlay: boolean) => (
-    <>
-      {onRemove !== undefined && (
-        <RemoveButton
-          name={name}
-          onPress={() => {
-            onRemove(id);
-          }}
-        />
-      )}
-      <CopyIdButton
-        id={id}
-        thing="attachment"
-        {...(overlay ? { className: "bg-surface-raised/90 shadow-sm" } : {})}
-      />
-    </>
+  const controls = (id: string, overlay: boolean) => (
+    <CopyIdButton
+      id={id}
+      thing="attachment"
+      {...(overlay ? { className: "bg-surface-raised/90 shadow-sm" } : {})}
+    />
   );
+  const removing = (attachment: Attachment) =>
+    onRemove === undefined
+      ? {}
+      : {
+          onRemove: () => {
+            onRemove(attachment.id, attachment.fileName);
+          },
+        };
   const chip = (attachment: Attachment) =>
     covered(attachment.id, attachment.spoiler) ? (
       <SpoilerCover
@@ -210,26 +212,28 @@ export function MessageMedia({
         </li>
       ))}
       {[...files, ...sounds].map((attachment) => (
-        <li
+        <FileItem
           key={attachment.id}
-          data-attachment-id={attachment.id}
+          attachment={attachment}
+          {...removing(attachment)}
           className="flex min-w-0 max-w-full items-center gap-1"
         >
           {isAudioType(attachment.mimeType) ? sound(attachment) : chip(attachment)}
-          {controls(attachment.id, attachment.fileName, false)}
-        </li>
+          {controls(attachment.id, false)}
+        </FileItem>
       ))}
       {texts.map(({ attachment, language }) => (
-        <li
+        <FileItem
           key={attachment.id}
-          data-attachment-id={attachment.id}
+          attachment={attachment}
+          {...removing(attachment)}
           className="relative w-full min-w-0 max-w-3xl"
         >
           <TextAttachment
             attachment={attachment}
             language={language}
             chip={chip(attachment)}
-            controls={controls(attachment.id, attachment.fileName, false)}
+            controls={controls(attachment.id, false)}
             {...(covered(attachment.id, attachment.spoiler)
               ? {
                   onReveal: () => {
@@ -238,12 +242,13 @@ export function MessageMedia({
                 }
               : {})}
           />
-        </li>
+        </FileItem>
       ))}
       {videos.map((attachment) => (
-        <li
+        <FileItem
           key={attachment.id}
-          data-attachment-id={attachment.id}
+          attachment={attachment}
+          {...removing(attachment)}
           className="relative min-w-0 max-w-full"
         >
           {covered(attachment.id, attachment.spoiler) ? (
@@ -258,39 +263,51 @@ export function MessageMedia({
           ) : (
             <InlineVideo attachment={attachment} />
           )}
-          <span className="absolute top-1 end-1 flex gap-1">
-            {controls(attachment.id, attachment.fileName, true)}
-          </span>
-        </li>
+          <span className="absolute top-1 end-1 flex gap-1">{controls(attachment.id, true)}</span>
+        </FileItem>
       ))}
-      {shown.map((picture, i) => (
-        <li key={picture.src + String(i)} className="relative min-w-0 max-w-full">
-          {covered(picture.attachmentId, picture.spoiler) ? (
-            <SpoilerCover
-              onReveal={() => {
-                if (picture.attachmentId !== undefined) {
-                  reveal(picture.attachmentId);
-                }
-              }}
-              className="max-w-full"
-            >
-              <InlineImage picture={picture} onOpen={() => undefined} />
-            </SpoilerCover>
-          ) : (
-            <InlineImage
-              picture={picture}
-              onOpen={() => {
-                setGallery(i);
-              }}
-            />
-          )}
-          {picture.attachmentId !== undefined && (
-            <span className="absolute top-1 end-1 flex gap-1">
-              {controls(picture.attachmentId, picture.name, true)}
-            </span>
-          )}
-        </li>
-      ))}
+      {shown.map((picture, i) => {
+        const id = picture.attachmentId;
+        const remove =
+          onRemove === undefined || id === undefined
+            ? {}
+            : {
+                onRemove: () => {
+                  onRemove(id, picture.name);
+                },
+              };
+        return (
+          <li
+            key={picture.src + String(i)}
+            {...(id === undefined ? {} : { "data-attachment-id": id })}
+            className="relative min-w-0 max-w-full"
+          >
+            {covered(picture.attachmentId, picture.spoiler) ? (
+              <SpoilerCover
+                onReveal={() => {
+                  if (picture.attachmentId !== undefined) {
+                    reveal(picture.attachmentId);
+                  }
+                }}
+                className="max-w-full"
+              >
+                <InlineImage picture={picture} onOpen={() => undefined} {...remove} />
+              </SpoilerCover>
+            ) : (
+              <InlineImage
+                picture={picture}
+                onOpen={() => {
+                  setGallery(i);
+                }}
+                {...remove}
+              />
+            )}
+            {id !== undefined && (
+              <span className="absolute top-1 end-1 flex gap-1">{controls(id, true)}</span>
+            )}
+          </li>
+        );
+      })}
       {hidden > 0 && (
         <li>
           <Button
@@ -325,7 +342,7 @@ const LONG_PRESS_MS = 450;
 
 /**
  * A picture in the message; pressing it opens the message's gallery on that picture, and a
- * finger's long press opens its own menu beneath it (`PictureMenu`). It shows
+ * finger's long press opens its own menu beneath it (`AttachmentMenu`). It shows
  * the server's smaller copy where there is one, at the copy's exact size, and the original if
  * the copy cannot be loaded; an original already loaded stays when a copy arrives later, as its
  * bytes are already here. One whose original is served to be saved (`Picture.shown`) has only
@@ -335,7 +352,15 @@ const LONG_PRESS_MS = 450;
  * task (`useKeepStill`), so the list keeps the view still through the change before anything
  * else runs. Either pulses as a skeleton until it has loaded.
  */
-function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
+function InlineImage({
+  picture,
+  onOpen,
+  onRemove,
+}: {
+  picture: Picture;
+  onOpen: () => void;
+  onRemove?: () => void;
+}) {
   const m = useMessages();
   const keepStill = useKeepStill();
   const button = useRef<HTMLButtonElement>(null);
@@ -459,12 +484,12 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
           }
         />
       </Button>
-      <PictureMenu
-        picture={picture}
+      <AttachmentMenu
+        target={{ kind: "picture", picture, onView: onOpen }}
         triggerRef={button}
         isOpen={menu}
         onOpenChange={setMenu}
-        onView={onOpen}
+        {...(onRemove === undefined ? {} : { onRemove })}
       />
     </span>
   );
@@ -813,19 +838,47 @@ function FileChip({ attachment }: { attachment: Attachment }) {
   );
 }
 
-/** The control that takes one attachment off a message. */
-function RemoveButton({ name, onPress }: { name: string; onPress: () => void }) {
+/**
+ * An attachment that is not a picture, as an item of the message's list: a finger resting on it
+ * for `LONG_PRESS_MS` opens its own menu beneath it (`AttachmentMenu`) rather than the message's
+ * sheet, since the item's long press goes no further. What inside it is pressed (a player's
+ * controls, the file's link) takes the press as its own. A pointer's right click goes on up to
+ * the message's context menu, which offers the same actions.
+ */
+function FileItem({
+  attachment,
+  onRemove,
+  className,
+  children,
+}: {
+  attachment: Attachment;
+  onRemove?: () => void;
+  className: string;
+  children: ReactNode;
+}) {
   const m = useMessages();
-  const label = format(m.removeSentAttachment, { name });
+  const item = useRef<HTMLLIElement>(null);
+  const [menu, setMenu] = useState(false);
+  const touchOnly = useMediaQuery(TOUCH_ONLY);
+  const { longPressProps } = useLongPress({
+    isDisabled: !touchOnly,
+    threshold: LONG_PRESS_MS,
+    accessibilityDescription: m.attachmentMenu.longPress,
+    onLongPress: () => {
+      feelPress();
+      setMenu(true);
+    },
+  });
   return (
-    <Tooltip text={label}>
-      <Button
-        aria-label={label}
-        onPress={onPress}
-        className="tap-target rounded-full border border-line bg-surface-raised p-1 text-ink-muted shadow-sm outline-none hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
-        <XIcon size={12} aria-hidden="true" />
-      </Button>
-    </Tooltip>
+    <li ref={item} data-attachment-id={attachment.id} {...longPressProps} className={className}>
+      {children}
+      <AttachmentMenu
+        target={{ kind: "file", url: attachment.downloadUrl, name: attachment.fileName }}
+        triggerRef={item}
+        isOpen={menu}
+        onOpenChange={setMenu}
+        {...(onRemove === undefined ? {} : { onRemove })}
+      />
+    </li>
   );
 }
