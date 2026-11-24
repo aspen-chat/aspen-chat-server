@@ -96,7 +96,26 @@ struct Locked {
 /// Takes the migration lock, waiting while another run holds it. It is held for as long as this
 /// connection is open, whatever transactions come and go on it, and let go when it closes,
 /// however the run ends.
+///
+/// That needs a session of PostgreSQL's own, so a connection through a pooler is refused before
+/// the lock is asked for: the pooler would keep the lock on a server connection after this run
+/// exits, where nothing lets it go, and every later run would wait for it without end.
 pub async fn lock(conn: &mut AsyncPgConnection) -> Result<()> {
+    match aspen_database::session(conn)
+        .await
+        .context("failed to tell whether the connection reaches PostgreSQL through a pooler")?
+    {
+        aspen_database::Session::Own => {}
+        aspen_database::Session::Pooled { announced, serving } => anyhow::bail!(
+            "the database connection goes through a connection pooler such as PgBouncer (it \
+             announced process {announced}, and statements run in process {serving}). \
+             aspen-migrate holds a lock for as long as its session lasts, which a pooler keeps \
+             on its server connection after aspen-migrate exits, so that every later run waits \
+             for it without end. Give aspen-migrate a direct connection to PostgreSQL with \
+             --database-url or DATABASE_URL: the same address with the port PostgreSQL itself \
+             listens on (often 5432, where PgBouncer's is often 6432)"
+        ),
+    }
     let taken = sql_query("SELECT pg_try_advisory_lock($1) AS locked")
         .bind::<diesel::sql_types::BigInt, _>(MIGRATION_LOCK)
         .get_result::<Locked>(conn)

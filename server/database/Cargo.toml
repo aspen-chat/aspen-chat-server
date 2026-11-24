@@ -17,6 +17,7 @@ openssl = "0.10.81"
 postgres-openssl = "0.5.3"
 thiserror = "2.0.18"
 tokio-postgres = "0.7.13"
+tokio = { version = "1.44.2", features = ["io-util", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }

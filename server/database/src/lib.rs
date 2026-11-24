@@ -34,6 +34,9 @@
 //! minutes, and so does the request that opened it.
 
 pub mod latency;
+mod session;
+
+pub use session::{Session, SessionError, session};
 
 use diesel::IntoSql;
 use diesel_async::pooled_connection::deadpool::{BuildError, Object, PoolError};

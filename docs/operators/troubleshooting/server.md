@@ -69,6 +69,13 @@ clash.
 1. Ask all but one of each group to change their username, under their profile.
 2. Run `aspen-migrate up` again.
 
+## `aspen-migrate` refuses a connection pooler
+
+It says the database connection "goes through a connection pooler such as PgBouncer". Run it with
+`--database-url` naming PostgreSQL itself: usually the same address and credentials with the port
+PostgreSQL listens on, often 5432, where PgBouncer's is often 6432. Managed databases name the two
+in their connection details.
+
 ## Everyone is signed out after an upgrade
 
 It should not happen: sessions are in the database. Check that the new servers point at the same
