@@ -3,8 +3,12 @@
 Ultra Lite is the whole of Aspen in one program, `aspen-ul`, on one Linux machine: the API, the web
 client, calls, file storage, and its own PostgreSQL, which it starts and stops itself. There is
 nothing else to install or run. It suits a deployment of up to a few hundred people with a few dozen
-active at once. It runs on one machine only: it cannot be spread across several, and a deployment
-that outgrows it moves to the full one.
+active at once. It runs on one machine only: it cannot be spread across several.
+
+**Ultra Lite has no horizontal scalability, no redundancy, and requires scheduled downtime for
+upgrades and maintenance.** Ultra Lite is provided for ease of use and is intended for casual usage.
+If this can't meet your use case, consider a full Aspen deployment instead. Ultra Lite deployments 
+can migrate to a full Aspen deployment later.
 
 | Page                              | What it covers                                                                    |
 | --------------------------------- | --------------------------------------------------------------------------------- |
